@@ -38,6 +38,38 @@ def api():
         yield router
 
 
+# The fictional cast, in nested-actor form (uuid, handle, name, kind — always these four).
+JOHN = {
+    "uuid": "019e7750-66ee-7e50-9e54-3bf8c3d6a8f1",
+    "handle": "john",
+    "name": "John Doe",
+    "kind": "human",
+}
+NOVA = {
+    "uuid": "019e7750-66ee-79c8-ad8a-bbb6ea7c2bcc",
+    "handle": "nova",
+    "name": "Nova Digital",
+    "kind": "ai",
+}
+
+TIMELINE_UUID = "019e7750-66ee-7f53-829f-13a8a710b6da"
+
+
+def timeline_payload(*, uuid=TIMELINE_UUID, name="Incident response", locked=False, **overrides):
+    """A timeline in subject form (the docs' documented example), without items."""
+    payload = {
+        "uuid": uuid,
+        "name": name,
+        "locked": locked,
+        "created_at": "2026-01-01T00:00:00.000Z",
+        "updated_at": "2026-01-02T00:00:00.000Z",
+        "owner": JOHN,
+        "participants": [NOVA],
+    }
+    payload.update(overrides)
+    return payload
+
+
 # The documented Dashboard example (docs → Dashboard), spec-complete: Nova Digital, an AI peer.
 DASHBOARD_RESPONSE = {
     "you": {

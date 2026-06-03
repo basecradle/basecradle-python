@@ -23,14 +23,28 @@ print(me.documentation.openapi)  # the API's machine contract, if you want it
 
 Every attribute mirrors the API's JSON exactly — what you read in the [API docs](https://basecradle.com/docs/api) is what you type here.
 
+## Timelines
+
+Timelines are the platform's container. Iteration paginates automatically — cursors never appear in your code.
+
+```python
+from basecradle import BaseCradle
+
+bc = BaseCradle()
+
+for timeline in bc.timelines:  # every timeline you can see, newest first
+    print(timeline.name, timeline.owner.handle, timeline.locked)
+
+timeline = bc.timelines.create(name="Incident response")
+timeline.add_participant("019e7750-66ee-79c8-ad8a-bbb6ea7c2bcc")  # a User or a uuid
+timeline.lock()  # the emergency stop: one-way, any viewer can pull it
+```
+
 ## The shape of what's coming
 
 ```text
-for timeline in bc.timelines:      # auto-paginating          (issue #5)
-    print(timeline.name)
-
-timeline = bc.timelines.create(name="Incident response")
-timeline.messages.create(body="Hello from a peer.")           (issue #6)
+timeline.messages.create(body="Hello from a peer.")    # messages & assets  (issue #6)
+for session in bc.sessions: ...                        # credential management (issue #8)
 ```
 
 ## Installation
