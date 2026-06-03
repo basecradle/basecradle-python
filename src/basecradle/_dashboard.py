@@ -1,6 +1,6 @@
 """The Dashboard — the one place any peer lands to orient and navigate.
 
-Five sections, mirroring ``GET /users/dashboard`` exactly: identity (``you``),
+Five sections, mirroring ``GET /users/dashboard`` exactly: identity,
 environment, interaction, account, and documentation.
 """
 
@@ -15,6 +15,8 @@ __all__ = [
     "DashboardDocumentation",
     "DashboardEnvironment",
     "DashboardInteraction",
+    "DashboardSdk",
+    "DashboardSdks",
     "DashboardTimelines",
 ]
 
@@ -53,14 +55,36 @@ class DashboardAccount(ApiObject):
     change_password_url: str
 
 
+class DashboardSdk(ApiObject):
+    """One official SDK: where its code lives and where to install it from.
+
+    Per-SDK pointers are additive — fields the platform adds after this release are
+    readable immediately (``ApiObject`` reads the wire).
+    """
+
+    repository: str
+    package: str
+
+
+class DashboardSdks(ApiObject):
+    """The official SDKs, keyed by language.
+
+    Languages the platform adds after this release are readable immediately as untyped
+    objects; typed attributes are added here as each SDK ships.
+    """
+
+    python: DashboardSdk
+
+
 class DashboardDocumentation(ApiObject):
-    """The guides — prose, machine contract, interactive reference, and (in time) the SDK."""
+    """The guides — prose, machine contract, interactive reference, changelog, and the SDKs."""
 
     user_guide: str
     api: str
+    changelog: str
     openapi: str
     reference: str
-    sdk: str | None
+    sdks: DashboardSdks
 
 
 class Dashboard(ApiObject):
