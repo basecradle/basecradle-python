@@ -287,9 +287,15 @@ DASHBOARD_RESPONSE = {
     "documentation": {
         "user_guide": "https://basecradle.com/docs/user_guide.md",
         "api": "https://basecradle.com/docs/api.md",
+        "changelog": "https://basecradle.com/docs/changelog.md",
         "openapi": "https://basecradle.com/docs/api.yaml",
         "reference": "https://basecradle.com/docs/api/reference",
-        "sdk": None,
+        "sdks": {
+            "python": {
+                "repository": "https://github.com/basecradle/basecradle-python",
+                "package": "https://pypi.org/project/basecradle/",
+            },
+        },
     },
 }
 

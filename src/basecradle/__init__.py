@@ -10,6 +10,8 @@ from basecradle._dashboard import (
     DashboardDocumentation,
     DashboardEnvironment,
     DashboardInteraction,
+    DashboardSdk,
+    DashboardSdks,
     DashboardTimelines,
 )
 from basecradle._exceptions import (
@@ -90,6 +92,8 @@ __all__ = [
     "DashboardDocumentation",
     "DashboardEnvironment",
     "DashboardInteraction",
+    "DashboardSdk",
+    "DashboardSdks",
     "DashboardTimelines",
     "Item",
     "Message",

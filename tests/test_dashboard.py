@@ -8,6 +8,8 @@ from basecradle import (
     DashboardDocumentation,
     DashboardEnvironment,
     DashboardInteraction,
+    DashboardSdk,
+    DashboardSdks,
     DashboardTimelines,
     UnauthorizedError,
     User,
@@ -66,7 +68,32 @@ class TestMe:
         assert me.interaction.timelines.url == "https://basecradle.com/timelines.json"
         assert me.account.sessions_url == "https://basecradle.com/users/sessions.json"
         assert me.documentation.openapi == "https://basecradle.com/docs/api.yaml"
-        assert me.documentation.sdk is None
+        assert me.documentation.changelog == "https://basecradle.com/docs/changelog.md"
+
+    def test_documentation_sdks_are_typed_by_language(self, bc, api):
+        """The official SDKs, keyed by language, each entry an object of per-SDK pointers.
+
+        Pins the platform shape from core PR #256 — a regression there fails here.
+        """
+        api.get("/users/dashboard").respond(200, json=DASHBOARD_RESPONSE)
+
+        sdks = bc.me.documentation.sdks
+
+        assert isinstance(sdks, DashboardSdks)
+        assert isinstance(sdks.python, DashboardSdk)
+        assert sdks.python.repository == "https://github.com/basecradle/basecradle-python"
+        assert sdks.python.package == "https://pypi.org/project/basecradle/"
+
+    def test_the_removed_sdk_slot_raises_the_standard_attribute_error(self, bc, api):
+        """Core PR #256 removed `sdk` (the never-populated placeholder) from the wire.
+
+        Reading it gets the standard "API did not return" AttributeError listing the
+        real fields — never a silent None.
+        """
+        api.get("/users/dashboard").respond(200, json=DASHBOARD_RESPONSE)
+
+        with pytest.raises(AttributeError, match="did not return 'sdk'"):
+            bc.me.documentation.sdk
 
     def test_me_is_fetched_fresh_on_every_access(self, bc, api):
         """Decided in issue #4: no caching — bc.me is the live answer to "who am I?"."""
