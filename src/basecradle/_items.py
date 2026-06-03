@@ -1,4 +1,4 @@
-"""Timeline items — messages, assets, and tasks. Three resources, one pattern.
+"""Timeline items — messages, assets, and tasks. Three resources, one pattern, two clients.
 
 Every item shares one envelope shape: ``type``, ``created_at``, ``user`` (nested-actor
 form), ``timeline`` (reference form — just a uuid to dereference), and a type-specific
@@ -7,28 +7,35 @@ top-level, cross-timeline list + get (``bc.messages``, ``bc.messages.get(uuid)``
 
 Filterable lists use ``.filter(...)`` — the one idiom, everywhere: it returns a new lazy
 iterable resource; filters compose; values may be model objects or uuid strings.
+
+Sync and async resources share everything except the I/O: the bindings (paths, envelopes,
+models), the filter logic, the payload builders, and the response handlers are written once.
 """
 
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from datetime import datetime
 from pathlib import Path
-from typing import IO, TYPE_CHECKING, Any, TypeVar
+from typing import IO, Any
 
 from basecradle._models import ApiObject
-from basecradle._pagination import paginate
+from basecradle._pagination import apaginate, paginate
 from basecradle._users import User
-
-if TYPE_CHECKING:
-    from basecradle._client import BaseCradle
 
 __all__ = [
     "Asset",
     "AssetContent",
     "AssetFile",
     "AssetsResource",
+    "AsyncAssetsResource",
+    "AsyncItemsResource",
+    "AsyncMessagesResource",
+    "AsyncTasksResource",
+    "AsyncTimelineAssets",
+    "AsyncTimelineMessages",
+    "AsyncTimelineTasks",
     "Item",
     "ItemsResource",
     "Message",
@@ -43,7 +50,7 @@ __all__ = [
 ]
 
 
-# --- models -------------------------------------------------------------------------------
+# --- models (shared by both clients) ------------------------------------------------------
 
 
 class Item(ApiObject):
@@ -111,22 +118,38 @@ class Task(Item):
     content: TaskContent
 
 
-# --- top-level resources: iterate / filter / get -----------------------------------------
-
-ItemT = TypeVar("ItemT", bound=Item)
+# --- the shared resource core -------------------------------------------------------------
 
 
-class ItemsResource:
-    """The shared cross-timeline list + get pattern. Subclasses bind path, envelope, model."""
+class _ItemsResourceCore:
+    """What sync and async resources share: bindings, construction, filter logic."""
 
     _path: str
     _plural: str
     _singular: str
     _model: type[ApiObject]
 
-    def __init__(self, client: BaseCradle, filters: dict[str, str] | None = None) -> None:
+    def __init__(self, client: Any, filters: dict[str, str] | None = None) -> None:
         self._client = client
         self._filters = filters or {}
+
+    def filter(self, *, timeline: Any | None = None):
+        """A new lazy resource narrowed to one timeline (a ``Timeline`` or a uuid)."""
+        return type(self)(self._client, filters=self._merge_filters(timeline=timeline))
+
+    def _merge_filters(self, **values: Any) -> dict[str, str]:
+        merged = dict(self._filters)
+        for key, value in values.items():
+            if value is not None:
+                merged[key] = _uuid_of(value)
+        return merged
+
+    def _wrap_subject(self, response: dict[str, Any]) -> Any:
+        return self._model(response[self._singular], client=self._client)
+
+
+class ItemsResource(_ItemsResourceCore):
+    """The sync cross-timeline list + get pattern."""
 
     def __iter__(self) -> Iterator[Any]:
         return paginate(
@@ -137,24 +160,32 @@ class ItemsResource:
             params=self._filters,
         )
 
-    def filter(self, *, timeline: Any | None = None) -> ItemsResource:
-        """A new lazy resource narrowed to one timeline (a ``Timeline`` or a uuid)."""
-        return type(self)(self._client, filters=self._merge_filters(timeline=timeline))
-
     def get(self, uuid: str) -> Any:
         """Fetch one item by its own uuid (you must be a viewer of its timeline)."""
-        response = self._client.request("GET", f"{self._path}/{uuid}")
-        return self._model(response[self._singular], client=self._client)
-
-    def _merge_filters(self, **values: Any) -> dict[str, str]:
-        merged = dict(self._filters)
-        for key, value in values.items():
-            if value is not None:
-                merged[key] = _uuid_of(value)
-        return merged
+        return self._wrap_subject(self._client.request("GET", f"{self._path}/{uuid}"))
 
 
-class MessagesResource(ItemsResource):
+class AsyncItemsResource(_ItemsResourceCore):
+    """The async cross-timeline list + get pattern: ``async for`` / ``await .get()``."""
+
+    def __aiter__(self) -> AsyncIterator[Any]:
+        return apaginate(
+            self._client,
+            self._path,
+            envelope_key=self._plural,
+            model=self._model,
+            params=self._filters,
+        )
+
+    async def get(self, uuid: str) -> Any:
+        """Fetch one item by its own uuid (you must be a viewer of its timeline)."""
+        return self._wrap_subject(await self._client.request("GET", f"{self._path}/{uuid}"))
+
+
+# --- per-resource bindings (declared once, used by both sync and async) --------------------
+
+
+class _MessagesBinding:
     """Messages from every timeline you can view, newest first."""
 
     _path = "/messages"
@@ -163,7 +194,7 @@ class MessagesResource(ItemsResource):
     _model = Message
 
 
-class AssetsResource(ItemsResource):
+class _AssetsBinding:
     """Assets from every timeline you can view, newest first."""
 
     _path = "/assets"
@@ -172,7 +203,7 @@ class AssetsResource(ItemsResource):
     _model = Asset
 
 
-class TasksResource(ItemsResource):
+class _TasksBinding:
     """Tasks from every timeline you can view, newest first."""
 
     _path = "/tasks"
@@ -180,73 +211,144 @@ class TasksResource(ItemsResource):
     _singular = "task"
     _model = Task
 
-    def filter(self, *, timeline: Any | None = None, status: str | None = None) -> TasksResource:
+    def filter(self, *, timeline: Any | None = None, status: str | None = None):
         """A new lazy resource narrowed by timeline and/or status.
 
         ``status`` is one of ``pending``, ``activated``, ``blocked_timeline_locked``.
         """
-        filters = self._merge_filters(timeline=timeline)
+        filters = self._merge_filters(timeline=timeline)  # type: ignore[attr-defined]
         if status is not None:
             filters["status"] = status
-        return TasksResource(self._client, filters=filters)
+        return type(self)(self._client, filters=filters)  # type: ignore[attr-defined]
 
 
-# --- nested creators: timeline.messages / .assets / .tasks -------------------------------
+class MessagesResource(_MessagesBinding, ItemsResource): ...
 
 
-class TimelineMessages:
-    """One timeline's messages: create here, or iterate (newest first)."""
+class AsyncMessagesResource(_MessagesBinding, AsyncItemsResource): ...
 
-    def __init__(self, client: BaseCradle, timeline_uuid: str) -> None:
+
+class AssetsResource(_AssetsBinding, ItemsResource): ...
+
+
+class AsyncAssetsResource(_AssetsBinding, AsyncItemsResource): ...
+
+
+class TasksResource(_TasksBinding, ItemsResource): ...
+
+
+class AsyncTasksResource(_TasksBinding, AsyncItemsResource): ...
+
+
+# --- nested creators: timeline.messages / .assets / .tasks --------------------------------
+#
+# The payload builders and response handlers are shared; the sync and async creator classes
+# are the thin I/O layers over them.
+
+
+class _NestedCreatorCore:
+    def __init__(self, client: Any, timeline_uuid: str) -> None:
         self._client = client
         self._timeline_uuid = timeline_uuid
 
+
+def _message_request(timeline_uuid: str, body: str) -> tuple[str, str, dict[str, Any]]:
+    return "POST", f"/timelines/{timeline_uuid}/messages", {"message": {"body": body}}
+
+
+def _message_from(response: dict[str, Any], client: Any) -> Message:
+    return Message(response["message"], client=client)
+
+
+def _task_request(
+    timeline_uuid: str, instructions: str, activate_at: datetime | str
+) -> tuple[str, str, dict[str, Any]]:
+    if isinstance(activate_at, datetime):
+        activate_at = activate_at.isoformat()
+    payload = {"task": {"instructions": instructions, "activate_at": activate_at}}
+    return "POST", f"/timelines/{timeline_uuid}/tasks", payload
+
+
+def _task_from(response: dict[str, Any], client: Any) -> Task:
+    return Task(response["task"], client=client)
+
+
+def _asset_upload(
+    timeline_uuid: str, file: str | Path | IO[bytes], description: str | None
+) -> tuple[str, dict[str, Any], dict[str, Any], IO[bytes], bool]:
+    """The multipart upload, prepared: (path, files, data, fileobj, we_opened_it)."""
+    filename, fileobj, opened = _open_upload(file)
+    files = {"asset[file]": (filename, fileobj)}
+    data = {"asset[description]": description} if description is not None else {}
+    return f"/timelines/{timeline_uuid}/assets", files, data, fileobj, opened
+
+
+def _asset_from(response: dict[str, Any], client: Any) -> Asset:
+    return Asset(response["asset"], client=client)
+
+
+class TimelineMessages(_NestedCreatorCore):
+    """One timeline's messages: create here, or iterate (newest first)."""
+
     def create(self, *, body: str) -> Message:
         """Post a message to this timeline (you must be a viewer; timeline must be unlocked)."""
-        response = self._client.request(
-            "POST",
-            f"/timelines/{self._timeline_uuid}/messages",
-            json={"message": {"body": body}},
-        )
-        return Message(response["message"], client=self._client)
+        method, path, payload = _message_request(self._timeline_uuid, body)
+        return _message_from(self._client.request(method, path, json=payload), self._client)
 
     def __iter__(self) -> Iterator[Message]:
         return iter(MessagesResource(self._client).filter(timeline=self._timeline_uuid))
 
 
-class TimelineAssets:
-    """One timeline's assets: upload here, or iterate (newest first)."""
+class AsyncTimelineMessages(_NestedCreatorCore):
+    """One timeline's messages, async: ``await .create(...)`` or ``async for``."""
 
-    def __init__(self, client: BaseCradle, timeline_uuid: str) -> None:
-        self._client = client
-        self._timeline_uuid = timeline_uuid
+    async def create(self, *, body: str) -> Message:
+        """Post a message to this timeline (you must be a viewer; timeline must be unlocked)."""
+        method, path, payload = _message_request(self._timeline_uuid, body)
+        return _message_from(await self._client.request(method, path, json=payload), self._client)
+
+    def __aiter__(self) -> AsyncIterator[Message]:
+        return AsyncMessagesResource(self._client).filter(timeline=self._timeline_uuid).__aiter__()
+
+
+class TimelineAssets(_NestedCreatorCore):
+    """One timeline's assets: upload here, or iterate (newest first)."""
 
     def create(self, *, file: str | Path | IO[bytes], description: str | None = None) -> Asset:
         """Upload a file to this timeline (multipart). ``file`` is a path or a binary file object."""
-        filename, fileobj = _open_upload(file)
+        path, files, data, fileobj, opened = _asset_upload(self._timeline_uuid, file, description)
         try:
-            data = {"asset[description]": description} if description is not None else {}
-            response = self._client.request(
-                "POST",
-                f"/timelines/{self._timeline_uuid}/assets",
-                files={"asset[file]": (filename, fileobj)},
-                data=data,
-            )
+            response = self._client.request("POST", path, files=files, data=data)
         finally:
-            if fileobj is not file:  # we opened it from a path, so we close it
+            if opened:
                 fileobj.close()
-        return Asset(response["asset"], client=self._client)
+        return _asset_from(response, self._client)
 
     def __iter__(self) -> Iterator[Asset]:
         return iter(AssetsResource(self._client).filter(timeline=self._timeline_uuid))
 
 
-class TimelineTasks:
-    """One timeline's tasks: create here, or iterate (newest first)."""
+class AsyncTimelineAssets(_NestedCreatorCore):
+    """One timeline's assets, async: ``await .create(...)`` or ``async for``."""
 
-    def __init__(self, client: BaseCradle, timeline_uuid: str) -> None:
-        self._client = client
-        self._timeline_uuid = timeline_uuid
+    async def create(
+        self, *, file: str | Path | IO[bytes], description: str | None = None
+    ) -> Asset:
+        """Upload a file to this timeline (multipart). ``file`` is a path or a binary file object."""
+        path, files, data, fileobj, opened = _asset_upload(self._timeline_uuid, file, description)
+        try:
+            response = await self._client.request("POST", path, files=files, data=data)
+        finally:
+            if opened:
+                fileobj.close()
+        return _asset_from(response, self._client)
+
+    def __aiter__(self) -> AsyncIterator[Asset]:
+        return AsyncAssetsResource(self._client).filter(timeline=self._timeline_uuid).__aiter__()
+
+
+class TimelineTasks(_NestedCreatorCore):
+    """One timeline's tasks: create here, or iterate (newest first)."""
 
     def create(self, *, instructions: str, activate_at: datetime | str) -> Task:
         """Schedule a task on this timeline.
@@ -255,17 +357,23 @@ class TimelineTasks:
         timezone-aware to be unambiguous; a naive value is interpreted in your account's
         time zone) or an ISO 8601 string.
         """
-        if isinstance(activate_at, datetime):
-            activate_at = activate_at.isoformat()
-        response = self._client.request(
-            "POST",
-            f"/timelines/{self._timeline_uuid}/tasks",
-            json={"task": {"instructions": instructions, "activate_at": activate_at}},
-        )
-        return Task(response["task"], client=self._client)
+        method, path, payload = _task_request(self._timeline_uuid, instructions, activate_at)
+        return _task_from(self._client.request(method, path, json=payload), self._client)
 
     def __iter__(self) -> Iterator[Task]:
         return iter(TasksResource(self._client).filter(timeline=self._timeline_uuid))
+
+
+class AsyncTimelineTasks(_NestedCreatorCore):
+    """One timeline's tasks, async: ``await .create(...)`` or ``async for``."""
+
+    async def create(self, *, instructions: str, activate_at: datetime | str) -> Task:
+        """Schedule a task on this timeline. See ``TimelineTasks.create`` for semantics."""
+        method, path, payload = _task_request(self._timeline_uuid, instructions, activate_at)
+        return _task_from(await self._client.request(method, path, json=payload), self._client)
+
+    def __aiter__(self) -> AsyncIterator[Task]:
+        return AsyncTasksResource(self._client).filter(timeline=self._timeline_uuid).__aiter__()
 
 
 # --- helpers ------------------------------------------------------------------------------
@@ -284,11 +392,11 @@ def _uuid_of(value: Any) -> str:
     return value._data["content"]["uuid"]
 
 
-def _open_upload(file: str | Path | IO[bytes]) -> tuple[str, IO[bytes]]:
-    """Resolve an upload argument into (filename, binary file object)."""
+def _open_upload(file: str | Path | IO[bytes]) -> tuple[str, IO[bytes], bool]:
+    """Resolve an upload argument into (filename, binary file object, whether we opened it)."""
     if isinstance(file, (str, Path)):
         path = Path(file)
-        return path.name, path.open("rb")
+        return path.name, path.open("rb"), True
     name = getattr(file, "name", None)
     filename = os.path.basename(name) if isinstance(name, str) else "file"
-    return filename, file
+    return filename, file, False

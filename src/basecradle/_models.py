@@ -18,10 +18,8 @@ from __future__ import annotations
 
 import functools
 import typing
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from basecradle._client import BaseCradle
+from collections.abc import Callable
+from typing import Any
 
 __all__ = ["ApiObject"]
 
@@ -29,7 +27,7 @@ __all__ = ["ApiObject"]
 class ApiObject:
     """A read-only, wire-exact view of one API JSON object."""
 
-    def __init__(self, data: dict[str, Any], *, client: BaseCradle | None = None) -> None:
+    def __init__(self, data: dict[str, Any], *, client: Any = None) -> None:
         self._data = data
         self._client = client
 
@@ -62,7 +60,7 @@ class ApiObject:
             ]
         return value
 
-    def _require_client(self) -> BaseCradle:
+    def _require_client(self) -> Any:
         """The client this object came from — required by verbs that call the API."""
         if self._client is None:
             raise RuntimeError(
@@ -71,6 +69,22 @@ class ApiObject:
                 f"are attached automatically."
             )
         return self._client
+
+    def _verb(self, method: str, path: str, apply: Callable[[Any], Any], **request_kwargs: Any):
+        """Run a verb against the API — the sync/async dispatch, written once.
+
+        Attached to a sync client: executes now and returns ``apply``'s result.
+        Attached to an async client: returns a coroutine — the caller awaits it.
+        """
+        client = self._require_client()
+        if client._is_async:
+            return self._averb(client, method, path, apply, **request_kwargs)
+        return apply(client.request(method, path, **request_kwargs))
+
+    async def _averb(
+        self, client: Any, method: str, path: str, apply: Callable[[Any], Any], **kwargs: Any
+    ):
+        return apply(await client.request(method, path, **kwargs))
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} {sorted(self._data)}>"

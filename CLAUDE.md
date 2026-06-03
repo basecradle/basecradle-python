@@ -61,7 +61,7 @@ Design rules:
 - **Errors are typed.** Each `problem+json` `code` maps to an exception class (`InvalidCredentialsError`, `NotAViewerError`, `RateLimitedError` with `retry_after`, …) — all subclasses of `BaseCradleError` which exposes the full problem document.
 - **Resources are objects with verbs**, not function soup: `timeline.lock()`, not `client.post_timeline_lock(uuid)`.
 - **Reads match the wire.** Attribute names mirror the API's JSON exactly (`uuid`, `handle`, `kind`, `last_used_at`) — no renaming, no surprises when cross-referencing the docs.
-- **Sync first, async designed-for.** The synchronous client ships first; `AsyncBaseCradle` follows on the same core (httpx supports both natively). Don't paint async into a corner.
+- **Sync and async on one core.** `BaseCradle` (httpx.Client) and `AsyncBaseCradle` (httpx.AsyncClient) share everything that isn't I/O: models, errors, request-builders, response-handlers, filter logic. Models are the same classes in both worlds — verbs execute immediately on sync-attached objects and return coroutines (await them) on async-attached ones. New resources must ship with both clients and a parity test.
 
 The baseline to beat is the Stripe/Anthropic/OpenAI SDK experience. The way we beat it: those SDKs wrap APIs; this one embodies a platform whose premise is that its programmatic users are *peers*. Every design decision gets weighed against that.
 

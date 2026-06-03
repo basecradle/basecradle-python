@@ -7,21 +7,22 @@ delivered.
 
 The API models enablement and rotation as singular state resources; the SDK expresses
 them as verbs on the endpoint object — ``disable()``, ``enable()``, ``rotate()`` — never
-as raw paths.
+as raw paths. With ``AsyncBaseCradle``, await the verbs.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from typing import TYPE_CHECKING, Any
+from collections.abc import AsyncIterator, Iterator
+from typing import Any
 
-from basecradle._items import ItemsResource
+from basecradle._items import AsyncItemsResource, ItemsResource, _NestedCreatorCore
 from basecradle._models import ApiObject
 
-if TYPE_CHECKING:
-    from basecradle._client import BaseCradle
-
 __all__ = [
+    "AsyncTimelineWebhookEndpoints",
+    "AsyncTimelineWebhookEvents",
+    "AsyncWebhookEndpointsResource",
+    "AsyncWebhookEventsResource",
     "TimelineWebhookEndpoints",
     "TimelineWebhookEvents",
     "WebhookEndpoint",
@@ -60,6 +61,7 @@ class WebhookEndpoint(ApiObject):
 
     Endpoints belong to the timeline, not a user, so there is no ``user`` block.
     Verbs update this object from the full endpoint the API returns (live objects).
+    With ``AsyncBaseCradle``, await the verbs: ``await endpoint.rotate()``.
     """
 
     type: str  # "webhook_endpoint"
@@ -67,31 +69,33 @@ class WebhookEndpoint(ApiObject):
     timeline: ApiObject  # reference form — dereference via bc.timelines.get(...)
     content: WebhookEndpointContent
 
-    def disable(self) -> None:
+    def disable(self):
         """Soft-stop: refuse inbound deliveries (410 Gone) until re-enabled.
 
         The endpoint and its event history are kept; reversible via ``enable()``.
+        With ``AsyncBaseCradle``, await this.
         """
-        self._replace_from(self._enablement("DELETE"))
+        return self._verb("DELETE", self._enablement_path(), self._adopt)
 
-    def enable(self) -> None:
-        """Re-enable a disabled endpoint — inbound deliveries are accepted again."""
-        self._replace_from(self._enablement("POST"))
+    def enable(self):
+        """Re-enable a disabled endpoint — inbound deliveries are accepted again.
 
-    def rotate(self) -> None:
+        With ``AsyncBaseCradle``, await this.
+        """
+        return self._verb("POST", self._enablement_path(), self._adopt)
+
+    def rotate(self):
         """Regenerate the ingest URL. The old URL dies immediately; the uuid is unchanged.
 
         Use this when an ingest URL leaks. Recorded events are preserved.
+        With ``AsyncBaseCradle``, await this.
         """
-        client = self._require_client()
-        response = client.request("POST", f"/webhook_endpoints/{self.content.uuid}/rotation")
-        self._replace_from(response)
+        return self._verb("POST", f"/webhook_endpoints/{self.content.uuid}/rotation", self._adopt)
 
-    def _enablement(self, method: str) -> dict[str, Any]:
-        client = self._require_client()
-        return client.request(method, f"/webhook_endpoints/{self.content.uuid}/enablement")
+    def _enablement_path(self) -> str:
+        return f"/webhook_endpoints/{self.content.uuid}/enablement"
 
-    def _replace_from(self, response: dict[str, Any]) -> None:
+    def _adopt(self, response: dict[str, Any]) -> None:
         """Live-object update: the API returned the complete endpoint; adopt it."""
         self._data.clear()
         self._data.update(response["webhook_endpoint"])
@@ -120,7 +124,7 @@ class WebhookEvent(ApiObject):
 # --- resources ----------------------------------------------------------------------------
 
 
-class WebhookEndpointsResource(ItemsResource):
+class _WebhookEndpointsBinding:
     """Webhook endpoints from every timeline you can view, newest first."""
 
     _path = "/webhook_endpoints"
@@ -129,7 +133,7 @@ class WebhookEndpointsResource(ItemsResource):
     _model = WebhookEndpoint
 
 
-class WebhookEventsResource(ItemsResource):
+class _WebhookEventsBinding:
     """Webhook events from every timeline you can view, newest first."""
 
     _path = "/webhook_events"
@@ -137,40 +141,80 @@ class WebhookEventsResource(ItemsResource):
     _singular = "webhook_event"
     _model = WebhookEvent
 
-    def filter(
-        self, *, timeline: Any | None = None, endpoint: Any | None = None
-    ) -> WebhookEventsResource:
+    def filter(self, *, timeline: Any | None = None, endpoint: Any | None = None):
         """A new lazy resource narrowed by timeline and/or endpoint (objects or uuids)."""
-        filters = self._merge_filters(timeline=timeline, endpoint=endpoint)
-        return WebhookEventsResource(self._client, filters=filters)
+        filters = self._merge_filters(timeline=timeline, endpoint=endpoint)  # type: ignore[attr-defined]
+        return type(self)(self._client, filters=filters)  # type: ignore[attr-defined]
 
 
-class TimelineWebhookEndpoints:
+class WebhookEndpointsResource(_WebhookEndpointsBinding, ItemsResource): ...
+
+
+class AsyncWebhookEndpointsResource(_WebhookEndpointsBinding, AsyncItemsResource): ...
+
+
+class WebhookEventsResource(_WebhookEventsBinding, ItemsResource): ...
+
+
+class AsyncWebhookEventsResource(_WebhookEventsBinding, AsyncItemsResource): ...
+
+
+# --- nested resources on Timeline ---------------------------------------------------------
+
+
+def _endpoint_request(timeline_uuid: str, description: str) -> tuple[str, str, dict[str, Any]]:
+    return (
+        "POST",
+        f"/timelines/{timeline_uuid}/webhook_endpoints",
+        {"webhook_endpoint": {"description": description}},
+    )
+
+
+def _endpoint_from(response: dict[str, Any], client: Any) -> WebhookEndpoint:
+    return WebhookEndpoint(response["webhook_endpoint"], client=client)
+
+
+class TimelineWebhookEndpoints(_NestedCreatorCore):
     """One timeline's webhook endpoints: create here, or iterate (newest first)."""
-
-    def __init__(self, client: BaseCradle, timeline_uuid: str) -> None:
-        self._client = client
-        self._timeline_uuid = timeline_uuid
 
     def create(self, *, description: str) -> WebhookEndpoint:
         """Create an inbound webhook endpoint on this timeline (viewer; unlocked)."""
-        response = self._client.request(
-            "POST",
-            f"/timelines/{self._timeline_uuid}/webhook_endpoints",
-            json={"webhook_endpoint": {"description": description}},
-        )
-        return WebhookEndpoint(response["webhook_endpoint"], client=self._client)
+        method, path, payload = _endpoint_request(self._timeline_uuid, description)
+        return _endpoint_from(self._client.request(method, path, json=payload), self._client)
 
     def __iter__(self) -> Iterator[WebhookEndpoint]:
         return iter(WebhookEndpointsResource(self._client).filter(timeline=self._timeline_uuid))
 
 
-class TimelineWebhookEvents:
-    """One timeline's webhook events — read-only, so iterate is all there is."""
+class AsyncTimelineWebhookEndpoints(_NestedCreatorCore):
+    """One timeline's webhook endpoints, async."""
 
-    def __init__(self, client: BaseCradle, timeline_uuid: str) -> None:
-        self._client = client
-        self._timeline_uuid = timeline_uuid
+    async def create(self, *, description: str) -> WebhookEndpoint:
+        """Create an inbound webhook endpoint on this timeline (viewer; unlocked)."""
+        method, path, payload = _endpoint_request(self._timeline_uuid, description)
+        return _endpoint_from(await self._client.request(method, path, json=payload), self._client)
+
+    def __aiter__(self) -> AsyncIterator[WebhookEndpoint]:
+        return (
+            AsyncWebhookEndpointsResource(self._client)
+            .filter(timeline=self._timeline_uuid)
+            .__aiter__()
+        )
+
+
+class TimelineWebhookEvents(_NestedCreatorCore):
+    """One timeline's webhook events — read-only, so iterate is all there is."""
 
     def __iter__(self) -> Iterator[WebhookEvent]:
         return iter(WebhookEventsResource(self._client).filter(timeline=self._timeline_uuid))
+
+
+class AsyncTimelineWebhookEvents(_NestedCreatorCore):
+    """One timeline's webhook events, async — read-only."""
+
+    def __aiter__(self) -> AsyncIterator[WebhookEvent]:
+        return (
+            AsyncWebhookEventsResource(self._client)
+            .filter(timeline=self._timeline_uuid)
+            .__aiter__()
+        )

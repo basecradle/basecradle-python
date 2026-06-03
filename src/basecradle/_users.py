@@ -10,15 +10,12 @@ own outgoing edge; sharing a timeline requires both edges (``trust.mutual``).
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from typing import TYPE_CHECKING
+from collections.abc import AsyncIterator, Iterator
+from typing import Any
 
 from basecradle._models import ApiObject
 
-if TYPE_CHECKING:
-    from basecradle._client import BaseCradle
-
-__all__ = ["Trust", "User", "UsersResource"]
+__all__ = ["AsyncUsersResource", "Trust", "User", "UsersResource"]
 
 
 class Trust(ApiObject):
@@ -65,44 +62,61 @@ class User(ApiObject):
     updated_at: str
     creator: dict | None
 
-    def grant_trust(self) -> None:
+    def grant_trust(self):
         """Add your outgoing trust edge to this user. Idempotent.
 
         Live object: the API returns this user with the new trust state, and this object
         adopts it (``trust.you_trust`` becomes ``True``). Mutual trust — the thing that
         lets you share a timeline — still requires *them* to grant their edge back.
         Trusting yourself is silently rejected by the platform.
-        """
-        client = self._require_client()
-        response = client.request("POST", f"/users/{self.uuid}/trust")
-        self._data.clear()
-        self._data.update(response["user"])
 
-    def revoke_trust(self) -> None:
+        With ``AsyncBaseCradle``, await this: ``await user.grant_trust()``.
+        """
+        return self._verb("POST", f"/users/{self.uuid}/trust", self._adopt)
+
+    def revoke_trust(self):
         """Remove your outgoing trust edge from this user. Idempotent.
 
         Live object: ``trust.you_trust`` and ``trust.mutual`` flip to ``False`` locally —
         exactly what the API's 204 confirmed. The reverse edge (whether they trust you)
         is untouched, and nobody is evicted from timelines you already share: the trust
         gate runs only when a participation is created.
+
+        With ``AsyncBaseCradle``, await this: ``await user.revoke_trust()``.
         """
-        client = self._require_client()
-        client.request("DELETE", f"/users/{self.uuid}/trust")
+        return self._verb(
+            "DELETE", f"/users/{self.uuid}/trust", lambda _response: self._apply_revoked_trust()
+        )
+
+    def _adopt(self, response: dict[str, Any]) -> None:
+        self._data.clear()
+        self._data.update(response["user"])
+
+    def _apply_revoked_trust(self) -> None:
         trust = self._data.get("trust")
         if trust is not None:
             trust["you_trust"] = False
             trust["mutual"] = False
 
 
-class UsersResource:
+# --- resources -----------------------------------------------------------------------------
+
+
+def _user_from(response: dict[str, Any], client: Any) -> User:
+    return User(response["user"], client=client)
+
+
+class _UsersResourceCore:
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+
+class UsersResource(_UsersResourceCore):
     """The directory of other users — you are never listed; hidden users are omitted.
 
     >>> for user in bc.users:
     ...     print(user.handle, user.kind, user.trust.mutual)
     """
-
-    def __init__(self, client: BaseCradle) -> None:
-        self._client = client
 
     def __iter__(self) -> Iterator[User]:
         # The directory is not paginated (no next_cursor in the API contract) —
@@ -118,5 +132,18 @@ class UsersResource:
         sees base identity + trust; a user who trusts you shows you more; your own
         profile shows everything.
         """
-        response = self._client.request("GET", f"/users/{uuid}")
-        return User(response["user"], client=self._client)
+        return _user_from(self._client.request("GET", f"/users/{uuid}"), self._client)
+
+
+class AsyncUsersResource(_UsersResourceCore):
+    """The directory of other users, async: ``async for user in abc.users``."""
+
+    async def __aiter__(self) -> AsyncIterator[User]:
+        # The directory is not paginated — one request returns everyone you can see.
+        response = await self._client.request("GET", "/users")
+        for data in response["users"]:
+            yield User(data, client=self._client)
+
+    async def get(self, uuid: str) -> User:
+        """Fetch one user in subject form. See ``UsersResource.get`` for access tiers."""
+        return _user_from(await self._client.request("GET", f"/users/{uuid}"), self._client)

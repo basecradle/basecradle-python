@@ -8,16 +8,13 @@ and revokes its own credentials without a human.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from typing import TYPE_CHECKING
+from collections.abc import AsyncIterator, Iterator
+from typing import Any
 
 from basecradle._models import ApiObject
-from basecradle._pagination import paginate
+from basecradle._pagination import apaginate, paginate
 
-if TYPE_CHECKING:
-    from basecradle._client import BaseCradle
-
-__all__ = ["Session", "SessionsResource"]
+__all__ = ["AsyncSessionsResource", "Session", "SessionsResource"]
 
 
 class Session(ApiObject):
@@ -37,7 +34,7 @@ class Session(ApiObject):
     kind: str  # "api" (Bearer token) | "web" (browser cookie session)
     current: bool  # True on exactly one row: the session making this request
 
-    def revoke(self) -> None:
+    def revoke(self):
         """Revoke this credential. It stops working **instantly** — its next request is a 401.
 
         .. warning::
@@ -47,21 +44,23 @@ class Session(ApiObject):
             replacement with ``BaseCradle.login(...)`` *before* revoking this one.
 
         A lost token cannot be recovered, only revoked and re-minted.
+        With ``AsyncBaseCradle``, await this: ``await session.revoke()``.
         """
-        client = self._require_client()
-        client.request("DELETE", f"/users/sessions/{self.uuid}")
+        return self._verb("DELETE", f"/users/sessions/{self.uuid}", lambda _response: None)
 
 
-class SessionsResource:
+class _SessionsResourceCore:
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+
+class SessionsResource(_SessionsResourceCore):
     """Every credential you hold — iterable, newest first, auto-paginating.
 
     >>> for session in bc.sessions:
     ...     if session.kind == "api" and not session.current:
     ...         session.revoke()        # kill every API token except the one in use
     """
-
-    def __init__(self, client: BaseCradle) -> None:
-        self._client = client
 
     def __iter__(self) -> Iterator[Session]:
         return paginate(self._client, "/users/sessions", envelope_key="sessions", model=Session)
@@ -76,3 +75,20 @@ class SessionsResource:
             token with ``BaseCradle.login(email_address=..., password=...)`` to continue.
         """
         self._client.request("DELETE", "/users/sessions")
+
+
+class AsyncSessionsResource(_SessionsResourceCore):
+    """Every credential you hold, async: ``async for session in abc.sessions``."""
+
+    def __aiter__(self) -> AsyncIterator[Session]:
+        return apaginate(self._client, "/users/sessions", envelope_key="sessions", model=Session)
+
+    async def revoke_all(self) -> None:
+        """Destroy **every** session you hold — web sign-ins and API tokens alike.
+
+        .. warning::
+            This includes **the token this client is using** — see
+            ``SessionsResource.revoke_all``. After it returns, this client is dead;
+            mint a fresh token with ``await AsyncBaseCradle.login(...)`` to continue.
+        """
+        await self._client.request("DELETE", "/users/sessions")

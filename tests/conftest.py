@@ -7,7 +7,7 @@ The fictional cast (per CLAUDE.md): John Doe (handle ``john``, human) and Nova D
 import pytest
 import respx
 
-from basecradle import BaseCradle
+from basecradle import AsyncBaseCradle, BaseCradle
 
 # bc_uat_ + 32 alphanumerics — the docs' own fabricated example token.
 FAKE_TOKEN = "bc_uat_KqI8zFxkQ0OZ8vYwT7mWcVtR3nSdLpEa"
@@ -25,10 +25,24 @@ def token():
 
 @pytest.fixture
 def bc(token):
-    """An authenticated client pointed at the (mocked) production URL."""
+    """An authenticated sync client pointed at the (mocked) production URL."""
     client = BaseCradle(token=token)
     yield client
     client.close()
+
+
+@pytest.fixture
+def anyio_backend():
+    """Async tests run on asyncio (the anyio pytest plugin ships with httpx's deps)."""
+    return "asyncio"
+
+
+@pytest.fixture
+async def abc(token):
+    """An authenticated async client pointed at the (mocked) production URL."""
+    client = AsyncBaseCradle(token=token)
+    yield client
+    await client.aclose()
 
 
 @pytest.fixture
