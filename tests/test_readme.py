@@ -18,10 +18,12 @@ from tests.conftest import (
     NOVA,
     TIMELINE_UUID,
     asset_payload,
+    directory_user_payload,
     message_payload,
     session_payload,
     task_payload,
     timeline_payload,
+    trusted_peer_user_payload,
     webhook_endpoint_payload,
     webhook_event_payload,
 )
@@ -105,6 +107,18 @@ class TestReadmeExamples:
                 },
             )
             router.delete(path__regex=r"/users/sessions/.+$").respond(204)
+            router.get("/users").respond(
+                200, json={"users": [directory_user_payload(user=NOVA, trusts_you=True)]}
+            )
+            router.get(path__regex=r"/users/019e.+$").respond(
+                200, json={"user": directory_user_payload(user=NOVA, trusts_you=True)}
+            )
+            router.post(path__regex=r"/users/.+/trust$").respond(
+                201,
+                json={
+                    "user": trusted_peer_user_payload(user=NOVA, you_trust=True, trusts_you=True)
+                },
+            )
             yield router
 
     @pytest.mark.parametrize("block_number", range(len(python_blocks())))

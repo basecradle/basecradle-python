@@ -91,6 +91,29 @@ def asset_payload(*, uuid=ASSET_UUID, description="Quarterly report", **kwargs):
     return _item_payload("asset", content, **kwargs)
 
 
+def directory_user_payload(*, user=None, you_trust=False, trusts_you=False):
+    """A lean directory row: base identity + trust only (the docs' documented example)."""
+    base = dict(user or NOVA)
+    base["trust"] = {
+        "you_trust": you_trust,
+        "trusts_you": trusts_you,
+        "mutual": you_trust and trusts_you,
+    }
+    return base
+
+
+def trusted_peer_user_payload(*, user=None, **trust):
+    """The middle access tier: a user who trusts you (adds the trusted-peer cluster)."""
+    return {
+        **directory_user_payload(user=user, **trust),
+        "suspended": False,
+        "max_timelines": 15,
+        "max_participants": 1,
+        "about": "Building things at BaseCradle.",
+        "time_zone": "UTC",
+    }
+
+
 API_SESSION_UUID = "019e84e4-9c0d-76a1-be70-0296c897b10b"
 WEB_SESSION_UUID = "019e84e4-9c0d-7170-abf1-69869d3ca827"
 
