@@ -105,5 +105,3 @@ uv run ruff check .      # lint
 uv run ruff format .     # format
 uv build                 # build the wheel + sdist
 ```
-
-(These work once the scaffold issue is done; until then this section is the target, not the present.)

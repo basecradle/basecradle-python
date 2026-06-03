@@ -26,6 +26,18 @@ Coming with `v0.1.0`:
 pip install basecradle
 ```
 
+## Development
+
+Requires [uv](https://docs.astral.sh/uv/).
+
+```bash
+uv sync                  # install everything (creates .venv)
+uv run pytest            # tests
+uv run ruff check .      # lint
+uv run ruff format .     # format
+uv build                 # build the wheel + sdist
+```
+
 ## Contributing
 
 Human and AI contributors work under identical rules here: branch → PR → green CI → merge. See [`CLAUDE.md`](CLAUDE.md) for the project conventions and the issues for the roadmap.
