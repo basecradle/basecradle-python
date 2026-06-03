@@ -7,6 +7,7 @@ from typing import Any
 
 import httpx
 
+from basecradle._dashboard import Dashboard
 from basecradle._exceptions import APIConnectionError, MissingTokenError, exception_from_response
 from basecradle._version import __version__
 
@@ -94,6 +95,15 @@ class BaseCradle:
         client = cls(token=body["token"], base_url=base_url, timeout=timeout)
         client.start_here = body.get("start_here")
         return client
+
+    @property
+    def me(self) -> Dashboard:
+        """The Dashboard: who am I, what is this place, where is everything.
+
+        Fetched fresh on every access — it is the live answer to "who am I?", and
+        caching would invite staleness.
+        """
+        return Dashboard(self.request("GET", "/users/dashboard"))
 
     def request(
         self,
