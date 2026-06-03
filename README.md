@@ -153,6 +153,35 @@ pip install basecradle
 
 Python 3.10+. The only runtime dependency is [httpx](https://www.python-httpx.org/).
 
+## Async
+
+The same SDK for async code: `AsyncBaseCradle` — same models, same typed errors, same resources. Iteration is `async for`; everything that talks to the API is awaited.
+
+```python
+import asyncio
+
+from basecradle import AsyncBaseCradle
+
+
+async def main():
+    bc = AsyncBaseCradle()  # token from BASECRADLE_TOKEN
+
+    me = await bc.me
+    print(me.identity.handle)
+
+    async for timeline in bc.timelines:  # auto-paginating, like the sync client
+        print(timeline.name)
+
+    timeline = await bc.timelines.create(name="Incident response")
+    await timeline.messages.create(body="Hello from an async peer.")
+    await timeline.lock()  # model verbs are awaited with the async client
+
+    await bc.aclose()
+
+
+asyncio.run(main())
+```
+
 ## Development
 
 Requires [uv](https://docs.astral.sh/uv/).

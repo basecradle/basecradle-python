@@ -3,7 +3,7 @@
 https://basecradle.com · API docs: https://basecradle.com/docs/api
 """
 
-from basecradle._client import BaseCradle
+from basecradle._client import AsyncBaseCradle, BaseCradle
 from basecradle._dashboard import (
     Dashboard,
     DashboardAccount,
@@ -41,6 +41,10 @@ from basecradle._items import (
     AssetContent,
     AssetFile,
     AssetsResource,
+    AsyncAssetsResource,
+    AsyncItemsResource,
+    AsyncMessagesResource,
+    AsyncTasksResource,
     Item,
     ItemsResource,
     Message,
@@ -51,11 +55,18 @@ from basecradle._items import (
     TasksResource,
 )
 from basecradle._models import ApiObject
-from basecradle._sessions import Session, SessionsResource
-from basecradle._timelines import Timeline, TimelineItem, TimelinesResource
-from basecradle._users import Trust, User, UsersResource
+from basecradle._sessions import AsyncSessionsResource, Session, SessionsResource
+from basecradle._timelines import (
+    AsyncTimelinesResource,
+    Timeline,
+    TimelineItem,
+    TimelinesResource,
+)
+from basecradle._users import AsyncUsersResource, Trust, User, UsersResource
 from basecradle._version import __version__
 from basecradle._webhooks import (
+    AsyncWebhookEndpointsResource,
+    AsyncWebhookEventsResource,
     WebhookEndpoint,
     WebhookEndpointContent,
     WebhookEndpointsResource,
@@ -67,13 +78,13 @@ from basecradle._webhooks import (
 
 __all__ = [
     "__version__",
+    "AsyncBaseCradle",
     "BaseCradle",
     # Models
     "ApiObject",
     "Asset",
     "AssetContent",
     "AssetFile",
-    "AssetsResource",
     "Dashboard",
     "DashboardAccount",
     "DashboardDocumentation",
@@ -81,28 +92,40 @@ __all__ = [
     "DashboardInteraction",
     "DashboardTimelines",
     "Item",
-    "ItemsResource",
     "Message",
     "MessageContent",
-    "MessagesResource",
     "Session",
-    "SessionsResource",
     "Task",
     "TaskContent",
-    "TasksResource",
     "Timeline",
     "TimelineItem",
-    "TimelinesResource",
     "Trust",
     "User",
-    "UsersResource",
     "WebhookEndpoint",
     "WebhookEndpointContent",
-    "WebhookEndpointsResource",
     "WebhookEvent",
     "WebhookEventContent",
-    "WebhookEventsResource",
     "WebhookVerification",
+    # Sync resources
+    "AssetsResource",
+    "ItemsResource",
+    "MessagesResource",
+    "SessionsResource",
+    "TasksResource",
+    "TimelinesResource",
+    "UsersResource",
+    "WebhookEndpointsResource",
+    "WebhookEventsResource",
+    # Async resources
+    "AsyncAssetsResource",
+    "AsyncItemsResource",
+    "AsyncMessagesResource",
+    "AsyncSessionsResource",
+    "AsyncTasksResource",
+    "AsyncTimelinesResource",
+    "AsyncUsersResource",
+    "AsyncWebhookEndpointsResource",
+    "AsyncWebhookEventsResource",
     # Errors
     "BaseCradleError",
     "MissingTokenError",
