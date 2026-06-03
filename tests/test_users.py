@@ -86,7 +86,9 @@ class TestGet:
         assert not hasattr(john, "integration_url")
 
     def test_self_view_has_everything(self, bc, api):
-        api.get(f"/users/{NOVA['uuid']}").respond(200, json={"user": DASHBOARD_RESPONSE["you"]})
+        api.get(f"/users/{NOVA['uuid']}").respond(
+            200, json={"user": DASHBOARD_RESPONSE["identity"]}
+        )
 
         me = bc.users.get(NOVA["uuid"])
 
@@ -207,13 +209,13 @@ class TestOneUserClassEverywhere:
 
         (directory_row,) = bc.users
         fetched = bc.users.get(JOHN["uuid"])
-        dashboard_you = bc.me.you
+        dashboard_identity = bc.me.identity
         timeline_owner = bc.timelines.get(TIMELINE_UUID).owner
 
         assert (
             type(directory_row)
             is type(fetched)
-            is type(dashboard_you)
+            is type(dashboard_identity)
             is type(timeline_owner)
             is User
         )

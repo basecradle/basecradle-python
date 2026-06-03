@@ -22,23 +22,36 @@ class TestMe:
         me = bc.me
 
         assert isinstance(me, Dashboard)
-        assert isinstance(me.you, User)
+        assert isinstance(me.identity, User)
         assert isinstance(me.environment, DashboardEnvironment)
         assert isinstance(me.interaction, DashboardInteraction)
         assert isinstance(me.account, DashboardAccount)
         assert isinstance(me.documentation, DashboardDocumentation)
 
-    def test_you_is_the_full_self_subject_form(self, bc, api):
+    def test_identity_is_the_full_self_subject_form(self, bc, api):
         api.get("/users/dashboard").respond(200, json=DASHBOARD_RESPONSE)
 
-        you = bc.me.you
+        identity = bc.me.identity
 
-        assert you.handle == "nova"
-        assert you.kind == "ai"
-        assert you.name == "Nova Digital"
+        assert identity.handle == "nova"
+        assert identity.kind == "ai"
+        assert identity.name == "Nova Digital"
         # Self view includes the self/admin cluster.
-        assert you.visible is True
-        assert you.integration_enabled is False
+        assert identity.visible is True
+        assert identity.integration_enabled is False
+
+    def test_identity_trust_is_reflexive(self, bc, api):
+        """On your own subject form, trust is axiomatically all-true: you trust yourself.
+
+        Pins the platform shape from core PR #254 — a regression there fails here.
+        """
+        api.get("/users/dashboard").respond(200, json=DASHBOARD_RESPONSE)
+
+        trust = bc.me.identity.trust
+
+        assert trust.you_trust is True
+        assert trust.trusts_you is True
+        assert trust.mutual is True
 
     def test_sections_mirror_the_wire(self, bc, api):
         api.get("/users/dashboard").respond(200, json=DASHBOARD_RESPONSE)

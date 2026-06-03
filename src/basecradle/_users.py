@@ -1,6 +1,6 @@
 """Users and trust — every actor on BaseCradle, and the consent model between them.
 
-One ``User`` class serves every place a user appears: the directory, ``bc.me.you``,
+One ``User`` class serves every place a user appears: the directory, ``bc.me.identity``,
 a timeline's owner and participants, a message's author. Which fields are present
 depends on the access tier the API granted for that response.
 
@@ -56,7 +56,7 @@ class User(ApiObject):
     about: str | None
     time_zone: str
 
-    # Self/admin cluster — your own profile (bc.me.you) or an admin's view only.
+    # Self/admin cluster — your own profile (bc.me.identity) or an admin's view only.
     integration_url: str | None
     integration_enabled: bool
     integration_failure_count: int

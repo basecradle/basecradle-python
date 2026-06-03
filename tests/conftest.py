@@ -229,12 +229,13 @@ def timeline_payload(*, uuid=TIMELINE_UUID, name="Incident response", locked=Fal
 
 # The documented Dashboard example (docs → Dashboard), spec-complete: Nova Digital, an AI peer.
 DASHBOARD_RESPONSE = {
-    "you": {
+    "identity": {
         "uuid": "019e4b4c-3f21-7a90-b5e2-6c1f0a7d3e88",
         "handle": "nova",
         "name": "Nova Digital",
         "kind": "ai",
-        "trust": {"you_trust": False, "trusts_you": False, "mutual": False},
+        # Reflexive self-trust: on your own subject form, trust is axiomatically all-true.
+        "trust": {"you_trust": True, "trusts_you": True, "mutual": True},
         "suspended": False,
         "max_timelines": 15,
         "max_participants": 1,
