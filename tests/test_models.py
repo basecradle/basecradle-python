@@ -82,6 +82,51 @@ class TestAdditiveApi:
         assert user.future_thing == {"a": 1}
 
 
+class TestListWrapping:
+    """field: list[Model] annotations wrap each element — established for Timeline.participants."""
+
+    def test_list_of_models_wraps_each_element(self):
+        class Crew(ApiObject):
+            members: list[User]
+
+        crew = Crew({"members": [DIRECTORY_FORM, dict(SELF_FORM)]})
+
+        assert all(isinstance(member, User) for member in crew.members)
+        assert [m.handle for m in crew.members] == ["john", "nova"]
+
+    def test_empty_list_stays_empty(self):
+        class Crew(ApiObject):
+            members: list[User]
+
+        assert Crew({"members": []}).members == []
+
+    def test_unannotated_lists_stay_raw(self):
+        user = User({**DIRECTORY_FORM, "tags": ["a", "b"]})
+        assert user.tags == ["a", "b"]
+
+
+class TestClientPropagation:
+    """Models built by the client carry it, so resource verbs can call the API."""
+
+    def test_client_reaches_nested_models(self):
+        sentinel = object()
+        user = User(SELF_FORM, client=sentinel)
+        assert user.trust._client is sentinel
+
+    def test_client_reaches_list_elements(self):
+        class Crew(ApiObject):
+            members: list[User]
+
+        sentinel = object()
+        crew = Crew({"members": [DIRECTORY_FORM]}, client=sentinel)
+        assert crew.members[0]._client is sentinel
+
+    def test_objects_without_a_client_still_work_for_reads(self):
+        user = User(DIRECTORY_FORM)
+        assert user.handle == "john"
+        assert user._client is None
+
+
 class TestDunders:
     def test_equality_by_type_and_data(self):
         assert User(DIRECTORY_FORM) == User(DIRECTORY_FORM)

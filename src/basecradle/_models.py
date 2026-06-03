@@ -9,13 +9,19 @@ nested wrapping); attribute access reads the wire data itself, so:
 - A field the API did not return (access-gated, e.g. a User's trusted-peer cluster)
   raises ``AttributeError`` with an explanation — never a silent ``None`` that could
   mean "hidden from you" or "actually null".
+
+Models built by the client carry a reference to it, so resource verbs
+(``timeline.lock()``) can act on the platform.
 """
 
 from __future__ import annotations
 
 import functools
 import typing
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from basecradle._client import BaseCradle
 
 __all__ = ["ApiObject"]
 
@@ -23,8 +29,9 @@ __all__ = ["ApiObject"]
 class ApiObject:
     """A read-only, wire-exact view of one API JSON object."""
 
-    def __init__(self, data: dict[str, Any]) -> None:
+    def __init__(self, data: dict[str, Any], *, client: BaseCradle | None = None) -> None:
         self._data = data
+        self._client = client
 
     def __getattr__(self, name: str) -> Any:
         # Only called when normal attribute lookup fails — i.e. for wire fields.
@@ -39,11 +46,31 @@ class ApiObject:
                 f"part of this response form. Fields present: {sorted(data)}"
             )
 
-        value = data[name]
+        return self._wrap(name, data[name])
+
+    def _wrap(self, name: str, value: Any) -> Any:
+        """Wrap dicts (and lists of dicts) in their annotated model class, if any."""
         nested_class = _nested_classes(type(self)).get(name)
-        if nested_class is not None and isinstance(value, dict):
-            return nested_class(value)
+        if nested_class is None:
+            return value
+        if isinstance(value, dict):
+            return nested_class(value, client=self._client)
+        if isinstance(value, list):
+            return [
+                nested_class(item, client=self._client) if isinstance(item, dict) else item
+                for item in value
+            ]
         return value
+
+    def _require_client(self) -> BaseCradle:
+        """The client this object came from — required by verbs that call the API."""
+        if self._client is None:
+            raise RuntimeError(
+                f"This {type(self).__name__} is not attached to a BaseCradle client, so it "
+                f"cannot call the API. Objects obtained from a client (bc.timelines, bc.me, ...) "
+                f"are attached automatically."
+            )
+        return self._client
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} {sorted(self._data)}>"
@@ -59,12 +86,17 @@ class ApiObject:
 
 @functools.lru_cache(maxsize=None)
 def _nested_classes(cls: type) -> dict[str, type[ApiObject]]:
-    """Which annotated fields of ``cls`` are themselves models (and should auto-wrap).
+    """Which annotated fields of ``cls`` are models (or lists of models) to auto-wrap.
 
-    Resolved from the class's type annotations, once per class.
+    Resolved from the class's type annotations, once per class. Recognizes both
+    ``field: Model`` and ``field: list[Model]``.
     """
-    return {
-        name: annotation
-        for name, annotation in typing.get_type_hints(cls).items()
-        if isinstance(annotation, type) and issubclass(annotation, ApiObject)
-    }
+    nested: dict[str, type[ApiObject]] = {}
+    for name, annotation in typing.get_type_hints(cls).items():
+        if isinstance(annotation, type) and issubclass(annotation, ApiObject):
+            nested[name] = annotation
+        elif typing.get_origin(annotation) is list:
+            (element_type,) = typing.get_args(annotation)
+            if isinstance(element_type, type) and issubclass(element_type, ApiObject):
+                nested[name] = element_type
+    return nested

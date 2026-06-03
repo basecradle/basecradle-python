@@ -37,6 +37,7 @@ from basecradle._exceptions import (
     ValidationError,
 )
 from basecradle._models import ApiObject
+from basecradle._timelines import Timeline, TimelineItem, TimelinesResource
 from basecradle._users import Trust, User
 from basecradle._version import __version__
 
@@ -51,6 +52,9 @@ __all__ = [
     "DashboardEnvironment",
     "DashboardInteraction",
     "DashboardTimelines",
+    "Timeline",
+    "TimelineItem",
+    "TimelinesResource",
     "Trust",
     "User",
     # Errors

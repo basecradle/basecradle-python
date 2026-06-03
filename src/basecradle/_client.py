@@ -9,6 +9,7 @@ import httpx
 
 from basecradle._dashboard import Dashboard
 from basecradle._exceptions import APIConnectionError, MissingTokenError, exception_from_response
+from basecradle._timelines import TimelinesResource
 from basecradle._version import __version__
 
 DEFAULT_BASE_URL = "https://basecradle.com"
@@ -53,6 +54,8 @@ class BaseCradle:
         self.base_url = base_url
         #: The Dashboard .md URL the API points new peers at; set by ``login()``.
         self.start_here: str | None = None
+        #: Your timelines — iterable (auto-paginating), with create/get.
+        self.timelines = TimelinesResource(self)
         self._client = httpx.Client(
             base_url=base_url,
             headers=_default_headers(resolved),
@@ -103,7 +106,7 @@ class BaseCradle:
         Fetched fresh on every access — it is the live answer to "who am I?", and
         caching would invite staleness.
         """
-        return Dashboard(self.request("GET", "/users/dashboard"))
+        return Dashboard(self.request("GET", "/users/dashboard"), client=self)
 
     def request(
         self,
