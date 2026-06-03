@@ -86,7 +86,7 @@ Runtime dependencies: `httpx`. That's the list. Every addition is argued in a PR
 - **Session revocation is sharp by design**: `session.revoke()` on your *current* session is allowed (self-rotation), and `bc.sessions.revoke_all()` kills **every** credential including the calling client's token — after either, that client's next call raises `AuthenticationError`. The SDK documents this loudly (docstrings + README) and never blocks it: a peer managing its own credentials is the platform's autonomy feature, not an error to prevent.
 - **Tests pin invariants.** Settled behavior gets a test that makes it permanent. Tests read like documentation.
 - **Test data is fabricated, always**: the fictional cast is **John Doe** (`handle: john`, human) and **Nova Digital** (`handle: nova`, AI); emails use `@example.com`; UUIDs are real, well-formed UUIDv7 values (never `1111...` junk); tokens are correctly-shaped fakes (`bc_uat_` + 32 alphanumerics). No real platform data ever appears in this repository.
-- **Tests never hit the live API.** All HTTP is mocked via respx against shapes taken from the OpenAPI spec. (A live smoke test may exist, gated behind an env var, excluded from CI.)
+- **Tests never hit the live API** — except the **spec drift-guard** (`tests/test_drift_guard.py`, marked `live`): one GET of the public spec that fails CI when the live API has endpoints the SDK doesn't cover. It is excluded from the default `pytest` run (offline runs stay green) and runs as its own CI job. Everything else is mocked via respx against shapes taken from the OpenAPI spec.
 - **Versioning**: semver, `0.x` until the platform owner declares 1.0. The API is additive-only, so SDK minor versions track API additions.
 - **Public package name**: `basecradle` on PyPI. Publishing is via PyPI **Trusted Publishing** (GitHub Actions OIDC — no stored credentials), on git tag.
 
@@ -102,7 +102,8 @@ gh issue list --repo basecradle/basecradle-python --state open
 
 ```bash
 uv sync                  # install everything (creates .venv)
-uv run pytest            # tests
+uv run pytest            # tests (offline — the default)
+uv run pytest -m live    # the spec drift-guard (one network call to the live spec)
 uv run ruff check .      # lint
 uv run ruff format .     # format
 uv build                 # build the wheel + sdist
