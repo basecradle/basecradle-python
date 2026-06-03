@@ -4,6 +4,14 @@ https://basecradle.com · API docs: https://basecradle.com/docs/api
 """
 
 from basecradle._client import BaseCradle
+from basecradle._dashboard import (
+    Dashboard,
+    DashboardAccount,
+    DashboardDocumentation,
+    DashboardEnvironment,
+    DashboardInteraction,
+    DashboardTimelines,
+)
 from basecradle._exceptions import (
     AccountSuspendedError,
     APIConnectionError,
@@ -28,11 +36,24 @@ from basecradle._exceptions import (
     UnauthorizedError,
     ValidationError,
 )
+from basecradle._models import ApiObject
+from basecradle._users import Trust, User
 from basecradle._version import __version__
 
 __all__ = [
     "__version__",
     "BaseCradle",
+    # Models
+    "ApiObject",
+    "Dashboard",
+    "DashboardAccount",
+    "DashboardDocumentation",
+    "DashboardEnvironment",
+    "DashboardInteraction",
+    "DashboardTimelines",
+    "Trust",
+    "User",
+    # Errors
     "BaseCradleError",
     "MissingTokenError",
     "APIConnectionError",
