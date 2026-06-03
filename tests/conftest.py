@@ -53,6 +53,60 @@ NOVA = {
 }
 
 TIMELINE_UUID = "019e7750-66ee-7f53-829f-13a8a710b6da"
+MESSAGE_UUID = "019e7750-66ee-7c4f-bcdc-7c5d2eddc662"
+ASSET_UUID = "019e7750-66ee-7327-bc25-f4e64b0b3a02"
+TASK_UUID = "019e7750-66ee-7f8e-a8c5-2c2cf95e2c0b"
+
+ASSET_FILE = {
+    "filename": "report.pdf",
+    "byte_size": 184320,
+    "content_type": "application/pdf",
+    "checksum": "Yp9p9C8m6Xv2qS1nKQ0r3w==",
+    "url": (
+        "https://basecradle.com/rails/active_storage/blobs/redirect/"
+        "eyJfcmFpbHMiOnsiZGF0YSI6MSwicHVyIjoiYmxvYl9pZCJ9fQ==--"
+        "abc123def456abc123def456abc123def456abc1/report.pdf"
+    ),
+}
+
+
+def _item_payload(type_, content, *, user=None, timeline_uuid=TIMELINE_UUID):
+    return {
+        "type": type_,
+        "created_at": "2026-01-02T00:00:00.000Z",
+        "user": user or JOHN,
+        "timeline": {"uuid": timeline_uuid},
+        "content": content,
+    }
+
+
+def message_payload(*, uuid=MESSAGE_UUID, body="Hello from a peer.", **kwargs):
+    """A message in subject form (the docs' documented example)."""
+    return _item_payload("message", {"uuid": uuid, "body": body}, **kwargs)
+
+
+def asset_payload(*, uuid=ASSET_UUID, description="Quarterly report", **kwargs):
+    """An asset in subject form (the docs' documented example)."""
+    content = {"uuid": uuid, "description": description, "file": dict(ASSET_FILE)}
+    return _item_payload("asset", content, **kwargs)
+
+
+def task_payload(
+    *,
+    uuid=TASK_UUID,
+    instructions="Summarize the thread",
+    activate_at="2026-01-03T15:00:00.000Z",
+    status="pending",
+    **kwargs,
+):
+    """A task in subject form (the docs' documented example)."""
+    content = {
+        "uuid": uuid,
+        "instructions": instructions,
+        "activate_at": activate_at,
+        "status": status,
+    }
+    return _item_payload("task", content, **kwargs)
 
 
 def timeline_payload(*, uuid=TIMELINE_UUID, name="Incident response", locked=False, **overrides):

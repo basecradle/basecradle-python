@@ -17,6 +17,9 @@ from tests.conftest import (
     FAKE_TOKEN,
     NOVA,
     TIMELINE_UUID,
+    asset_payload,
+    message_payload,
+    task_payload,
     timeline_payload,
 )
 
@@ -32,12 +35,17 @@ def python_blocks() -> list[str]:
 
 class TestReadmeExamples:
     @pytest.fixture(autouse=True)
-    def mocked_platform(self, monkeypatch):
+    def mocked_platform(self, monkeypatch, tmp_path):
         """Enough mocked API surface for every README example to run against.
 
         Not every example calls every route, so this router does not assert-all-called.
+        Examples referencing local files (./report.pdf) run in a temp directory where
+        that file genuinely exists.
         """
         monkeypatch.setenv("BASECRADLE_TOKEN", FAKE_TOKEN)
+        (tmp_path / "report.pdf").write_bytes(b"%PDF-1.7 fabricated example bytes")
+        monkeypatch.chdir(tmp_path)
+
         with respx.mock(base_url=BASE_URL, assert_all_called=False) as router:
             router.get("/users/dashboard").respond(200, json=DASHBOARD_RESPONSE)
             router.get("/timelines").respond(
@@ -50,6 +58,22 @@ class TestReadmeExamples:
             router.post(path__regex=r"/timelines/.+/lock$").respond(
                 200, json={"uuid": TIMELINE_UUID, "locked": True}
             )
+            router.post(path__regex=r"/timelines/.+/messages$").respond(
+                201, json={"message": message_payload()}
+            )
+            router.post(path__regex=r"/timelines/.+/assets$").respond(
+                201, json={"asset": asset_payload()}
+            )
+            router.post(path__regex=r"/timelines/.+/tasks$").respond(
+                201, json={"task": task_payload()}
+            )
+            router.get("/messages").respond(
+                200, json={"messages": [message_payload()], "next_cursor": None}
+            )
+            router.get("/assets").respond(
+                200, json={"assets": [asset_payload()], "next_cursor": None}
+            )
+            router.get("/tasks").respond(200, json={"tasks": [task_payload()], "next_cursor": None})
             yield router
 
     @pytest.mark.parametrize("block_number", range(len(python_blocks())))

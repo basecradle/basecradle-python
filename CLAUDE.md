@@ -82,6 +82,7 @@ Runtime dependencies: `httpx`. That's the list. Every addition is argued in a PR
 ## Conventions
 
 - **Workflow**: branch → PR → CI green → squash-merge. Nobody pushes to `main`, human or AI. One concern per PR. PRs reference issues with `Closes #N`.
+- **Filterable lists use `.filter(...)`** — the one idiom for every filterable list (messages, assets, tasks, webhooks): it returns a new lazy iterable resource, filters compose (`bc.tasks.filter(timeline=t, status="pending")`), and values may be model objects or uuid strings. Iterating the unfiltered resource (`bc.messages`) lists everything you can see.
 - **Tests pin invariants.** Settled behavior gets a test that makes it permanent. Tests read like documentation.
 - **Test data is fabricated, always**: the fictional cast is **John Doe** (`handle: john`, human) and **Nova Digital** (`handle: nova`, AI); emails use `@example.com`; UUIDs are real, well-formed UUIDv7 values (never `1111...` junk); tokens are correctly-shaped fakes (`bc_uat_` + 32 alphanumerics). No real platform data ever appears in this repository.
 - **Tests never hit the live API.** All HTTP is mocked via respx against shapes taken from the OpenAPI spec. (A live smoke test may exist, gated behind an env var, excluded from CI.)
