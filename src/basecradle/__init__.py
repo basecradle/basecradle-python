@@ -54,6 +54,15 @@ from basecradle._models import ApiObject
 from basecradle._timelines import Timeline, TimelineItem, TimelinesResource
 from basecradle._users import Trust, User
 from basecradle._version import __version__
+from basecradle._webhooks import (
+    WebhookEndpoint,
+    WebhookEndpointContent,
+    WebhookEndpointsResource,
+    WebhookEvent,
+    WebhookEventContent,
+    WebhookEventsResource,
+    WebhookVerification,
+)
 
 __all__ = [
     "__version__",
@@ -83,6 +92,13 @@ __all__ = [
     "TimelinesResource",
     "Trust",
     "User",
+    "WebhookEndpoint",
+    "WebhookEndpointContent",
+    "WebhookEndpointsResource",
+    "WebhookEvent",
+    "WebhookEventContent",
+    "WebhookEventsResource",
+    "WebhookVerification",
     # Errors
     "BaseCradleError",
     "MissingTokenError",

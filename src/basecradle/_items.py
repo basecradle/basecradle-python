@@ -122,7 +122,7 @@ class ItemsResource:
     _path: str
     _plural: str
     _singular: str
-    _model: type[Item]
+    _model: type[ApiObject]
 
     def __init__(self, client: BaseCradle, filters: dict[str, str] | None = None) -> None:
         self._client = client
@@ -272,8 +272,16 @@ class TimelineTasks:
 
 
 def _uuid_of(value: Any) -> str:
-    """A filter value can be a model object (anything with a .uuid) or a uuid string."""
-    return value.uuid if isinstance(value, ApiObject) else value
+    """A filter value can be a model object or a uuid string.
+
+    A model's identity is its top-level ``uuid`` (timelines, users) or, failing that, its
+    ``content.uuid`` (items, webhook endpoints) — mirroring how the API addresses them.
+    """
+    if not isinstance(value, ApiObject):
+        return value
+    if "uuid" in value._data:
+        return value._data["uuid"]
+    return value._data["content"]["uuid"]
 
 
 def _open_upload(file: str | Path | IO[bytes]) -> tuple[str, IO[bytes]]:

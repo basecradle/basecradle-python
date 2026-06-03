@@ -21,6 +21,8 @@ from tests.conftest import (
     message_payload,
     task_payload,
     timeline_payload,
+    webhook_endpoint_payload,
+    webhook_event_payload,
 )
 
 README = Path(__file__).parent.parent / "README.md"
@@ -74,6 +76,19 @@ class TestReadmeExamples:
                 200, json={"assets": [asset_payload()], "next_cursor": None}
             )
             router.get("/tasks").respond(200, json={"tasks": [task_payload()], "next_cursor": None})
+            router.post(path__regex=r"/timelines/.+/webhook_endpoints$").respond(
+                201, json={"webhook_endpoint": webhook_endpoint_payload()}
+            )
+            router.route(
+                method__in=["POST", "DELETE"],
+                path__regex=r"/webhook_endpoints/.+/enablement$",
+            ).respond(200, json={"webhook_endpoint": webhook_endpoint_payload()})
+            router.post(path__regex=r"/webhook_endpoints/.+/rotation$").respond(
+                200, json={"webhook_endpoint": webhook_endpoint_payload()}
+            )
+            router.get("/webhook_events").respond(
+                200, json={"webhook_events": [webhook_event_payload()], "next_cursor": None}
+            )
             yield router
 
     @pytest.mark.parametrize("block_number", range(len(python_blocks())))
