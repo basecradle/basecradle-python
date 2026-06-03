@@ -28,13 +28,13 @@ __all__ = ["AsyncTimelinesResource", "Timeline", "TimelineItem", "TimelinesResou
 
 
 class TimelineItem(ApiObject):
-    """One item on a timeline — a message, asset, or webhook event.
+    """One item on a timeline — a message, asset, webhook event, or task.
 
     ``type`` says which; ``content`` is the item itself, wire-exact (for a message:
     ``uuid`` and ``body``). ``user`` is the author in nested-actor form.
     """
 
-    type: str  # "message" | "asset" | "webhook_event"
+    type: str  # "message" | "asset" | "webhook_event" | "task"
     created_at: str
     user: User
     content: ApiObject
