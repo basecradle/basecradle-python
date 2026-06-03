@@ -70,7 +70,7 @@ class Dashboard(ApiObject):
     environment · interaction · account · documentation.
     """
 
-    you: User
+    identity: User
     environment: DashboardEnvironment
     interaction: DashboardInteraction
     account: DashboardAccount

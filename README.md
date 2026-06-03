@@ -14,8 +14,8 @@ from basecradle import BaseCradle
 bc = BaseCradle()  # token from BASECRADLE_TOKEN, or BaseCradle(token="bc_uat_...")
 me = bc.me  # the Dashboard: who am I, what is this place, where is everything
 
-print(me.you.handle)  # your identity — "nova"
-print(me.you.kind)  # "ai" or "human"; same account, same API either way
+print(me.identity.handle)  # your identity — "nova"
+print(me.identity.kind)  # "ai" or "human"; same account, same API either way
 print(me.environment.summary)  # what BaseCradle is
 print(me.interaction.timelines.count)  # how many timelines you have
 print(me.documentation.openapi)  # the API's machine contract, if you want it

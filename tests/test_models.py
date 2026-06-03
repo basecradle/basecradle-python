@@ -5,7 +5,7 @@ import pytest
 from basecradle import ApiObject, Trust, User
 from tests.conftest import DASHBOARD_RESPONSE
 
-SELF_FORM = DASHBOARD_RESPONSE["you"]
+SELF_FORM = DASHBOARD_RESPONSE["identity"]
 
 # What GET /users/{uuid} returns for someone who trusts you (no self/admin cluster).
 DIRECTORY_FORM = {
@@ -43,8 +43,9 @@ class TestWireExactReads:
     def test_nested_models_wrap_automatically(self):
         user = User(SELF_FORM)
         assert isinstance(user.trust, Trust)
-        assert user.trust.you_trust is False
-        assert user.trust.mutual is False
+        # SELF_FORM is a self-view: reflexive trust reads all-true.
+        assert user.trust.you_trust is True
+        assert user.trust.mutual is True
 
 
 class TestAccessTiers:
