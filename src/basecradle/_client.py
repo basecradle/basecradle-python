@@ -9,6 +9,7 @@ import httpx
 
 from basecradle._dashboard import Dashboard
 from basecradle._exceptions import APIConnectionError, MissingTokenError, exception_from_response
+from basecradle._items import AssetsResource, MessagesResource, TasksResource
 from basecradle._timelines import TimelinesResource
 from basecradle._version import __version__
 
@@ -56,6 +57,10 @@ class BaseCradle:
         self.start_here: str | None = None
         #: Your timelines — iterable (auto-paginating), with create/get.
         self.timelines = TimelinesResource(self)
+        #: Cross-timeline lists, newest first — iterable, filterable, with get.
+        self.messages = MessagesResource(self)
+        self.assets = AssetsResource(self)
+        self.tasks = TasksResource(self)
         self._client = httpx.Client(
             base_url=base_url,
             headers=_default_headers(resolved),
@@ -115,15 +120,21 @@ class BaseCradle:
         *,
         json: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
+        files: dict[str, Any] | None = None,
     ) -> Any:
         """Make an authenticated API request and return the parsed response body.
 
         This is what every resource method is built on, and the escape hatch for API
         endpoints added before the SDK wraps them (the API is additive-only). Raises a
         typed exception for every non-2xx response; returns ``None`` for ``204 No Content``.
+
+        ``data`` and ``files`` make the request multipart (used for asset uploads).
         """
         try:
-            response = self._client.request(method, path, json=json, params=params)
+            response = self._client.request(
+                method, path, json=json, params=params, data=data, files=files
+            )
         except httpx.HTTPError as exc:
             raise APIConnectionError(f"Could not reach {self.base_url}: {exc}") from exc
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
+from basecradle._items import TimelineAssets, TimelineMessages, TimelineTasks
 from basecradle._models import ApiObject
 from basecradle._pagination import paginate
 from basecradle._users import User
@@ -46,6 +47,21 @@ class Timeline(ApiObject):
     # Present when the timeline is the subject of the response (get / create).
     # List rows don't carry items — fetch the timeline to get them.
     items: list[TimelineItem]
+
+    @property
+    def messages(self) -> TimelineMessages:
+        """This timeline's messages: ``.create(body=...)`` or iterate (newest first)."""
+        return TimelineMessages(self._require_client(), self.uuid)
+
+    @property
+    def assets(self) -> TimelineAssets:
+        """This timeline's assets: ``.create(file=...)`` (multipart) or iterate."""
+        return TimelineAssets(self._require_client(), self.uuid)
+
+    @property
+    def tasks(self) -> TimelineTasks:
+        """This timeline's tasks: ``.create(instructions=..., activate_at=...)`` or iterate."""
+        return TimelineTasks(self._require_client(), self.uuid)
 
     def lock(self) -> None:
         """The emergency stop: freeze the timeline's content, permanently.

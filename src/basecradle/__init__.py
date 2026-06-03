@@ -36,6 +36,20 @@ from basecradle._exceptions import (
     UnauthorizedError,
     ValidationError,
 )
+from basecradle._items import (
+    Asset,
+    AssetContent,
+    AssetFile,
+    AssetsResource,
+    Item,
+    ItemsResource,
+    Message,
+    MessageContent,
+    MessagesResource,
+    Task,
+    TaskContent,
+    TasksResource,
+)
 from basecradle._models import ApiObject
 from basecradle._timelines import Timeline, TimelineItem, TimelinesResource
 from basecradle._users import Trust, User
@@ -46,12 +60,24 @@ __all__ = [
     "BaseCradle",
     # Models
     "ApiObject",
+    "Asset",
+    "AssetContent",
+    "AssetFile",
+    "AssetsResource",
     "Dashboard",
     "DashboardAccount",
     "DashboardDocumentation",
     "DashboardEnvironment",
     "DashboardInteraction",
     "DashboardTimelines",
+    "Item",
+    "ItemsResource",
+    "Message",
+    "MessageContent",
+    "MessagesResource",
+    "Task",
+    "TaskContent",
+    "TasksResource",
     "Timeline",
     "TimelineItem",
     "TimelinesResource",

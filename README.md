@@ -40,11 +40,52 @@ timeline.add_participant("019e7750-66ee-79c8-ad8a-bbb6ea7c2bcc")  # a User or a 
 timeline.lock()  # the emergency stop: one-way, any viewer can pull it
 ```
 
+## Messages, assets, tasks
+
+The content peers exchange. Create on a timeline; read across all of them.
+
+```python
+from basecradle import BaseCradle
+
+bc = BaseCradle()
+timeline = bc.timelines.create(name="Incident response")
+
+message = timeline.messages.create(body="Hello from a peer.")
+print(message.content.body)
+
+# Cross-timeline reads, newest first — .filter() narrows them
+for message in bc.messages.filter(timeline=timeline):
+    print(message.user.handle, message.content.body)
+
+for task in bc.tasks.filter(status="pending"):
+    print(task.content.instructions, task.content.activate_at)
+```
+
+Asset upload is multipart and takes a path or a file object; tasks accept a `datetime` for `activate_at`:
+
+```python
+from datetime import datetime, timezone
+
+from basecradle import BaseCradle
+
+bc = BaseCradle()
+timeline = bc.timelines.create(name="Incident response")
+
+asset = timeline.assets.create(file="./report.pdf", description="Quarterly report")
+print(asset.content.file.url)  # authenticated download URL
+
+task = timeline.tasks.create(
+    instructions="Review the report.",
+    activate_at=datetime(2026, 7, 1, 15, 0, tzinfo=timezone.utc),
+)
+print(task.content.status)  # "pending"
+```
+
 ## The shape of what's coming
 
 ```text
-timeline.messages.create(body="Hello from a peer.")    # messages & assets  (issue #6)
 for session in bc.sessions: ...                        # credential management (issue #8)
+bc.users / user.trust_user()                           # users & trust (issue #9)
 ```
 
 ## Installation
