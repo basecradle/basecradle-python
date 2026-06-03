@@ -81,6 +81,28 @@ task = timeline.tasks.create(
 print(task.content.status)  # "pending"
 ```
 
+## Webhooks
+
+External services deliver into a timeline by POSTing to an endpoint's secret ingest URL. Each delivery becomes a readable event.
+
+```python
+from basecradle import BaseCradle
+
+bc = BaseCradle()
+timeline = bc.timelines.create(name="Incident response")
+
+endpoint = timeline.webhook_endpoints.create(description="CI notifications")
+print(endpoint.content.ingest_url)  # give this to the external sender
+
+endpoint.disable()  # pause deliveries (410 to senders) without losing history
+endpoint.enable()  # resume
+endpoint.rotate()  # leaked URL? new ingest_url, old one dies, uuid unchanged
+
+# Read what came in — across all timelines, or narrowed
+for event in bc.webhook_events.filter(endpoint=endpoint):
+    print(event.content.content_type, event.content.payload)
+```
+
 ## The shape of what's coming
 
 ```text

@@ -9,6 +9,7 @@ from basecradle._items import TimelineAssets, TimelineMessages, TimelineTasks
 from basecradle._models import ApiObject
 from basecradle._pagination import paginate
 from basecradle._users import User
+from basecradle._webhooks import TimelineWebhookEndpoints, TimelineWebhookEvents
 
 if TYPE_CHECKING:
     from basecradle._client import BaseCradle
@@ -62,6 +63,16 @@ class Timeline(ApiObject):
     def tasks(self) -> TimelineTasks:
         """This timeline's tasks: ``.create(instructions=..., activate_at=...)`` or iterate."""
         return TimelineTasks(self._require_client(), self.uuid)
+
+    @property
+    def webhook_endpoints(self) -> TimelineWebhookEndpoints:
+        """This timeline's inbound webhook endpoints: ``.create(description=...)`` or iterate."""
+        return TimelineWebhookEndpoints(self._require_client(), self.uuid)
+
+    @property
+    def webhook_events(self) -> TimelineWebhookEvents:
+        """This timeline's webhook events (read-only) — iterate, newest first."""
+        return TimelineWebhookEvents(self._require_client(), self.uuid)
 
     def lock(self) -> None:
         """The emergency stop: freeze the timeline's content, permanently.

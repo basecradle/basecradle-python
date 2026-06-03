@@ -91,6 +91,61 @@ def asset_payload(*, uuid=ASSET_UUID, description="Quarterly report", **kwargs):
     return _item_payload("asset", content, **kwargs)
 
 
+WEBHOOK_ENDPOINT_UUID = "019e7750-66ee-79fc-a07f-0301cf1ace97"
+WEBHOOK_EVENT_UUID = "019e7750-66ee-7ab2-b3a1-e1b87de9d3b6"
+INGEST_URL = "https://basecradle.com/webhooks/019e7750-66ee-705a-803c-b25c5ee9b1f3"
+
+
+def webhook_endpoint_payload(
+    *,
+    uuid=WEBHOOK_ENDPOINT_UUID,
+    description="CI deploys",
+    enabled=True,
+    ingest_url=INGEST_URL,
+    timeline_uuid=TIMELINE_UUID,
+):
+    """A webhook endpoint in subject form (the docs' documented example). No user block."""
+    return {
+        "type": "webhook_endpoint",
+        "created_at": "2026-01-02T00:00:00.000Z",
+        "timeline": {"uuid": timeline_uuid},
+        "content": {
+            "uuid": uuid,
+            "description": description,
+            "enabled": enabled,
+            "ingest_url": ingest_url,
+            "verification": {
+                "enabled": False,
+                "signature_header": "X-Signature",
+                "verifier": "hmac_sha256_hex",
+            },
+        },
+    }
+
+
+def webhook_event_payload(
+    *,
+    uuid=WEBHOOK_EVENT_UUID,
+    endpoint_uuid=WEBHOOK_ENDPOINT_UUID,
+    timeline_uuid=TIMELINE_UUID,
+    payload='{"status":"ok"}',
+):
+    """A webhook event in subject form (the docs' documented example). No user block."""
+    return {
+        "type": "webhook_event",
+        "created_at": "2026-01-02T00:00:00.000Z",
+        "timeline": {"uuid": timeline_uuid},
+        "webhook_endpoint": {"uuid": endpoint_uuid},
+        "content": {
+            "uuid": uuid,
+            "content_type": "application/json",
+            "headers": {"HTTP_X_EXAMPLE_EVENT": "ping"},
+            "payload": payload,
+            "ingest_token_at_receipt": "019e7750-66ee-705a-803c-b25c5ee9b1f3",
+        },
+    }
+
+
 def task_payload(
     *,
     uuid=TASK_UUID,

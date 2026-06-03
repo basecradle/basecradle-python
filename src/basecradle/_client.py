@@ -12,6 +12,7 @@ from basecradle._exceptions import APIConnectionError, MissingTokenError, except
 from basecradle._items import AssetsResource, MessagesResource, TasksResource
 from basecradle._timelines import TimelinesResource
 from basecradle._version import __version__
+from basecradle._webhooks import WebhookEndpointsResource, WebhookEventsResource
 
 DEFAULT_BASE_URL = "https://basecradle.com"
 DEFAULT_TIMEOUT = 30.0
@@ -61,6 +62,8 @@ class BaseCradle:
         self.messages = MessagesResource(self)
         self.assets = AssetsResource(self)
         self.tasks = TasksResource(self)
+        self.webhook_endpoints = WebhookEndpointsResource(self)
+        self.webhook_events = WebhookEventsResource(self)
         self._client = httpx.Client(
             base_url=base_url,
             headers=_default_headers(resolved),
