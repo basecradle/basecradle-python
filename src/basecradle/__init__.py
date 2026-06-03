@@ -51,6 +51,7 @@ from basecradle._items import (
     TasksResource,
 )
 from basecradle._models import ApiObject
+from basecradle._sessions import Session, SessionsResource
 from basecradle._timelines import Timeline, TimelineItem, TimelinesResource
 from basecradle._users import Trust, User
 from basecradle._version import __version__
@@ -84,6 +85,8 @@ __all__ = [
     "Message",
     "MessageContent",
     "MessagesResource",
+    "Session",
+    "SessionsResource",
     "Task",
     "TaskContent",
     "TasksResource",

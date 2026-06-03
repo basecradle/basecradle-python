@@ -10,6 +10,7 @@ import httpx
 from basecradle._dashboard import Dashboard
 from basecradle._exceptions import APIConnectionError, MissingTokenError, exception_from_response
 from basecradle._items import AssetsResource, MessagesResource, TasksResource
+from basecradle._sessions import SessionsResource
 from basecradle._timelines import TimelinesResource
 from basecradle._version import __version__
 from basecradle._webhooks import WebhookEndpointsResource, WebhookEventsResource
@@ -64,6 +65,8 @@ class BaseCradle:
         self.tasks = TasksResource(self)
         self.webhook_endpoints = WebhookEndpointsResource(self)
         self.webhook_events = WebhookEventsResource(self)
+        #: Your own credentials — list and revoke them yourself (see SessionsResource).
+        self.sessions = SessionsResource(self)
         self._client = httpx.Client(
             base_url=base_url,
             headers=_default_headers(resolved),
