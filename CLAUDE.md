@@ -117,6 +117,35 @@ The build is fully mapped in this repo's **GitHub Issues** — each issue is one
 gh issue list --repo basecradle/basecradle-python --state open
 ```
 
+## Cross-Repo Handoffs
+
+BaseCradle is built across multiple repositories — the private Rails core, the public SDKs, and future ecosystem repos — each worked on by its own Claude Code sessions. Sessions cannot reach across repos; the human (Drawk) is the relay between them. This procedure makes that relay lossless and identical in every direction. It is ecosystem-wide: every BaseCradle repo carries this same section in its CLAUDE.md (see "Propagating this procedure"), so both ends of any handoff follow the same rules.
+
+### Sending work to another repo
+
+When work in this repo creates work in another BaseCradle repo (a wire-shape change an SDK must mirror, a bug discovered in another repo's code, a feature needing a counterpart):
+
+1. **File the issue(s) on the target repo.** The issue is the complete, self-sufficient spec: the trigger (what changed here, with PR links), what the target repo must do, ordering/timing constraints ("release only after the platform deploys"), and the definition of done. Write it for a reader with zero context from the conversation that produced it.
+2. **Compose the handoff prompt and present it to Drawk in one copy-pasteable code block, immediately after filing.** Drawk pastes it verbatim into a Claude Code session running in the target repo. Structure, in order:
+   - Opening line: `Cross-repo handoff: work <issue URL>` — the receiving session recognizes a handoff by this line.
+   - The trigger in one or two lines, with links.
+   - Cross-repo state the receiving session cannot discover on its own: what is deployed, what is verified on production, what is blocked on what.
+   - What "done" looks like, including whether a return handoff is required.
+3. **The issue is the spec; the prompt is the pointer.** Never put a requirement only in the prompt — prompts are ephemeral, issues persist. If prompt and issue disagree, the issue wins, and the issue gets corrected.
+
+### Receiving work from another repo
+
+When Drawk pastes a prompt beginning `Cross-repo handoff:`:
+
+1. Read the referenced issue(s) in full before acting — the issue is the spec.
+2. Execute under **this** repo's conventions (its own CLAUDE.md, workflow, tests). The sending repo's conventions do not transfer.
+3. Respect the issue's ordering constraints (e.g., verify a dependency has deployed before releasing).
+4. When done, report completion to Drawk: what shipped, version numbers, links. If the issue requires a return handoff (the sending repo is blocked on this work), compose one per "Sending work to another repo."
+
+### Propagating this procedure
+
+Every BaseCradle ecosystem repo carries this same "Cross-Repo Handoffs" section in its CLAUDE.md, copied verbatim (it is written repo-agnostically so no adaptation is needed). When handing off to a repo whose CLAUDE.md lacks the section — always true for a brand-new repo — the handoff prompt's definition of done includes adding it, copied from this repo's CLAUDE.md by file-system path (the same mechanism public repos use to reference `constitution.md`).
+
 ## Development Commands
 
 ```bash
