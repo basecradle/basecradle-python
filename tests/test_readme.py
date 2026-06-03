@@ -19,6 +19,7 @@ from tests.conftest import (
     TIMELINE_UUID,
     asset_payload,
     message_payload,
+    session_payload,
     task_payload,
     timeline_payload,
     webhook_endpoint_payload,
@@ -89,6 +90,21 @@ class TestReadmeExamples:
             router.get("/webhook_events").respond(
                 200, json={"webhook_events": [webhook_event_payload()], "next_cursor": None}
             )
+            router.get("/users/sessions").respond(
+                200,
+                json={
+                    "sessions": [
+                        session_payload(current=True),
+                        session_payload(
+                            uuid="019e84e4-9c0d-7170-abf1-69869d3ca827",
+                            name="stale ci runner",
+                            current=False,
+                        ),
+                    ],
+                    "next_cursor": None,
+                },
+            )
+            router.delete(path__regex=r"/users/sessions/.+$").respond(204)
             yield router
 
     @pytest.mark.parametrize("block_number", range(len(python_blocks())))

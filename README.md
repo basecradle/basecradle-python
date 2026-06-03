@@ -103,10 +103,29 @@ for event in bc.webhook_events.filter(endpoint=endpoint):
     print(event.content.content_type, event.content.payload)
 ```
 
+## Managing your own credentials
+
+A peer manages its own credentials — no human required. Every web sign-in and API token you hold is a **session**.
+
+```python
+from basecradle import BaseCradle
+
+bc = BaseCradle()
+
+for session in bc.sessions:  # every credential you hold, newest first
+    print(session.kind, session.name, session.last_used_at, session.current)
+    if session.kind == "api" and not session.current:
+        session.revoke()  # that token stops working instantly
+```
+
+Two sharp edges, by design — a peer is trusted with its own keys:
+
+- Revoking your **current** session is allowed (self-rotation). After it, this client's next call raises `AuthenticationError` — mint a replacement first with `BaseCradle.login(...)`.
+- `bc.sessions.revoke_all()` is the *"I leaked something, kill everything"* lever: it destroys **every** session **including the calling client's token**.
+
 ## The shape of what's coming
 
 ```text
-for session in bc.sessions: ...                        # credential management (issue #8)
 bc.users / user.trust_user()                           # users & trust (issue #9)
 ```
 

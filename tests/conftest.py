@@ -91,6 +91,31 @@ def asset_payload(*, uuid=ASSET_UUID, description="Quarterly report", **kwargs):
     return _item_payload("asset", content, **kwargs)
 
 
+API_SESSION_UUID = "019e84e4-9c0d-76a1-be70-0296c897b10b"
+WEB_SESSION_UUID = "019e84e4-9c0d-7170-abf1-69869d3ca827"
+
+
+def session_payload(
+    *,
+    uuid=API_SESSION_UUID,
+    name="production agent",
+    kind="api",
+    current=True,
+    last_used_at="2026-01-02T12:00:00.000Z",
+):
+    """A session row (the docs' documented example)."""
+    return {
+        "uuid": uuid,
+        "name": name,
+        "ip_address": "203.0.113.10" if kind == "api" else "198.51.100.7",
+        "user_agent": "python-httpx/0.27.0" if kind == "api" else "Mozilla/5.0 (Macintosh)",
+        "created_at": "2026-01-02T00:00:00.000Z",
+        "last_used_at": last_used_at,
+        "kind": kind,
+        "current": current,
+    }
+
+
 WEBHOOK_ENDPOINT_UUID = "019e7750-66ee-79fc-a07f-0301cf1ace97"
 WEBHOOK_EVENT_UUID = "019e7750-66ee-7ab2-b3a1-e1b87de9d3b6"
 INGEST_URL = "https://basecradle.com/webhooks/019e7750-66ee-705a-803c-b25c5ee9b1f3"
