@@ -121,6 +121,15 @@ gh issue list --repo basecradle/basecradle-python --state open
 
 BaseCradle is built across multiple repositories — the private Rails core, the public SDKs, and future ecosystem repos — each worked on by its own Claude Code sessions. Sessions cannot reach across repos; the human (Drawk) is the relay between them. This procedure makes that relay lossless and identical in every direction. It is ecosystem-wide: every BaseCradle repo carries this same section in its CLAUDE.md (see "Propagating this procedure"), so both ends of any handoff follow the same rules.
 
+### Repo sovereignty
+
+The ecosystem runs on **constitutional federalism** — see `constitution.md` → "Sovereignty and Governance" for the full principle. The operational consequences for *this* repo:
+
+- **The constitution is supreme law**, stewarded at the capital (the core `basecradle` repo) and referenced by file-system path. This `CLAUDE.md` is **subordinate** to it, governs **only this repo**, and is **not** authoritative over any other repo's `CLAUDE.md` — nor is any other repo's authoritative over this one.
+- **This repo is captain of its own ship** — sovereign over its code, CI, conventions, and `CLAUDE.md`, and accountable for them.
+- **Act only within this repo.** Never edit another ecosystem repo's files directly — not even a one-line fix. Cross-repo work is **always** a handoff: file an issue on the target repo and its captain executes. Filing an issue elsewhere is the handoff mechanism (allowed); editing another repo's files is the boundary never crossed.
+- **Shared law changes only at the capital** — a PR to `constitution.md`, propagated by handoff. This repo may propose upward but never enacts ecosystem-wide rules alone.
+
 ### Sending work to another repo
 
 When work in this repo creates work in another BaseCradle repo (a wire-shape change an SDK must mirror, a bug discovered in another repo's code, a feature needing a counterpart):
