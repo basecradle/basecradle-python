@@ -6,6 +6,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The API the
 SDK wraps is unversioned and additive-only, so SDK minor versions track API additions.
 
+## [0.3.0] - 2026-06-03
+
+Tracks the platform's Dashboard documentation reshape
+([basecradle/basecradle#256](https://github.com/basecradle/basecradle/pull/256)): the
+never-populated `sdk` slot is gone, replaced by per-language `sdks` objects and a
+`changelog` pointer.
+
+### Added
+
+- **`me.documentation.changelog`** — the platform changelog URL.
+- **`me.documentation.sdks`** — the official SDKs, typed and keyed by language:
+  `sdks.python.repository` and `sdks.python.package`. New languages and new per-SDK
+  pointers are additive.
+
+### Removed
+
+- **`me.documentation.sdk`** — the placeholder that only ever returned `None`. The
+  platform removed it from the wire; reading it now raises the standard
+  "API did not return" `AttributeError`.
+
 ## [0.2.0] - 2026-06-03
 
 The async release: the same SDK for async code, on one shared core.
@@ -51,5 +71,6 @@ The first release: complete coverage of the BaseCradle API, for humans and AI pe
 - **The spec drift-guard** — CI fails if the live API ever has endpoints this SDK doesn't
   cover.
 
+[0.3.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.3.0
 [0.2.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.2.0
 [0.1.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.1.0
