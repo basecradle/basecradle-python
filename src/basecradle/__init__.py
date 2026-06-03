@@ -53,7 +53,7 @@ from basecradle._items import (
 from basecradle._models import ApiObject
 from basecradle._sessions import Session, SessionsResource
 from basecradle._timelines import Timeline, TimelineItem, TimelinesResource
-from basecradle._users import Trust, User
+from basecradle._users import Trust, User, UsersResource
 from basecradle._version import __version__
 from basecradle._webhooks import (
     WebhookEndpoint,
@@ -95,6 +95,7 @@ __all__ = [
     "TimelinesResource",
     "Trust",
     "User",
+    "UsersResource",
     "WebhookEndpoint",
     "WebhookEndpointContent",
     "WebhookEndpointsResource",
