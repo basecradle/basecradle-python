@@ -82,6 +82,7 @@ Runtime dependencies: `httpx`. That's the list. Every addition is argued in a PR
 ## Conventions
 
 - **Workflow**: branch → PR → CI green → squash-merge → delete the merged branch (remote: `git push origin --delete <branch>`; local: `git branch -D <branch>` — `-D` because squash-merges aren't detected as merged). Nobody pushes to `main`, human or AI. One concern per PR. PRs reference issues with `Closes #N`. The repo stays clean: merged branches are clutter, the open branch list should be the list of work in flight.
+- **Self-review before every PR.** Before opening a PR, the agent runs `/code-review` on its own diff and addresses the findings — this is the standing quality gate, not optional. It is doubly required now that PRs are authored by a bot: bot-triggered PRs run in a restricted Actions context where any secret-dependent automated review would resolve empty and skip, so the human-quality review has to happen *before* the PR, performed by the authoring agent on its own work.
 - **Filterable lists use `.filter(...)`** — the one idiom for every filterable list (messages, assets, tasks, webhooks): it returns a new lazy iterable resource, filters compose (`bc.tasks.filter(timeline=t, status="pending")`), and values may be model objects or uuid strings. Iterating the unfiltered resource (`bc.messages`) lists everything you can see.
 - **When work blocks on a human action, announce it unmissably.** Some steps only a human can take (approving the `pypi` GitHub environment, anything in the project owner's browser or accounts). When an AI contributor reaches such a gate: lead the message with the wait — "⏸️ WAITING ON YOU" — state the exact action and link, and repeat the notice until the human acts. A waiting agent looks identical to a stalled one; never make the human ask "are you waiting on me?". Phrase the ask itself as clear, minimal, numbered steps with the exact site, fields, and values to enter — not prose; a human-gate notice is a checklist to execute, not a paragraph to parse.
 - **Session revocation is sharp by design**: `session.revoke()` on your *current* session is allowed (self-rotation), and `bc.sessions.revoke_all()` kills **every** credential including the calling client's token — after either, that client's next call raises `AuthenticationError`. The SDK documents this loudly (docstrings + README) and never blocks it: a peer managing its own credentials is the platform's autonomy feature, not an error to prevent.
@@ -117,13 +118,41 @@ The build is fully mapped in this repo's **GitHub Issues** — each issue is one
 gh issue list --repo basecradle/basecradle-python --state open
 ```
 
+## Fleet Bot Identity
+
+This repo's builder agent — **basecradle-python AI** — acts on GitHub under its own GitHub App bot identity, **`basecradle-python-ai[bot]`**, so every issue, comment, PR, and commit is attributable to it rather than to the shared human account (capital issue `basecradle/basecradle#276`).
+
+| Field | Value |
+|---|---|
+| App slug | `basecradle-python-ai` |
+| App ID | `3969572` |
+| Bot user ID | `290976240` |
+| Commit-author | `basecradle-python-ai[bot] <290976240+basecradle-python-ai[bot]@users.noreply.github.com>` |
+
+Operational setup for a session that will push or post as the bot:
+
+- **Git author (local, never committed).** Set this clone's `.git/config`:
+  ```bash
+  git config --local user.name "basecradle-python-ai[bot]"
+  git config --local user.email "290976240+basecradle-python-ai[bot]@users.noreply.github.com"
+  ```
+  It lives in `.git/config` only — a fresh clone starts without it, so re-run after cloning.
+- **Auth routing.** Mint a short-lived (~1h) installation token with the shared fleet helper and route `gh`/git through it:
+  ```bash
+  export GH_TOKEN="$(~/Documents/claude-workspace/2026-06-05-fleet-identity/gh-app-token basecradle-python-ai)"
+  # push via:  https://x-access-token:<token>@github.com/basecradle/basecradle-python.git
+  ```
+  The helper (`gh-app-token`) and registry (`fleet-apps.json`) live in the Claude workspace; their permanent home is decided with capital `#277`. `--author` prints the commit-author string; `--remote` prints the authenticated push URL.
+- **No `Co-Authored-By` trailer on bot commits.** A fleet commit authored by `basecradle-python-ai[bot]` carries **no** `Co-Authored-By: Claude` trailer — the commit author already *is* the agent, so a co-author line would be redundant and wrong.
+- **CI and bot PRs.** This repo's CI (`ci.yml`) uses **no** Actions secrets — lint, tests, and the drift-guard all run on public inputs — so a bot-authored PR runs CI normally and needs no actor guard. (If a secret-dependent workflow is ever added, generalize its actor guard to skip all bots — `if: ${{ !endsWith(github.actor, '[bot]') }}` — because bot-triggered PRs run in a restricted context where Actions secrets resolve empty; editing a workflow file requires the App's `Workflows` permission.)
+
 ## Cross-Repo Handoffs
 
 BaseCradle is built across multiple repositories — the private Rails core, the public SDKs, and future ecosystem repos — each worked on by its own **builder agent** (see "Naming" below). Builder agents cannot reach across repos; the human (Drawk) is the relay between them. This procedure makes that relay lossless and identical in every direction. It is ecosystem-wide: every BaseCradle repo carries this same section in its CLAUDE.md (see "Propagating this procedure"), so both ends of any handoff follow the same rules.
 
 **GitHub is the cross-repo communications platform; a handoff is only a trigger.** Every cross-repo message — assigning work, reporting it done, asking a question — lives in GitHub: an issue, or a comment on one. The handoff is just the pointer that says *go read this*, relayed by Drawk today and delivered agent-to-agent as the fleet matures. This holds in **both directions**: a builder agent finishing handed-off work posts its result as a comment on the originating issue, never as prose for Drawk to carry. It is the same single-source-of-truth principle as issue-as-spec — the durable, addressable record is where the other agent reads, so that is where the content goes. Drawk is the courier, never the medium; the medium is what remains once the courier is automated away.
 
-**Sign cross-repo GitHub posts with a header.** Every agent currently posts to GitHub under the same account, so the author field can't tell them apart — identify yourself in the body. Open any issue or comment you file on another repo with a header naming sender then recipient: `**basecradle AI → basecradle-ruby AI**`. One header does both jobs — who is speaking, and to whom. It is forward-compatible with `@-mentions`: once each builder agent has its own GitHub identity the header becomes a real mention, and GitHub's own notifications become the ping — the fleet pinging itself, no courier.
+**Sign cross-repo GitHub posts with a header.** Each agent posts to GitHub under its own GitHub App bot identity (`basecradle-ai[bot]`, `basecradle-python-ai[bot]`, …), so the author field is authoritative about who is speaking. Still open every issue or comment you file on another repo with a header naming sender then recipient: `**basecradle AI → basecradle-ruby AI**`. The header earns its place even with bot authorship — the author field names only the *sender*, while the header also names the *recipient* and reads cleanly for a human scanning the thread. The fleet's automated "ping" that wakes the recipient agent is delivered by the App's webhook to the dispatcher, **not** an `@-mention` — GitHub App bot identities are not `@-mentionable`.
 
 **Paste-text always ends with `---`, set off by a blank line above and below.** Whenever you hand Drawk a block of text to paste into another builder agent — a cross-repo handoff, a kickoff prompt, a convention sync, *anything* — it ends with a blank line, then `---` alone on its own line, then a blank line. The `---` marks exactly where the pasted text ends and the conversation resumes; the blank lines above and below set it apart so the boundary is unmistakable at a glance. Without it, Drawk cannot tell where the paste stops and his own words begin. This is non-negotiable.
 
@@ -163,7 +192,7 @@ When Drawk pastes a prompt beginning `Cross-repo handoff:`:
 1. Read the referenced issue(s) in full before acting — the issue is the spec.
 2. Execute under **this** repo's conventions (its own CLAUDE.md, workflow, tests). The sending repo's conventions do not transfer.
 3. Respect the issue's ordering constraints (e.g., verify a dependency has deployed before releasing).
-4. When done, **post the completion report as a comment on the originating issue** — what shipped, version numbers, links — led by the cross-repo header (e.g. `**basecradle-ruby AI → basecradle AI**`). The issue is the record; the comment is where the other agent reads the result. Send a return-trigger handoff (per "Sending work to another repo") **only if** the other agent is blocked waiting on this work; otherwise the comment and the issue's state are the signal. Close the issue if its definition of done assigns closing to you; otherwise leave it for whoever it names. **Never auto-close a handoff issue with `Closes #N` in a PR** — auto-close fires on merge, before the work is verified live and before the originating repo signs off, and a handoff issue that closes early lies to the agent waiting on it. Close handoff issues by hand, only after the definition of done is met, per the rule above.
+4. When done, **post the completion report as a comment on the originating issue** — what shipped, version numbers, links — led by the cross-repo header (e.g. `**basecradle-ruby AI → basecradle AI**`). The issue is the record; the comment is where the other agent reads the result. Send a return-trigger handoff (per "Sending work to another repo") **only if** the other agent is blocked waiting on this work; otherwise the comment and the issue's state are the signal. Close the issue if its definition of done assigns closing to you; otherwise leave it for whoever it names. **Never auto-close a handoff issue with `Closes #N` in a PR** — auto-close fires on merge, before the work is verified live and before the originating repo signs off, and a handoff issue that closes early lies to the agent waiting on it. Close handoff issues by hand, only after the definition of done is met, per the rule above. GitHub's keyword detector is a **blind match**: it fires on any literal `Closes #N` (or `Fixes`/`Resolves`) in the PR title, body, *or a squashed commit message* — even one that is negated or wrapped in backticks. A sentence documenting that you are *not* using the keyword still registers it and closes the issue, the same way a negated `[kamal deploy]` mention still triggers a deploy. So when you mean to avoid the auto-close, never write the literal `Closes #<number>` token at all — refer to it in prose as "a closing keyword." (This rule contains the token only as documentation; file contents are never scanned — only the commit message and the PR title/body.)
 
 ### Propagating this procedure
 
