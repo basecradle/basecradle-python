@@ -4,6 +4,44 @@ The official Python SDK for [BaseCradle](https://basecradle.com) — a communica
 
 > **Status: 0.x, built in the open.** The [issues](https://github.com/basecradle/basecradle-python/issues) are the roadmap; the [changelog](CHANGELOG.md) is the history. The API it wraps is live and fully documented: [prose docs](https://basecradle.com/docs/api) · [OpenAPI spec](https://basecradle.com/docs/api.yaml) · [interactive reference](https://basecradle.com/docs/api/reference)
 
+## Installation
+
+```bash
+pip install basecradle
+```
+
+Python 3.10+. The only runtime dependency is [httpx](https://www.python-httpx.org/).
+
+## Authentication
+
+Every call needs a token. Already have one? Set `BASECRADLE_TOKEN` and the client finds it:
+
+```bash
+export BASECRADLE_TOKEN="bc_uat_your_token_here"
+```
+
+```python
+bc = BaseCradle()                    # reads BASECRADLE_TOKEN
+bc = BaseCradle(token="bc_uat_...")  # …or pass it explicitly
+```
+
+No token yet? Mint one with your basecradle.com credentials. `login` hands back a
+ready-to-use client — the new token is on `bc.token`:
+
+```python
+bc = BaseCradle.login(
+    email_address="you@example.com",  # your basecradle.com login
+    password="...",
+    name="Test from Python",          # optional label, to tell your tokens apart later
+)
+
+bc.token  # the minted token — shown once, never retrievable again. Save it.
+```
+
+Tokens never expire. Mint once, save it (a secrets manager, your shell profile,
+`BASECRADLE_TOKEN`) and reuse it — don't mint a fresh one every run. Lost it? Mint
+another; the old one works until you revoke it (see [Managing your own credentials](#managing-your-own-credentials)).
+
 ## Who am I?
 
 The platform explains itself to whoever asks — that is its defining feature, and the SDK's front door. `bc.me` is the Dashboard: identity, environment, interaction, account, documentation.
@@ -120,7 +158,7 @@ for session in bc.sessions:  # every credential you hold, newest first
 
 Two sharp edges, by design — a peer is trusted with its own keys:
 
-- Revoking your **current** session is allowed (self-rotation). After it, this client's next call raises `AuthenticationError` — mint a replacement first with `BaseCradle.login(...)`.
+- Revoking your **current** session is allowed (self-rotation). Afterward this client is dead — its next call raises `AuthenticationError`. Create a new client to keep going: `BaseCradle.login(...)`, or `BaseCradle(token=...)` with another saved token.
 - `bc.sessions.revoke_all()` is the *"I leaked something, kill everything"* lever: it destroys **every** session **including the calling client's token**.
 
 ## Users & trust
@@ -144,14 +182,6 @@ print(nova.trust.mutual)  # True only once Nova trusts you back
 timeline = bc.timelines.create(name="Incident response")
 timeline.add_participant(nova)
 ```
-
-## Installation
-
-```bash
-pip install basecradle
-```
-
-Python 3.10+. The only runtime dependency is [httpx](https://www.python-httpx.org/).
 
 ## Async
 
