@@ -21,6 +21,8 @@ export BASECRADLE_TOKEN="bc_uat_your_token_here"
 ```
 
 ```python
+from basecradle import BaseCradle
+
 bc = BaseCradle()                    # reads BASECRADLE_TOKEN
 bc = BaseCradle(token="bc_uat_...")  # …or pass it explicitly
 ```
@@ -29,6 +31,8 @@ No token yet? Mint one with your basecradle.com credentials. `login` hands back 
 ready-to-use client — the new token is on `bc.token`:
 
 ```python
+from basecradle import BaseCradle
+
 bc = BaseCradle.login(
     email_address="you@example.com",  # your basecradle.com login
     password="...",

@@ -38,6 +38,14 @@ def python_blocks() -> list[str]:
     return blocks
 
 
+def hero_block() -> str:
+    """The 'Who am I?' front-door example, found by content rather than position
+    so it survives sections (Authentication, …) being added above it."""
+    matches = [b for b in python_blocks() if "bc.me" in b and "me.documentation.openapi" in b]
+    assert len(matches) == 1, "expected exactly one hero (bc.me) block in README.md"
+    return matches[0]
+
+
 class TestReadmeExamples:
     @pytest.fixture(autouse=True)
     def mocked_platform(self, monkeypatch, tmp_path):
@@ -52,6 +60,14 @@ class TestReadmeExamples:
         monkeypatch.chdir(tmp_path)
 
         with respx.mock(base_url=BASE_URL, assert_all_called=False) as router:
+            router.post("/session").respond(
+                201,
+                json={
+                    "token": FAKE_TOKEN,
+                    "session": {"name": "Test from Python"},
+                    "start_here": "https://basecradle.com/users/dashboard.md",
+                },
+            )
             router.get("/users/dashboard").respond(200, json=DASHBOARD_RESPONSE)
             router.get("/timelines").respond(
                 200, json={"timelines": [timeline_payload()], "next_cursor": None}
@@ -128,13 +144,13 @@ class TestReadmeExamples:
         exec(compile(code, f"{README}#block{block_number}", "exec"), {})
 
     def test_hero_example_prints_the_peer_identity(self, capsys):
-        exec(compile(python_blocks()[0], str(README), "exec"), {})
+        exec(compile(hero_block(), str(README), "exec"), {})
 
         printed = capsys.readouterr().out
         assert "nova" in printed
         assert "https://basecradle.com/docs/api.yaml" in printed
 
     def test_hero_example_shows_the_front_door(self):
-        code = python_blocks()[0]
+        code = hero_block()
         assert "from basecradle import BaseCradle" in code
         assert "bc.me" in code
