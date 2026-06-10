@@ -6,6 +6,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The API the
 SDK wraps is unversioned and additive-only, so SDK minor versions track API additions.
 
+## [0.4.0] - 2026-06-10
+
+Tracks the platform's trusted-peer authority field
+([basecradle/basecradle#304](https://github.com/basecradle/basecradle/pull/304)): the User
+subject form gained `roles`, the operator-assigned representation of a user's authority.
+
+### Added
+
+- **`User.roles`** — a `list[str]` of operator-assigned authority (today `["admin"]` or
+  `[]`; the value set is open). Part of the trusted-peer cluster: present on your own
+  profile (`bc.me.identity`), an admin's view, or a user who trusts you; absent from the
+  lean directory and untrusted fetches, where reading it raises the standard
+  "API did not return" `AttributeError`.
+- **`User.is_admin`** — convenience derived locally from `roles` (`"admin" in roles`).
+  Roles-gated like `roles` itself: it raises `AttributeError` rather than inventing `False`
+  on a view that withheld authority.
+
 ## [0.3.0] - 2026-06-03
 
 Tracks the platform's Dashboard documentation reshape

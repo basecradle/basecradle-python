@@ -125,6 +125,72 @@ class TestAccessTiers:
         assert "AttributeError" in User.__doc__
 
 
+class TestRoles:
+    """`roles` is the trusted-peer-gated authority field; `is_admin` derives from it."""
+
+    def test_roles_present_on_trusted_peer_view(self, bc, api):
+        api.get(f"/users/{JOHN['uuid']}").respond(
+            200,
+            json={"user": trusted_peer_user_payload(user=JOHN, trusts_you=True, roles=["admin"])},
+        )
+
+        john = bc.users.get(JOHN["uuid"])
+
+        assert john.roles == ["admin"]
+        assert john.is_admin is True
+
+    def test_empty_roles_is_not_admin(self, bc, api):
+        api.get(f"/users/{NOVA['uuid']}").respond(
+            200, json={"user": DASHBOARD_RESPONSE["identity"]}
+        )
+
+        me = bc.users.get(NOVA["uuid"])
+
+        assert me.roles == []
+        assert me.is_admin is False
+
+    def test_roles_is_an_open_list_not_a_closed_enum(self, bc, api):
+        """The value set is open — the SDK surfaces whatever roles the API returns."""
+        api.get(f"/users/{JOHN['uuid']}").respond(
+            200,
+            json={
+                "user": trusted_peer_user_payload(
+                    user=JOHN, trusts_you=True, roles=["admin", "moderator"]
+                )
+            },
+        )
+
+        john = bc.users.get(JOHN["uuid"])
+
+        assert john.roles == ["admin", "moderator"]
+        assert john.is_admin is True
+
+    def test_roles_absent_on_untrusted_view_raises(self, bc, api):
+        """The directory / an untrusted fetch omits roles — reading it raises, not None."""
+        api.get(f"/users/{NOVA['uuid']}").respond(
+            200, json={"user": directory_user_payload(user=NOVA)}
+        )
+
+        nova = bc.users.get(NOVA["uuid"])
+
+        with pytest.raises(AttributeError) as exc_info:
+            nova.roles
+        assert "roles" in str(exc_info.value)
+        assert "access-gated" in str(exc_info.value)
+
+    def test_is_admin_absent_on_untrusted_view_raises(self, bc, api):
+        """is_admin is roles-gated too: it never invents False where authority is hidden."""
+        api.get(f"/users/{NOVA['uuid']}").respond(
+            200, json={"user": directory_user_payload(user=NOVA)}
+        )
+
+        nova = bc.users.get(NOVA["uuid"])
+
+        with pytest.raises(AttributeError) as exc_info:
+            nova.is_admin
+        assert "access-gated" in str(exc_info.value)
+
+
 class TestGrantTrust:
     def test_grant_posts_and_updates_live_object(self, bc, api):
         api.get(f"/users/{NOVA['uuid']}").respond(

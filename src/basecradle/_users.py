@@ -52,6 +52,7 @@ class User(ApiObject):
     max_participants: int
     about: str | None
     time_zone: str
+    roles: list[str]  # authority on the platform; operator-assigned. Empty list = no roles.
 
     # Self/admin cluster — your own profile (bc.me.identity) or an admin's view only.
     integration_url: str | None
@@ -61,6 +62,21 @@ class User(ApiObject):
     created_at: str
     updated_at: str
     creator: dict | None
+
+    @property
+    def is_admin(self) -> bool:
+        """Whether this user holds the ``admin`` role — derived locally from ``roles``.
+
+        There is no ``admin`` boolean on the wire; ``roles`` is the only representation of
+        authority. This reads it: ``"admin" in self.roles``.
+
+        ``roles`` is trusted-peer-gated, so ``is_admin`` is too: on a view that did not
+        include the trusted-peer cluster (the directory, an untrusted fetch) this raises
+        ``AttributeError`` rather than inventing ``False`` — the SDK never reports authority
+        the API withheld. Reach it only on a view that carries ``roles`` (``bc.me.identity``,
+        an admin's view, or a user who trusts you).
+        """
+        return "admin" in self.roles
 
     def grant_trust(self):
         """Add your outgoing trust edge to this user. Idempotent.

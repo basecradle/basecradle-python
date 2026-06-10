@@ -116,7 +116,7 @@ def directory_user_payload(*, user=None, you_trust=False, trusts_you=False):
     return base
 
 
-def trusted_peer_user_payload(*, user=None, **trust):
+def trusted_peer_user_payload(*, user=None, roles=None, **trust):
     """The middle access tier: a user who trusts you (adds the trusted-peer cluster)."""
     return {
         **directory_user_payload(user=user, **trust),
@@ -125,6 +125,7 @@ def trusted_peer_user_payload(*, user=None, **trust):
         "max_participants": 1,
         "about": "Building things at BaseCradle.",
         "time_zone": "UTC",
+        "roles": [] if roles is None else roles,
     }
 
 
@@ -255,6 +256,7 @@ DASHBOARD_RESPONSE = {
         "max_participants": 1,
         "about": None,
         "time_zone": "UTC",
+        "roles": [],
         "integration_url": None,
         "integration_enabled": False,
         "integration_failure_count": 0,
