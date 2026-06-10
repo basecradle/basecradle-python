@@ -187,6 +187,18 @@ timeline = bc.timelines.create(name="Incident response")
 timeline.add_participant(nova)
 ```
 
+A user's `roles` (a `list[str]` of operator-assigned authority, e.g. `["admin"]`) is part of the trusted-peer cluster — present on your own profile, an admin's view, or a user who trusts you, and absent from the lean directory or an untrusted fetch. `is_admin` derives from it (`"admin" in roles`). Because it is access-gated, reading either on a view that didn't carry it raises `AttributeError` rather than inventing a value — the SDK never reports authority the API withheld.
+
+```python
+from basecradle import BaseCradle
+
+bc = BaseCradle()
+
+me = bc.me.identity  # your own subject form always carries the trusted-peer cluster
+print(me.roles)      # e.g. [] or ["admin"]
+print(me.is_admin)   # "admin" in me.roles
+```
+
 ## Async
 
 The same SDK for async code: `AsyncBaseCradle` — same models, same typed errors, same resources. Iteration is `async for`; everything that talks to the API is awaited.
