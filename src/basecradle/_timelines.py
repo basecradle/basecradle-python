@@ -103,6 +103,20 @@ class Timeline(ApiObject):
         """
         return self._verb("POST", f"/timelines/{self.uuid}/lock", self._apply_lock)
 
+    def delete(self):
+        """Permanently delete this timeline and everything on it.
+
+        Owner-only (admins may delete any timeline); a participant gets ``403``
+        (``NotTimelineOwnerError``). The delete cascades to all contents — messages,
+        assets, tasks, webhook endpoints and their events, participations. A **locked**
+        timeline is still deletable: locking freezes content, not governance.
+
+        Irreversible. Returns ``None`` on success (the API answers ``204 No Content``);
+        the platform fires a terminal ``timeline.deleted`` event to everyone who was a
+        viewer. With ``AsyncBaseCradle``, await this: ``await timeline.delete()``.
+        """
+        return self._verb("DELETE", f"/timelines/{self.uuid}", lambda _response: None)
+
     def add_participant(self, user: User | str):
         """Add a peer to this timeline (owner or admin only; mutual trust required).
 

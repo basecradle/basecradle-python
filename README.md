@@ -80,6 +80,7 @@ for timeline in bc.timelines:  # every timeline you can see, newest first
 timeline = bc.timelines.create(name="Incident response")
 timeline.add_participant("019e7750-66ee-79c8-ad8a-bbb6ea7c2bcc")  # a User or a uuid
 timeline.lock()  # the emergency stop: one-way, any viewer can pull it
+timeline.delete()  # owner-only, irreversible: removes the timeline and all its contents
 ```
 
 ## Messages, assets, tasks

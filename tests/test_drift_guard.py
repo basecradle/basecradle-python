@@ -33,6 +33,7 @@ COVERAGE: dict[tuple[str, str], str] = {
     ("GET", "/timelines"): "bc.timelines (iteration)",
     ("POST", "/timelines"): "bc.timelines.create()",
     ("GET", "/timelines/{id}"): "bc.timelines.get()",
+    ("DELETE", "/timelines/{id}"): "timeline.delete()",
     ("POST", "/timelines/{timeline_id}/lock"): "timeline.lock()",
     # Participations
     ("POST", "/timelines/{timeline_id}/participations"): "timeline.add_participant()",
@@ -240,7 +241,7 @@ class TestCoverageMapHonesty:
 
     def test_model_verbs_exist(self):
         for model, verbs in [
-            (Timeline, ("lock", "add_participant", "remove_participant")),
+            (Timeline, ("lock", "delete", "add_participant", "remove_participant")),
             (User, ("grant_trust", "revoke_trust")),
             (Session, ("revoke",)),
             (WebhookEndpoint, ("enable", "disable", "rotate")),

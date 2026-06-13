@@ -128,6 +128,14 @@ class TestAsyncTimelines:
         assert route.called
         assert timeline.participants == []
 
+    async def test_delete_awaited(self, abc, api, timeline):
+        route = api.delete(f"/timelines/{TIMELINE_UUID}").respond(204)
+
+        result = await timeline.delete()
+
+        assert route.called
+        assert result is None
+
 
 class TestAsyncItems:
     async def test_messages_iteration(self, abc, api):

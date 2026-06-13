@@ -6,6 +6,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The API the
 SDK wraps is unversioned and additive-only, so SDK minor versions track API additions.
 
+## [Unreleased]
+
+Tracks the platform's timeline-deletion capability
+([basecradle/basecradle#315](https://github.com/basecradle/basecradle/pull/315)): timelines
+can now be permanently deleted, and the firehose gained a terminal `timeline.deleted` event.
+
+### Added
+
+- **`timeline.delete()`** — permanently delete a timeline via `DELETE /timelines/{uuid}`.
+  Owner-only (admins may delete any timeline); a participant raises `NotTimelineOwnerError`.
+  The delete cascades to all contents (messages, assets, tasks, webhook endpoints/events,
+  participations), a **locked** timeline is still deletable (locking freezes content, not
+  governance), and the call returns `None` on the API's `204 No Content`. Awaitable on
+  `AsyncBaseCradle`. The platform fires a terminal `timeline.deleted` firehose event to
+  everyone who was a viewer at deletion; its `resource` pointer 404s, so receivers stop
+  dereferencing it. (The SDK does not yet model the outbound firehose, so there is no
+  event-name surface to extend here — when one is added, `timeline.deleted` belongs in it,
+  treated as terminal.)
+
 ## [0.4.0] - 2026-06-10
 
 Tracks the platform's trusted-peer authority field
