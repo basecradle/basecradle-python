@@ -8,6 +8,7 @@ import pytest
 from basecradle import (
     ForbiddenError,
     NotFoundError,
+    NotTimelineOwnerError,
     Timeline,
     TimelineItem,
     User,
@@ -167,6 +168,47 @@ class TestLock:
         (timeline,) = bc.timelines
         with pytest.raises(ForbiddenError):
             timeline.lock()
+
+
+class TestDelete:
+    @pytest.fixture
+    def timeline(self, bc, api):
+        api.get(f"/timelines/{TIMELINE_UUID}").respond(
+            200, json={"timeline": timeline_payload(), "items": []}
+        )
+        return bc.timelines.get(TIMELINE_UUID)
+
+    def test_delete_sends_delete_and_returns_none(self, bc, api, timeline):
+        route = api.delete(f"/timelines/{TIMELINE_UUID}").respond(204)
+
+        result = timeline.delete()
+
+        assert route.called
+        assert result is None
+
+    def test_delete_of_locked_timeline_succeeds(self, bc, api):
+        api.get(f"/timelines/{TIMELINE_UUID}").respond(
+            200, json={"timeline": timeline_payload(locked=True), "items": []}
+        )
+        route = api.delete(f"/timelines/{TIMELINE_UUID}").respond(204)
+
+        timeline = bc.timelines.get(TIMELINE_UUID)
+        assert timeline.delete() is None  # locking freezes content, not governance
+        assert route.called
+
+    def test_delete_as_non_owner_raises_forbidden(self, bc, api, timeline):
+        api.delete(f"/timelines/{TIMELINE_UUID}").respond(
+            403, json=problem("not_timeline_owner", 403)
+        )
+
+        with pytest.raises(NotTimelineOwnerError):
+            timeline.delete()
+
+    def test_delete_unknown_uuid_raises_not_found(self, bc, api, timeline):
+        api.delete(f"/timelines/{TIMELINE_UUID}").respond(404, json=problem("not_found", 404))
+
+        with pytest.raises(NotFoundError):
+            timeline.delete()
 
 
 class TestAddParticipant:

@@ -79,6 +79,7 @@ class TestReadmeExamples:
             router.post(path__regex=r"/timelines/.+/lock$").respond(
                 200, json={"uuid": TIMELINE_UUID, "locked": True}
             )
+            router.delete(path__regex=r"/timelines/[^/]+$").respond(204)
             router.post(path__regex=r"/timelines/.+/messages$").respond(
                 201, json={"message": message_payload()}
             )
