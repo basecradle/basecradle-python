@@ -8,7 +8,7 @@ The SDK is itself built by human and AI contributors working as peers, under ide
 
 ## The Constitution
 
-This repository is built under the **BaseCradle Constitution** — the principles shared by every repository in the BaseCradle ecosystem. It lives in the **private core repository `basecradle/basecradle`** as `constitution.md` (default branch); it is repo-internal and never served publicly. Read it from GitHub with your fleet credentials — this works from any machine (laptop or fleet server), unlike a local checkout path:
+This repository is built under the **BaseCradle Constitution** — the principles shared by every repository in the BaseCradle ecosystem. It lives in the **private core repository `basecradle/basecradle`** as `constitution.md` (default branch); it is repo-internal and never served publicly. Read it from GitHub with your fleet credentials (works from any machine, unlike a local checkout path):
 
 ```bash
 gh api repos/basecradle/basecradle/contents/constitution.md -H "Accept: application/vnd.github.raw"
@@ -63,7 +63,7 @@ Design rules:
 - **Reads match the wire.** Attribute names mirror the API's JSON exactly (`uuid`, `handle`, `kind`, `last_used_at`) — no renaming, no surprises when cross-referencing the docs.
 - **Sync and async on one core.** `BaseCradle` (httpx.Client) and `AsyncBaseCradle` (httpx.AsyncClient) share everything that isn't I/O: models, errors, request-builders, response-handlers, filter logic. Models are the same classes in both worlds — verbs execute immediately on sync-attached objects and return coroutines (await them) on async-attached ones. New resources must ship with both clients and a parity test.
 
-The baseline to beat is the Stripe/Anthropic/OpenAI SDK experience. The way we beat it: those SDKs wrap APIs; this one embodies a platform whose premise is that its programmatic users are *peers*. Every design decision gets weighed against that.
+The baseline to beat is the Stripe/Anthropic/OpenAI SDK experience: those wrap APIs, this one embodies a platform whose premise is that its programmatic users are *peers* — weigh every design decision against that.
 
 ## Stack (omakase — decided once, not relitigated)
 
@@ -82,7 +82,7 @@ Runtime dependencies: `httpx`. That's the list. Every addition is argued in a PR
 ## Conventions
 
 - **Workflow**: branch → PR → CI green → squash-merge → delete the merged branch. Remote: `git push origin --delete <branch>`. Local: try `git branch -d <branch>` first; when it refuses with "not fully merged" (expected for squash-merges, since the squash commit on `main` has a different hash than the branch's commits), verify content equivalence — the branch's changes must be fully contained in `main` (`git diff main..<branch>` is 0 lines when `main` has not moved past the branch, or `git diff <branch> main -- <files the branch touched>` is empty) — and only then force-delete with `git branch -D <branch>`. Never force-delete without the check: a non-empty diff of the branch's own work means unshipped changes. Nobody pushes to `main`, human or AI. One concern per PR. PRs reference ordinary in-repo issues with a closing keyword (`Closes #N`) — but **NOT** handoff or gated issues (releases), which are closed by hand after live verification; see the "Cross-Repo Handoffs" and "Releasing" sections. The repo stays clean: merged branches are clutter, the open branch list should be the list of work in flight.
-- **Self-review before every PR.** Before opening a PR, the agent runs `/code-review` on its own diff and addresses the findings — this is the standing quality gate, not optional. It is doubly required now that PRs are authored by a bot: bot-triggered PRs run in a restricted Actions context where any secret-dependent automated review would resolve empty and skip, so the human-quality review has to happen *before* the PR, performed by the authoring agent on its own work.
+- **Self-review before every PR.** Before opening a PR, the agent runs `/code-review` on its own diff and addresses the findings — the standing quality gate, not optional. It must happen *before* the PR, performed by the authoring agent on its own work: a bot-authored PR runs in a restricted Actions context where any secret-dependent automated review resolves empty and skips (see "Fleet Bot Identity"), so the human-quality review can only be the agent's own pre-PR pass.
 - **Filterable lists use `.filter(...)`** — the one idiom for every filterable list (messages, assets, tasks, webhooks): it returns a new lazy iterable resource, filters compose (`bc.tasks.filter(timeline=t, status="pending")`), and values may be model objects or uuid strings. Iterating the unfiltered resource (`bc.messages`) lists everything you can see.
 - **When work blocks on a human action, announce it unmissably.** Some steps only a human can take (account/credential setup, anything in the project owner's browser or accounts). (The `pypi` publish gate is *not* one of these — the capital actuates it via its operator credential; see "Releasing" below.) When an AI contributor reaches such a gate: lead the message with the wait — "⏸️ WAITING ON YOU" — state the exact action and link, and repeat the notice until the human acts. A waiting agent looks identical to a stalled one; never make the human ask "are you waiting on me?". Phrase the ask itself as clear, minimal, numbered steps with the exact site, fields, and values to enter — not prose; a human-gate notice is a checklist to execute, not a paragraph to parse.
 - **Session revocation is sharp by design**: `session.revoke()` on your *current* session is allowed (self-rotation), and `bc.sessions.revoke_all()` kills **every** credential including the calling client's token — after either, that client's next call raises `AuthenticationError`. The SDK documents this loudly (docstrings + README) and never blocks it: a peer managing its own credentials is the platform's autonomy feature, not an error to prevent.
@@ -94,23 +94,11 @@ Runtime dependencies: `httpx`. That's the list. Every addition is argued in a PR
 
 ## Releasing
 
-The pipeline is `.github/workflows/release.yml`: pushing a `v*` tag → build → TestPyPI rehearsal → capital approval → PyPI, all via OIDC Trusted Publishing (zero stored credentials). The workflow filename and the environment names (`testpypi`, `pypi`) are **contractual** — they match the Trusted Publisher registrations on PyPI/TestPyPI; renaming any of them breaks the trust relationship. The `pypi` environment has a required reviewer, and **the capital approves it via its operator credential** (`constitution.md` → Earned Autonomy → "Publishing is the capital's, not the founder's": every publish/release gate is owned and actuated by the capital; the founder is out of the publish loop, and the reviewer identity named on the gate is the *credential the capital operates* via local `gh`, not the founder's action). The gate is a training wheel to retire toward bot-native auto-publish as the captain matures.
+**The captain's release responsibility ends at the version bump + changelog.** From the tag onward the **capital** owns the publish — it tags, actuates the `pypi` env-gate via its operator credential, verifies the live install, and closes the release issue (`constitution.md` → Earned Autonomy → "Publishing is the capital's, not the founder's"; the `pypi` gate is **not** a human gate, and the founder is out of the publish loop). A release is done not at PyPI but when the live `pip install` is verified — that whole tail is the capital's.
 
-**Captain vs. capital — who does what.** The captain's (basecradle-python AI's) release responsibility **ends at the version bump + changelog** (step 1). From the tag onward the **capital** owns the publish: it tags, the pipeline runs, the capital approves the `pypi` env-gate via its operator credential, then verifies the live install and closes the release issue. A release is not done at PyPI — it is done when the live `pip install` is verified — and that whole tail belongs to the capital, not the founder.
+**Contractual names** (renaming any breaks the Trusted Publisher trust relationship on PyPI/TestPyPI): the workflow file `.github/workflows/release.yml` and the environment names `testpypi` and `pypi`.
 
-The procedure, in order:
-
-1. **Release PR**: bump `src/basecradle/_version.py` from `X.Y.Z.dev0` to `X.Y.Z` and add the `CHANGELOG.md` entry (Keep a Changelog format). Merge on green CI. Do **not** put `Closes #N` on release PRs — see step 6.
-2. **Tag**: on main after the merge — `git tag vX.Y.Z && git push origin vX.Y.Z`. This triggers the release workflow.
-3. **Verify the rehearsal**: the TestPyPI publish is automatic. In a clean venv:
-   `pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ basecradle==X.Y.Z`
-   The extra index is required (httpx lives on real PyPI, not TestPyPI). Expect a minute or two of index-propagation lag — retry, don't panic.
-4. **The publish gate**: the workflow waits on the `pypi` environment. This is **not** a human gate — the capital approves it via its operator credential (`constitution.md` → "Publishing is the capital's, not the founder's"); the founder is out of the publish loop. The captain's part of the release ended at step 1; steps 2–7 are the capital's.
-5. **Verify the release**: clean venv, `pip install basecradle==X.Y.Z`, check import + `__version__` + both clients construct, and that https://pypi.org/project/basecradle/ renders. (The PyPI JSON API caches — pip resolving the new version is the real test.)
-6. **Close the release issue manually** with the verification record. Release issues never auto-close via a merged PR: an issue that closed before the publish was verified would lie.
-7. **Post-release version bump**: the first PR of the next cycle bumps `_version.py` to the next minor `.dev0` (after `0.2.0` ships, main becomes `0.3.0.dev0`) so dev builds are always distinguishable from releases.
-
-Versioning facts: `_version.py` is the single source of truth (hatchling reads it; `pyproject.toml` declares `dynamic = ["version"]`). Local editable installs cache metadata — after editing the version, run `uv sync --reinstall-package basecradle` or the version-wiring test fails (that failure is the test doing its job).
+To cut a release, invoke the `release-to-pypi` skill — the ordered tag → TestPyPI rehearsal → gate → verify → close procedure, plus the `_version.py` single-source-of-truth and editable-install cache notes.
 
 ## Where to Start
 
@@ -131,22 +119,12 @@ This repo's builder agent — **basecradle-python AI** — acts on GitHub under 
 | Bot user ID | `290976240` |
 | Commit-author | `basecradle-python-ai[bot] <290976240+basecradle-python-ai[bot]@users.noreply.github.com>` |
 
-Operational setup for a session that will push or post as the bot:
+Invariants (always loaded):
 
-- **Git author (local, never committed).** Set this clone's `.git/config`:
-  ```bash
-  git config --local user.name "basecradle-python-ai[bot]"
-  git config --local user.email "290976240+basecradle-python-ai[bot]@users.noreply.github.com"
-  ```
-  It lives in `.git/config` only — a fresh clone starts without it, so re-run after cloning.
-- **Auth routing.** Mint a short-lived (~1h) installation token with the shared fleet helper and route `gh`/git through it:
-  ```bash
-  export GH_TOKEN="$(~/Documents/claude-workspace/2026-06-05-fleet-identity/gh-app-token basecradle-python-ai)"
-  # push via:  https://x-access-token:<token>@github.com/basecradle/basecradle-python.git
-  ```
-  The helper (`gh-app-token`) and registry (`fleet-apps.json`) live in the Claude workspace on the laptop; `--author` prints the commit-author string, `--remote` the authenticated push URL. On the fleet server there is no shared helper — each agent's own provisioned credentials (the `GH_APP_*` env vars in its environment) serve this role, and the agent mints its own installation token from them (see the "Mint GH token on fleet server" memory).
 - **No `Co-Authored-By` trailer on bot commits.** A fleet commit authored by `basecradle-python-ai[bot]` carries **no** `Co-Authored-By: Claude` trailer — the commit author already *is* the agent, so a co-author line would be redundant and wrong.
 - **CI and bot PRs.** This repo's CI (`ci.yml`) uses **no** Actions secrets — lint, tests, and the drift-guard all run on public inputs — so a bot-authored PR runs CI normally and needs no actor guard. (If a secret-dependent workflow is ever added, generalize its actor guard to skip all bots — `if: ${{ !endsWith(github.actor, '[bot]') }}` — because bot-triggered PRs run in a restricted context where Actions secrets resolve empty; editing a workflow file requires the App's `Workflows` permission.)
+
+To set up a session that will push or post as the bot — the local git author and the token-minting/auth-routing steps (laptop helper vs. fleet-server `GH_APP_*` minting) — invoke the `bot-auth-setup` skill.
 
 ## Polling GitHub (or any shared external API) — rate-limit floor
 
