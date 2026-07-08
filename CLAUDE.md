@@ -200,6 +200,15 @@ The ecosystem runs on **constitutional federalism** — the full principle is `c
 
 Four shared artifacts are carried verbatim in every BaseCradle repo, anchored at the capital: the **Cross-Repo Handoffs**, **Polling GitHub**, and **Attended-Session Lifecycle Signal** CLAUDE.md blocks, plus the **`cross-repo-handoffs` skill**. Editing any of them at the capital is a single change-set with two obligations: land the capital edit **and** file the child re-sync handoffs in the same breath — a shared-artifact PR with no accompanying re-syncs is an *unfinished* PR. The NOC runs a standing drift-guard that byte-diffs every shared artifact across every repo against the capital canonical every 15 minutes and files a `[DRIFT]` issue when a divergence outlives the ~30-min grace window. A repo missing any of these artifacts (always true for a brand-new repo) gets them copied from the capital's canonical on GitHub (`gh api repos/basecradle/basecradle/contents/...`, with fleet credentials) — never a machine-local path. Full mechanics and the on-demand audit: the `cross-repo-handoffs` skill.
 
+## Agent Home Storage — `~/scratch` and `~/workspace`
+
+On the fleet server, this agent's home carries two standing folders (fleet decision, founder 2026-07-08; spec `basecradle-noc#185`). Each has a self-healing `README.md` restating these rules — don't fight the sweeper that maintains them.
+
+- **`~/scratch`** — temporary working space. A root sweeper **deletes any file untouched for 3 days** (it runs every 6 hours). Nothing here is safe to keep.
+- **`~/workspace`** — durable, private storage, never swept. Convention: one dated topic folder per piece of work, `YYYY-MM-DD-<topic>/`; keep `INDEX.md` current with one line per folder (`- [<folder>](<folder>/) — <what it is>`); delete folders you no longer need, and their index line with them.
+
+**Prefer these folders over BaseCradle timeline Assets for anything not meant to be shared.** Timeline Assets are shared with every viewer and can never be edited or deleted (see the reframed Concepts in the core repo's `docs/api.md`), so they are wrong for private or working files — `~/workspace` (durable) or `~/scratch` (throwaway) is.
+
 ## Development Commands
 
 ```bash
