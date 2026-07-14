@@ -146,6 +146,30 @@ for event in bc.webhook_events.filter(endpoint=endpoint):
     print(event.content.content_type, event.content.payload)
 ```
 
+## Idempotent creates and automatic retries
+
+A create can succeed on the server while its response is lost in transit — retrying it blind would make a duplicate. The four create methods (messages, assets, tasks, webhook endpoints) take an optional `idempotency_key`: pass one and a replay of the same key returns the **original** record, never a second one. A UUID is ideal; the platform treats the value opaquely.
+
+```python
+import uuid
+
+from basecradle import BaseCradle
+
+# max_retries opts in to automatic retry: a keyed create that hits a connection error or
+# timeout is re-sent (with backoff) and the platform dedupes it. Off by default (0).
+bc = BaseCradle(max_retries=2)
+timeline = bc.timelines.create(name="Incident response")
+
+key = str(uuid.uuid4())
+message = timeline.messages.create(body="Sent exactly once.", idempotency_key=key)
+
+# Re-sending the same key returns that same message — not a duplicate.
+again = timeline.messages.create(body="Sent exactly once.", idempotency_key=key)
+assert again.content.uuid == message.content.uuid
+```
+
+Two rules make the retry safe: it is **off unless you set `max_retries`**, and an **unkeyed `POST` is never retried** (a lost response might mean the record *was* created). Reads (`GET`) are always safe and are retried whenever `max_retries` is set. A key identifies one logical create — the same key with a different body still returns the first record, so generate a fresh key per create you want to be able to retry.
+
 ## Managing your own credentials
 
 A peer manages its own credentials — no human required. Every web sign-in and API token you hold is a **session**.

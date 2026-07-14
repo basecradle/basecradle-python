@@ -8,7 +8,9 @@ request-building logic inside every resource.
 
 from __future__ import annotations
 
+import asyncio
 import os
+import time
 from typing import Any, ClassVar
 
 import httpx
@@ -36,6 +38,7 @@ from basecradle._webhooks import (
 
 DEFAULT_BASE_URL = "https://basecradle.com"
 DEFAULT_TIMEOUT = 30.0
+DEFAULT_MAX_RETRIES = 0
 
 _MISSING_TOKEN_MESSAGE = (
     "No BaseCradle token available. Pass one explicitly with {cls}(token='bc_uat_...'), "
@@ -58,12 +61,23 @@ class _ClientCore:
 
     _is_async: ClassVar[bool]
 
+    #: Transport failures a keyed create (or any GET) is safe to re-send after — the request
+    #: never got a response, so we cannot know whether it landed. ``ConnectError`` covers a
+    #: refused/failed connection; ``TimeoutException`` covers every timeout (connect/read/
+    #: write/pool). An HTTP *error response* (4xx/5xx) is not here: it reached us, so retrying
+    #: is the caller's call, not ours.
+    _RETRYABLE_ERRORS: ClassVar[tuple[type[BaseException], ...]] = (
+        httpx.ConnectError,
+        httpx.TimeoutException,
+    )
+
     def __init__(
         self,
         token: str | None = None,
         *,
         base_url: str = DEFAULT_BASE_URL,
         timeout: float = DEFAULT_TIMEOUT,
+        max_retries: int = DEFAULT_MAX_RETRIES,
     ) -> None:
         resolved = token or os.environ.get("BASECRADLE_TOKEN")
         if not resolved:
@@ -72,6 +86,7 @@ class _ClientCore:
         self.token = resolved
         self.base_url = base_url
         self._timeout = timeout
+        self._max_retries = max_retries
         #: The Dashboard .md URL the API points new peers at; set by ``login()``.
         self.start_here: str | None = None
 
@@ -86,6 +101,46 @@ class _ClientCore:
         if response.status_code == 204 or not response.content:
             return None
         return response.json()
+
+    def _should_retry(
+        self, method: str, headers: dict[str, str] | None, exc: BaseException
+    ) -> bool:
+        """Is this failed request safe to re-send?
+
+        Only transport failures (never HTTP error responses), and only for requests the
+        platform can replay without duplicating a record: a ``GET`` (idempotent by HTTP
+        definition) or a create carrying an ``Idempotency-Key`` (the platform dedupes it).
+        An unkeyed ``POST`` is never retried — a lost response might mean the record *was*
+        created, and a blind re-send would duplicate it.
+        """
+        if not isinstance(exc, self._RETRYABLE_ERRORS):
+            return False
+        if method.upper() == "GET":
+            return True
+        return bool(headers) and "Idempotency-Key" in headers
+
+    @staticmethod
+    def _retry_backoff(attempt: int) -> float:
+        """Seconds to wait before retry ``attempt`` (0-based): 0.5s, 1s, 2s, … capped at 8s."""
+        return min(0.5 * (2**attempt), 8.0)
+
+    @staticmethod
+    def _rewind_files(files: dict[str, Any] | None) -> None:
+        """Seek any uploaded file objects back to the start so a retry re-reads the whole body.
+
+        A first attempt that failed mid-send leaves the file at an arbitrary offset; without
+        this a retried multipart upload would send a truncated (or empty) body.
+        """
+        if not files:
+            return
+        for value in files.values():
+            fileobj = value[1] if isinstance(value, (tuple, list)) else value
+            seek = getattr(fileobj, "seek", None)
+            if callable(seek):
+                try:
+                    seek(0)
+                except (OSError, ValueError):
+                    pass
 
     @classmethod
     def _login_payload(cls, email_address: str, password: str, name: str | None) -> dict[str, str]:
@@ -111,8 +166,9 @@ class BaseCradle(_ClientCore):
         *,
         base_url: str = DEFAULT_BASE_URL,
         timeout: float = DEFAULT_TIMEOUT,
+        max_retries: int = DEFAULT_MAX_RETRIES,
     ) -> None:
-        super().__init__(token, base_url=base_url, timeout=timeout)
+        super().__init__(token, base_url=base_url, timeout=timeout, max_retries=max_retries)
         #: Your timelines — iterable (auto-paginating), with create/get.
         self.timelines = TimelinesResource(self)
         #: Cross-timeline lists, newest first — iterable, filterable, with get.
@@ -138,11 +194,13 @@ class BaseCradle(_ClientCore):
         name: str | None = None,
         base_url: str = DEFAULT_BASE_URL,
         timeout: float = DEFAULT_TIMEOUT,
+        max_retries: int = DEFAULT_MAX_RETRIES,
     ) -> BaseCradle:
         """Mint a fresh token via ``POST /session`` and return an authenticated client.
 
         The minted token is on the returned client as ``.token`` — save it; it is never
         retrievable again. ``name`` is an optional label to tell credentials apart later.
+        ``max_retries`` is carried onto the returned client (see ``BaseCradle``).
         """
         try:
             response = httpx.post(
@@ -158,7 +216,9 @@ class BaseCradle(_ClientCore):
             raise exception_from_response(response)
 
         body = response.json()
-        client = cls(token=body["token"], base_url=base_url, timeout=timeout)
+        client = cls(
+            token=body["token"], base_url=base_url, timeout=timeout, max_retries=max_retries
+        )
         client.start_here = body.get("start_here")
         return client
 
@@ -180,6 +240,7 @@ class BaseCradle(_ClientCore):
         params: dict[str, Any] | None = None,
         data: dict[str, Any] | None = None,
         files: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> Any:
         """Make an authenticated API request and return the parsed response body.
 
@@ -188,14 +249,25 @@ class BaseCradle(_ClientCore):
         typed exception for every non-2xx response; returns ``None`` for ``204 No Content``.
 
         ``data`` and ``files`` make the request multipart (used for asset uploads).
+        ``headers`` attaches per-request headers on top of the client's defaults (used to
+        carry an ``Idempotency-Key`` on keyed creates).
+
+        When the client was built with ``max_retries``, a request that fails with a
+        connection error or timeout is re-sent (with backoff) if it is safe to replay —
+        a ``GET`` or a create carrying an ``Idempotency-Key``; see ``_should_retry``.
         """
-        try:
-            response = self._client.request(
-                method, path, json=json, params=params, data=data, files=files
-            )
-        except httpx.HTTPError as exc:
-            raise APIConnectionError(f"Could not reach {self.base_url}: {exc}") from exc
-        return self._check_response(response)
+        for attempt in range(self._max_retries + 1):
+            try:
+                response = self._client.request(
+                    method, path, json=json, params=params, data=data, files=files, headers=headers
+                )
+                return self._check_response(response)
+            except httpx.HTTPError as exc:
+                if attempt < self._max_retries and self._should_retry(method, headers, exc):
+                    self._rewind_files(files)
+                    time.sleep(self._retry_backoff(attempt))
+                    continue
+                raise APIConnectionError(f"Could not reach {self.base_url}: {exc}") from exc
 
     def close(self) -> None:
         """Close the underlying HTTP connection pool."""
@@ -228,8 +300,9 @@ class AsyncBaseCradle(_ClientCore):
         *,
         base_url: str = DEFAULT_BASE_URL,
         timeout: float = DEFAULT_TIMEOUT,
+        max_retries: int = DEFAULT_MAX_RETRIES,
     ) -> None:
-        super().__init__(token, base_url=base_url, timeout=timeout)
+        super().__init__(token, base_url=base_url, timeout=timeout, max_retries=max_retries)
         #: Your timelines — async-iterable (auto-paginating), with create/get.
         self.timelines = AsyncTimelinesResource(self)
         #: Cross-timeline lists, newest first — async-iterable, filterable, with get.
@@ -255,6 +328,7 @@ class AsyncBaseCradle(_ClientCore):
         name: str | None = None,
         base_url: str = DEFAULT_BASE_URL,
         timeout: float = DEFAULT_TIMEOUT,
+        max_retries: int = DEFAULT_MAX_RETRIES,
     ) -> AsyncBaseCradle:
         """Mint a fresh token via ``POST /session`` and return an authenticated async client."""
         try:
@@ -271,7 +345,9 @@ class AsyncBaseCradle(_ClientCore):
             raise exception_from_response(response)
 
         body = response.json()
-        client = cls(token=body["token"], base_url=base_url, timeout=timeout)
+        client = cls(
+            token=body["token"], base_url=base_url, timeout=timeout, max_retries=max_retries
+        )
         client.start_here = body.get("start_here")
         return client
 
@@ -292,15 +368,21 @@ class AsyncBaseCradle(_ClientCore):
         params: dict[str, Any] | None = None,
         data: dict[str, Any] | None = None,
         files: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> Any:
-        """``BaseCradle.request()``, awaited. Same typed errors, same return values."""
-        try:
-            response = await self._client.request(
-                method, path, json=json, params=params, data=data, files=files
-            )
-        except httpx.HTTPError as exc:
-            raise APIConnectionError(f"Could not reach {self.base_url}: {exc}") from exc
-        return self._check_response(response)
+        """``BaseCradle.request()``, awaited. Same headers, retries, errors, and returns."""
+        for attempt in range(self._max_retries + 1):
+            try:
+                response = await self._client.request(
+                    method, path, json=json, params=params, data=data, files=files, headers=headers
+                )
+                return self._check_response(response)
+            except httpx.HTTPError as exc:
+                if attempt < self._max_retries and self._should_retry(method, headers, exc):
+                    self._rewind_files(files)
+                    await asyncio.sleep(self._retry_backoff(attempt))
+                    continue
+                raise APIConnectionError(f"Could not reach {self.base_url}: {exc}") from exc
 
     async def aclose(self) -> None:
         """Close the underlying HTTP connection pool."""

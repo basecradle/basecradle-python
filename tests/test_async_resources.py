@@ -234,6 +234,54 @@ class TestAsyncItems:
         with pytest.raises(TimelineLockedError):
             await timeline.messages.create(body="Anyone there?")
 
+    async def test_keyed_create_sends_header(self, abc, api, timeline):
+        route = api.post(f"/timelines/{TIMELINE_UUID}/messages").respond(
+            201, json={"message": message_payload()}
+        )
+
+        await timeline.messages.create(body="hi", idempotency_key="019f5e48-async")
+
+        assert route.calls.last.request.headers["Idempotency-Key"] == "019f5e48-async"
+
+
+class TestAsyncRetries:
+    async def test_keyed_post_retries_then_succeeds(self, api, monkeypatch):
+        from basecradle import AsyncBaseCradle
+        from tests.conftest import FAKE_TOKEN
+
+        monkeypatch.setattr(AsyncBaseCradle, "_retry_backoff", staticmethod(lambda attempt: 0.0))
+        abc = AsyncBaseCradle(token=FAKE_TOKEN, max_retries=2)
+        route = api.post("/timelines/t/messages").mock(
+            side_effect=[
+                httpx.ConnectError("connection refused"),
+                httpx.Response(201, json={"message": {"body": "hi"}}),
+            ]
+        )
+
+        body = await abc.request(
+            "POST", "/timelines/t/messages", json={}, headers={"Idempotency-Key": "k"}
+        )
+
+        assert route.call_count == 2
+        assert body == {"message": {"body": "hi"}}
+        await abc.aclose()
+
+    async def test_unkeyed_post_is_never_retried(self, api, monkeypatch):
+        from basecradle import APIConnectionError, AsyncBaseCradle
+        from tests.conftest import FAKE_TOKEN
+
+        monkeypatch.setattr(AsyncBaseCradle, "_retry_backoff", staticmethod(lambda attempt: 0.0))
+        abc = AsyncBaseCradle(token=FAKE_TOKEN, max_retries=3)
+        route = api.post("/timelines/t/messages").mock(
+            side_effect=httpx.ConnectError("connection refused")
+        )
+
+        with pytest.raises(APIConnectionError):
+            await abc.request("POST", "/timelines/t/messages", json={})
+
+        assert route.call_count == 1
+        await abc.aclose()
+
 
 class TestAsyncWebhooks:
     @pytest.fixture

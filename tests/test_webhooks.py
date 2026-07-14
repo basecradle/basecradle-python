@@ -144,6 +144,24 @@ class TestEndpointCreate:
         assert endpoint.content.description == "CI deploys"
         assert endpoint.content.ingest_url.startswith("https://basecradle.com/webhooks/")
 
+    def test_create_with_idempotency_key_sends_header(self, bc, api, timeline):
+        route = api.post(f"/timelines/{TIMELINE_UUID}/webhook_endpoints").respond(
+            201, json={"webhook_endpoint": webhook_endpoint_payload()}
+        )
+
+        timeline.webhook_endpoints.create(description="CI deploys", idempotency_key="key-3")
+
+        assert route.calls.last.request.headers["Idempotency-Key"] == "key-3"
+
+    def test_create_without_idempotency_key_sends_no_header(self, bc, api, timeline):
+        route = api.post(f"/timelines/{TIMELINE_UUID}/webhook_endpoints").respond(
+            201, json={"webhook_endpoint": webhook_endpoint_payload()}
+        )
+
+        timeline.webhook_endpoints.create(description="CI deploys")
+
+        assert "Idempotency-Key" not in route.calls.last.request.headers
+
     def test_verification_block_is_typed(self, bc, api, timeline):
         api.post(f"/timelines/{TIMELINE_UUID}/webhook_endpoints").respond(
             201, json={"webhook_endpoint": webhook_endpoint_payload()}

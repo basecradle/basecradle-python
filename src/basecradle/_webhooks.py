@@ -15,7 +15,12 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
-from basecradle._items import AsyncItemsResource, ItemsResource, _NestedCreatorCore
+from basecradle._items import (
+    AsyncItemsResource,
+    ItemsResource,
+    _idempotency_headers,
+    _NestedCreatorCore,
+)
 from basecradle._models import ApiObject
 
 __all__ = [
@@ -177,10 +182,19 @@ def _endpoint_from(response: dict[str, Any], client: Any) -> WebhookEndpoint:
 class TimelineWebhookEndpoints(_NestedCreatorCore):
     """One timeline's webhook endpoints: create here, or iterate (newest first)."""
 
-    def create(self, *, description: str) -> WebhookEndpoint:
-        """Create an inbound webhook endpoint on this timeline (viewer; unlocked)."""
+    def create(self, *, description: str, idempotency_key: str | None = None) -> WebhookEndpoint:
+        """Create an inbound webhook endpoint on this timeline (viewer; unlocked).
+
+        Pass ``idempotency_key`` (a UUID is ideal) to make the create safe to retry: a replay
+        of the same key returns the original endpoint, never a duplicate. Endpoint keys are
+        scoped per timeline (endpoints have no author). See the client's ``max_retries`` for
+        opt-in automatic retry of keyed creates.
+        """
         method, path, payload = _endpoint_request(self._timeline_uuid, description)
-        return _endpoint_from(self._client.request(method, path, json=payload), self._client)
+        response = self._client.request(
+            method, path, json=payload, headers=_idempotency_headers(idempotency_key)
+        )
+        return _endpoint_from(response, self._client)
 
     def __iter__(self) -> Iterator[WebhookEndpoint]:
         return iter(WebhookEndpointsResource(self._client).filter(timeline=self._timeline_uuid))
@@ -189,10 +203,15 @@ class TimelineWebhookEndpoints(_NestedCreatorCore):
 class AsyncTimelineWebhookEndpoints(_NestedCreatorCore):
     """One timeline's webhook endpoints, async."""
 
-    async def create(self, *, description: str) -> WebhookEndpoint:
-        """Create an inbound webhook endpoint on this timeline (viewer; unlocked)."""
+    async def create(
+        self, *, description: str, idempotency_key: str | None = None
+    ) -> WebhookEndpoint:
+        """Create an inbound webhook endpoint on this timeline. See ``TimelineWebhookEndpoints``."""
         method, path, payload = _endpoint_request(self._timeline_uuid, description)
-        return _endpoint_from(await self._client.request(method, path, json=payload), self._client)
+        response = await self._client.request(
+            method, path, json=payload, headers=_idempotency_headers(idempotency_key)
+        )
+        return _endpoint_from(response, self._client)
 
     def __aiter__(self) -> AsyncIterator[WebhookEndpoint]:
         return (

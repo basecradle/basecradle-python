@@ -252,6 +252,18 @@ class _NestedCreatorCore:
         self._timeline_uuid = timeline_uuid
 
 
+def _idempotency_headers(idempotency_key: str | None) -> dict[str, str] | None:
+    """The per-request header for a keyed create, or ``None`` when no key was given.
+
+    Shared by every create method (here and in ``_webhooks``) so the header name lives in
+    exactly one place. The platform treats the value opaquely (a UUID is recommended); a
+    replay of the same key returns the original record rather than creating a duplicate.
+    """
+    if idempotency_key is None:
+        return None
+    return {"Idempotency-Key": idempotency_key}
+
+
 def _message_request(timeline_uuid: str, body: str) -> tuple[str, str, dict[str, Any]]:
     return "POST", f"/timelines/{timeline_uuid}/messages", {"message": {"body": body}}
 
@@ -290,10 +302,18 @@ def _asset_from(response: dict[str, Any], client: Any) -> Asset:
 class TimelineMessages(_NestedCreatorCore):
     """One timeline's messages: create here, or iterate (newest first)."""
 
-    def create(self, *, body: str) -> Message:
-        """Post a message to this timeline (you must be a viewer; timeline must be unlocked)."""
+    def create(self, *, body: str, idempotency_key: str | None = None) -> Message:
+        """Post a message to this timeline (you must be a viewer; timeline must be unlocked).
+
+        Pass ``idempotency_key`` (a UUID is ideal) to make the create safe to retry: a replay
+        of the same key returns the original message, never a duplicate. See the client's
+        ``max_retries`` for opt-in automatic retry of keyed creates.
+        """
         method, path, payload = _message_request(self._timeline_uuid, body)
-        return _message_from(self._client.request(method, path, json=payload), self._client)
+        response = self._client.request(
+            method, path, json=payload, headers=_idempotency_headers(idempotency_key)
+        )
+        return _message_from(response, self._client)
 
     def __iter__(self) -> Iterator[Message]:
         return iter(MessagesResource(self._client).filter(timeline=self._timeline_uuid))
@@ -302,10 +322,13 @@ class TimelineMessages(_NestedCreatorCore):
 class AsyncTimelineMessages(_NestedCreatorCore):
     """One timeline's messages, async: ``await .create(...)`` or ``async for``."""
 
-    async def create(self, *, body: str) -> Message:
-        """Post a message to this timeline (you must be a viewer; timeline must be unlocked)."""
+    async def create(self, *, body: str, idempotency_key: str | None = None) -> Message:
+        """Post a message to this timeline. See ``TimelineMessages.create`` for semantics."""
         method, path, payload = _message_request(self._timeline_uuid, body)
-        return _message_from(await self._client.request(method, path, json=payload), self._client)
+        response = await self._client.request(
+            method, path, json=payload, headers=_idempotency_headers(idempotency_key)
+        )
+        return _message_from(response, self._client)
 
     def __aiter__(self) -> AsyncIterator[Message]:
         return AsyncMessagesResource(self._client).filter(timeline=self._timeline_uuid).__aiter__()
@@ -314,11 +337,24 @@ class AsyncTimelineMessages(_NestedCreatorCore):
 class TimelineAssets(_NestedCreatorCore):
     """One timeline's assets: upload here, or iterate (newest first)."""
 
-    def create(self, *, file: str | Path | IO[bytes], description: str | None = None) -> Asset:
-        """Upload a file to this timeline (multipart). ``file`` is a path or a binary file object."""
+    def create(
+        self,
+        *,
+        file: str | Path | IO[bytes],
+        description: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> Asset:
+        """Upload a file to this timeline (multipart). ``file`` is a path or a binary file object.
+
+        Pass ``idempotency_key`` (a UUID is ideal) to make the upload safe to retry: a replay
+        of the same key returns the original asset, never a duplicate. See the client's
+        ``max_retries`` for opt-in automatic retry of keyed creates.
+        """
         path, files, data, fileobj, opened = _asset_upload(self._timeline_uuid, file, description)
         try:
-            response = self._client.request("POST", path, files=files, data=data)
+            response = self._client.request(
+                "POST", path, files=files, data=data, headers=_idempotency_headers(idempotency_key)
+            )
         finally:
             if opened:
                 fileobj.close()
@@ -332,12 +368,18 @@ class AsyncTimelineAssets(_NestedCreatorCore):
     """One timeline's assets, async: ``await .create(...)`` or ``async for``."""
 
     async def create(
-        self, *, file: str | Path | IO[bytes], description: str | None = None
+        self,
+        *,
+        file: str | Path | IO[bytes],
+        description: str | None = None,
+        idempotency_key: str | None = None,
     ) -> Asset:
-        """Upload a file to this timeline (multipart). ``file`` is a path or a binary file object."""
+        """Upload a file to this timeline (multipart). See ``TimelineAssets.create``."""
         path, files, data, fileobj, opened = _asset_upload(self._timeline_uuid, file, description)
         try:
-            response = await self._client.request("POST", path, files=files, data=data)
+            response = await self._client.request(
+                "POST", path, files=files, data=data, headers=_idempotency_headers(idempotency_key)
+            )
         finally:
             if opened:
                 fileobj.close()
@@ -350,15 +392,28 @@ class AsyncTimelineAssets(_NestedCreatorCore):
 class TimelineTasks(_NestedCreatorCore):
     """One timeline's tasks: create here, or iterate (newest first)."""
 
-    def create(self, *, instructions: str, activate_at: datetime | str) -> Task:
+    def create(
+        self,
+        *,
+        instructions: str,
+        activate_at: datetime | str,
+        idempotency_key: str | None = None,
+    ) -> Task:
         """Schedule a task on this timeline.
 
         ``activate_at`` accepts a ``datetime`` (serialized to ISO 8601 — make it
         timezone-aware to be unambiguous; a naive value is interpreted in your account's
         time zone) or an ISO 8601 string.
+
+        Pass ``idempotency_key`` (a UUID is ideal) to make the create safe to retry: a replay
+        of the same key returns the original task — no duplicate, and no second activation.
+        See the client's ``max_retries`` for opt-in automatic retry of keyed creates.
         """
         method, path, payload = _task_request(self._timeline_uuid, instructions, activate_at)
-        return _task_from(self._client.request(method, path, json=payload), self._client)
+        response = self._client.request(
+            method, path, json=payload, headers=_idempotency_headers(idempotency_key)
+        )
+        return _task_from(response, self._client)
 
     def __iter__(self) -> Iterator[Task]:
         return iter(TasksResource(self._client).filter(timeline=self._timeline_uuid))
@@ -367,10 +422,19 @@ class TimelineTasks(_NestedCreatorCore):
 class AsyncTimelineTasks(_NestedCreatorCore):
     """One timeline's tasks, async: ``await .create(...)`` or ``async for``."""
 
-    async def create(self, *, instructions: str, activate_at: datetime | str) -> Task:
+    async def create(
+        self,
+        *,
+        instructions: str,
+        activate_at: datetime | str,
+        idempotency_key: str | None = None,
+    ) -> Task:
         """Schedule a task on this timeline. See ``TimelineTasks.create`` for semantics."""
         method, path, payload = _task_request(self._timeline_uuid, instructions, activate_at)
-        return _task_from(await self._client.request(method, path, json=payload), self._client)
+        response = await self._client.request(
+            method, path, json=payload, headers=_idempotency_headers(idempotency_key)
+        )
+        return _task_from(response, self._client)
 
     def __aiter__(self) -> AsyncIterator[Task]:
         return AsyncTasksResource(self._client).filter(timeline=self._timeline_uuid).__aiter__()
