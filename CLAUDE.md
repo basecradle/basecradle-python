@@ -108,6 +108,11 @@ The build is fully mapped in this repo's **GitHub Issues** — each issue is one
 gh issue list --repo basecradle/basecradle-python --state open
 ```
 
+**An issue is a commitment to work, never an escape from it** (`constitution.md` → How We Build). Creating an issue does not get you *out* of work — it ensures you do more of it, sooner. If a session closes more issues than it opens, good; if it opens more than it closes, something is wrong.
+
+- **"Do it now" means in this SESSION, not this instant.** Work you discover *while working* an issue is part of finishing that issue — adjust the plan and do it, in-session. Filing a separate issue is legitimate for exactly **two** reasons: (a) you genuinely **cannot** do it now (blocked), or (b) it **deserves a fresh context window**. Nothing else. Filing obligates **dispatch, not deferral** — report a fresh-window issue plainly so the capital can start that session as soon as it can. Ticketing every surprise while shipping only the original issue is how the backlog grows, quality drops, and nothing lands.
+- **Finishing an issue means finishing everything it took to get that issue done — sub-issues included.** Before you stop, sweep the related issues: what changed, what else belongs in this context window. **An arc that ends with more issues open than it began is not done.**
+
 ## Fleet Bot Identity
 
 This repo's builder agent — **basecradle-python AI** — acts on GitHub under its own GitHub App bot identity, **`basecradle-python-ai[bot]`**, so every issue, comment, PR, and commit is attributable to it rather than to the shared human account (capital issue `basecradle/basecradle#276`).
