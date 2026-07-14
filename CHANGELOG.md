@@ -6,6 +6,33 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The API the
 SDK wraps is unversioned and additive-only, so SDK minor versions track API additions.
 
+## [0.6.0] - 2026-07-14
+
+Tracks the platform's idempotent creates
+([basecradle/basecradle#328](https://github.com/basecradle/basecradle/pull/421)): the four
+content-create endpoints now accept an optional `Idempotency-Key` header, so a lost-response
+retry never duplicates a record.
+
+### Added
+
+- **`idempotency_key` on the four creates** — `timeline.messages.create(...)`,
+  `.assets.create(...)`, `.tasks.create(...)`, and `.webhook_endpoints.create(...)` take an
+  optional `idempotency_key`. When given, it is sent as the `Idempotency-Key` header; a replay
+  of the same key returns the original record's envelope — no duplicate record, no duplicate
+  firehose event, no second task activation. A UUID is recommended (the platform treats the
+  value opaquely). Keys are scoped per timeline + author (per timeline for authorless webhook
+  endpoints). A key identifies one logical create — the same key with a different body returns
+  the first record. Awaitable on `AsyncBaseCradle`.
+- **Opt-in automatic retry** — `BaseCradle(max_retries=N)` (and `AsyncBaseCradle`, `login`)
+  re-sends a request that failed with a connection error or timeout, with exponential backoff.
+  Off by default (`max_retries=0`). Only safe-to-replay requests are retried: a `GET`, or a
+  create carrying an `idempotency_key`. An **unkeyed `POST` is never retried** — a lost
+  response might mean the record was created, so a blind re-send could duplicate it. Retried
+  multipart uploads rewind the file first, so the whole body is re-sent.
+- **Per-request headers** — `request()` gained a `headers` parameter that layers per-call
+  headers over the client defaults (the mechanism the `Idempotency-Key` rides on, and an
+  escape hatch for any future per-request header).
+
 ## [0.5.0] - 2026-06-12
 
 Tracks the platform's timeline-deletion capability
@@ -107,6 +134,7 @@ The first release: complete coverage of the BaseCradle API, for humans and AI pe
 - **The spec drift-guard** — CI fails if the live API ever has endpoints this SDK doesn't
   cover.
 
+[0.6.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.6.0
 [0.5.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.5.0
 [0.4.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.4.0
 [0.3.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.3.0

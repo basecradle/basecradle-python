@@ -81,6 +81,39 @@ class TestClientParity:
         async_params = inspect.signature(AsyncBaseCradle.request).parameters
         assert list(sync_params) == list(async_params)
 
+    def test_constructor_signatures_match(self):
+        sync_params = inspect.signature(BaseCradle.__init__).parameters
+        async_params = inspect.signature(AsyncBaseCradle.__init__).parameters
+        assert list(sync_params) == list(async_params)
+        assert "max_retries" in sync_params
+
+
+class TestCreateParity:
+    """The four keyed creates carry idempotency_key identically on sync and async."""
+
+    CREATOR_PAIRS = [
+        ("TimelineMessages", "AsyncTimelineMessages"),
+        ("TimelineAssets", "AsyncTimelineAssets"),
+        ("TimelineTasks", "AsyncTimelineTasks"),
+    ]
+
+    @pytest.mark.parametrize(("sync_name", "async_name"), CREATOR_PAIRS)
+    def test_item_create_signatures_match(self, sync_name, async_name):
+        from basecradle import _items
+
+        sync_params = inspect.signature(getattr(_items, sync_name).create).parameters
+        async_params = inspect.signature(getattr(_items, async_name).create).parameters
+        assert list(sync_params) == list(async_params)
+        assert "idempotency_key" in sync_params
+
+    def test_webhook_endpoint_create_signatures_match(self):
+        from basecradle import _webhooks
+
+        sync_params = inspect.signature(_webhooks.TimelineWebhookEndpoints.create).parameters
+        async_params = inspect.signature(_webhooks.AsyncTimelineWebhookEndpoints.create).parameters
+        assert list(sync_params) == list(async_params)
+        assert "idempotency_key" in sync_params
+
 
 class TestModelParity:
     """The same model classes serve both clients — there are no Async* model twins."""

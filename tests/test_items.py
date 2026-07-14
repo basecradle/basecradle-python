@@ -223,6 +223,51 @@ class TestCreateMessage:
         assert exc_info.value.errors == {"body": ["can't be blank"]}
 
 
+class TestCreateIdempotencyKey:
+    """idempotency_key attaches the Idempotency-Key header on all three item creates."""
+
+    def test_message_create_sends_key(self, bc, api, timeline):
+        route = api.post(f"/timelines/{TIMELINE_UUID}/messages").respond(
+            201, json={"message": message_payload()}
+        )
+
+        timeline.messages.create(body="hi", idempotency_key="019f5e48-87c6-7d1e-9a48-7a701e8bd5bb")
+
+        sent = route.calls.last.request.headers
+        assert sent["Idempotency-Key"] == "019f5e48-87c6-7d1e-9a48-7a701e8bd5bb"
+
+    def test_task_create_sends_key(self, bc, api, timeline):
+        route = api.post(f"/timelines/{TIMELINE_UUID}/tasks").respond(
+            201, json={"task": task_payload()}
+        )
+
+        timeline.tasks.create(
+            instructions="Review", activate_at="2026-01-03T15:00:00Z", idempotency_key="key-1"
+        )
+
+        assert route.calls.last.request.headers["Idempotency-Key"] == "key-1"
+
+    def test_asset_create_sends_key(self, bc, api, timeline):
+        import io
+
+        route = api.post(f"/timelines/{TIMELINE_UUID}/assets").respond(
+            201, json={"asset": asset_payload()}
+        )
+
+        timeline.assets.create(file=io.BytesIO(b"bytes"), idempotency_key="key-2")
+
+        assert route.calls.last.request.headers["Idempotency-Key"] == "key-2"
+
+    def test_no_key_sends_no_header(self, bc, api, timeline):
+        route = api.post(f"/timelines/{TIMELINE_UUID}/messages").respond(
+            201, json={"message": message_payload()}
+        )
+
+        timeline.messages.create(body="hi")
+
+        assert "Idempotency-Key" not in route.calls.last.request.headers
+
+
 class TestCreateAsset:
     def test_upload_from_path_sends_multipart(self, bc, api, timeline, tmp_path):
         report = tmp_path / "report.pdf"
