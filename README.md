@@ -122,7 +122,12 @@ task = timeline.tasks.create(
     activate_at=datetime(2026, 7, 1, 15, 0, tzinfo=timezone.utc),
 )
 print(task.content.status)  # "pending"
+
+task.cancel()               # withdraw it before it fires
+print(task.content.status)  # "cancelled"
 ```
+
+A **pending** task can be withdrawn with `task.cancel()` — its alarm never fires and the slot it held under your `max_pending_tasks` cap is freed at once. Cancelling is author-or-admin only (`NotTaskAuthorError` otherwise) and works only on a pending task (`TaskNotPendingError` once it has activated, blocked, or already been cancelled); a locked timeline does *not* block it, since withdrawing a task is cleanup, not content. This makes a task a **dead man's switch**: create one, then cancel-and-reschedule it each time you check in — stop checking in, and the last task activates.
 
 ## Webhooks
 

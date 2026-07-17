@@ -21,6 +21,7 @@ from basecradle import (
 from tests.conftest import (
     JOHN,
     NOVA,
+    TASK_UUID,
     TIMELINE_UUID,
     WEBHOOK_ENDPOINT_UUID,
     asset_payload,
@@ -165,6 +166,19 @@ class TestAsyncItems:
         await alist(abc.tasks.filter(timeline=TIMELINE_UUID, status="pending"))
 
         assert route.called
+
+    async def test_task_cancel_is_awaited_and_updates_live_object(self, abc, api):
+        api.get(f"/tasks/{TASK_UUID}").respond(200, json={"task": task_payload()})
+        task = await abc.tasks.get(TASK_UUID)
+        route = api.post(f"/tasks/{TASK_UUID}/cancellation").respond(
+            200, json={"task": task_payload(status="cancelled")}
+        )
+
+        result = await task.cancel()
+
+        assert route.called
+        assert result is task
+        assert task.content.status == "cancelled"
 
     async def test_get(self, abc, api):
         api.get(f"/assets/{asset_payload()['content']['uuid']}").respond(

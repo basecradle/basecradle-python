@@ -89,6 +89,9 @@ class TestReadmeExamples:
             router.post(path__regex=r"/timelines/.+/tasks$").respond(
                 201, json={"task": task_payload()}
             )
+            router.post(path__regex=r"/tasks/.+/cancellation$").respond(
+                200, json={"task": task_payload(status="cancelled")}
+            )
             router.get("/messages").respond(
                 200, json={"messages": [message_payload()], "next_cursor": None}
             )

@@ -1,6 +1,6 @@
 """Every documented error code maps to its typed exception.
 
-The catalog below mirrors the API docs (Errors → Error Codes) exactly — all 16 codes.
+The catalog below mirrors the API docs (Errors → Error Codes) exactly — all 18 codes.
 If the API adds a code, the drift-guard (issue #10) catches it; if someone removes a
 mapping, these tests do.
 """
@@ -11,6 +11,7 @@ from basecradle import (
     AccountSuspendedError,
     AuthenticationError,
     BaseCradleError,
+    ConflictError,
     CurrentPasswordIncorrectError,
     EndpointDisabledError,
     ForbiddenError,
@@ -21,10 +22,12 @@ from basecradle import (
     InvalidSignatureError,
     NotAViewerError,
     NotFoundError,
+    NotTaskAuthorError,
     NotTimelineOwnerError,
     PasswordConfirmationMismatchError,
     PayloadTooLargeError,
     RateLimitedError,
+    TaskNotPendingError,
     TimelineLockedError,
     UnauthorizedError,
     ValidationError,
@@ -40,8 +43,10 @@ ERROR_CATALOG = [
     ("unauthorized", 401, UnauthorizedError, AuthenticationError),
     ("not_a_viewer", 403, NotAViewerError, ForbiddenError),
     ("not_timeline_owner", 403, NotTimelineOwnerError, ForbiddenError),
+    ("not_task_author", 403, NotTaskAuthorError, ForbiddenError),
     ("timeline_locked", 403, TimelineLockedError, ForbiddenError),
     ("not_found", 404, NotFoundError, BaseCradleError),
+    ("task_not_pending", 409, TaskNotPendingError, ConflictError),
     ("invalid_cursor", 400, InvalidCursorError, InvalidRequestError),
     ("invalid_filter", 400, InvalidFilterError, InvalidRequestError),
     ("current_password_incorrect", 422, CurrentPasswordIncorrectError, ValidationError),

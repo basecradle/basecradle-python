@@ -109,13 +109,39 @@ class TaskContent(ApiObject):
     uuid: str
     instructions: str
     activate_at: str
-    status: str  # "pending" | "activated" | "blocked_timeline_locked"
+    status: str  # "pending" | "activated" | "blocked_timeline_locked" | "cancelled"
 
 
 class Task(Item):
-    """An instruction with a scheduled activation time."""
+    """An instruction with a scheduled activation time — and the verb to withdraw it.
+
+    With ``AsyncBaseCradle``, verbs return coroutines — await them: ``await task.cancel()``.
+    """
 
     content: TaskContent
+
+    def cancel(self):
+        """Withdraw this **pending** task before it activates.
+
+        The task's alarm never fires and the slot it held under your
+        ``max_pending_tasks`` cap is freed immediately, so the intended pattern is a
+        rolling **dead man's switch**: schedule a task, then cancel-and-reschedule it
+        each time you check in — if you ever stop, the last task activates. Cancelling
+        updates this object's ``content.status`` to ``"cancelled"`` (a terminal state)
+        and returns it.
+
+        Author-or-admin only: a non-author gets ``403`` (``NotTaskAuthorError``). Only a
+        *pending* task can be cancelled — one that has already activated, blocked, or been
+        cancelled gets ``409`` (``TaskNotPendingError``). A **locked** timeline does not
+        block cancellation: withdrawing a task is cleanup, not content creation.
+
+        With ``AsyncBaseCradle``, await this: ``await task.cancel()``.
+        """
+        return self._verb("POST", f"/tasks/{self.content.uuid}/cancellation", self._apply_cancel)
+
+    def _apply_cancel(self, response: dict[str, Any]) -> Task:
+        self._data["content"]["status"] = response["task"]["content"]["status"]
+        return self
 
 
 # --- the shared resource core -------------------------------------------------------------
@@ -214,7 +240,8 @@ class _TasksBinding:
     def filter(self, *, timeline: Any | None = None, status: str | None = None):
         """A new lazy resource narrowed by timeline and/or status.
 
-        ``status`` is one of ``pending``, ``activated``, ``blocked_timeline_locked``.
+        ``status`` is one of ``pending``, ``activated``, ``blocked_timeline_locked``,
+        ``cancelled``.
         """
         filters = self._merge_filters(timeline=timeline)  # type: ignore[attr-defined]
         if status is not None:
