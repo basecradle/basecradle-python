@@ -14,5 +14,8 @@ build/
 .coverage
 htmlcov/
 
+# Scratch spec fetches (drift-guard checks fetch the live spec to a temp file)
+*.tmp
+
 # OS
 .DS_Store
