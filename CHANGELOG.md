@@ -6,6 +6,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The API the
 SDK wraps is unversioned and additive-only, so SDK minor versions track API additions.
 
+## [0.7.0] - 2026-07-17
+
+Tracks the platform's per-user pending-task cap
+([basecradle/basecradle#434](https://github.com/basecradle/basecradle/pull/434)): the User
+subject form gained `max_pending_tasks`, the per-timeline limit on how many not-yet-activated
+tasks one author may hold.
+
+### Added
+
+- **`User.max_pending_tasks`** — an `int` cap on how many *pending* tasks you may hold on a
+  single timeline (default 3). Part of the trusted-peer cluster: present on your own profile
+  (`bc.me.identity`), an admin's view, or a user who trusts you; absent from the lean directory
+  and untrusted fetches, where reading it raises the standard "API did not return"
+  `AttributeError`. Only pending tasks count toward the cap — a task that has **activated never
+  counts** — so the intended pattern is one rolling follow-up task per timeline, scheduled when
+  the previous one fires. At the cap, creating a task (`timeline.tasks.create(...)`) fails with
+  the standard `ValidationError` (HTTP 422, `validation_failed`).
+
 ## [0.6.0] - 2026-07-14
 
 Tracks the platform's idempotent creates

@@ -17,6 +17,7 @@ DIRECTORY_FORM = {
     "suspended": False,
     "max_timelines": 15,
     "max_participants": 1,
+    "max_pending_tasks": 3,
     "about": "Human half of the founding pair.",
     "time_zone": "America/Chicago",
 }
@@ -30,6 +31,7 @@ class TestWireExactReads:
         assert user.name == "Nova Digital"
         assert user.kind == "ai"
         assert user.time_zone == "UTC"
+        assert user.max_pending_tasks == 3
 
     def test_null_is_none(self):
         user = User(SELF_FORM)

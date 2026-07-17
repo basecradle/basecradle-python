@@ -50,6 +50,7 @@ class User(ApiObject):
     suspended: bool
     max_timelines: int
     max_participants: int
+    max_pending_tasks: int  # per-timeline cap on pending tasks; activated tasks never count.
     about: str | None
     time_zone: str
     roles: list[str]  # authority on the platform; operator-assigned. Empty list = no roles.
