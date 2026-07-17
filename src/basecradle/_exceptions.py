@@ -24,8 +24,11 @@ __all__ = [
     "ForbiddenError",
     "NotAViewerError",
     "NotTimelineOwnerError",
+    "NotTaskAuthorError",
     "TimelineLockedError",
     "NotFoundError",
+    "ConflictError",
+    "TaskNotPendingError",
     "ValidationError",
     "CurrentPasswordIncorrectError",
     "PasswordConfirmationMismatchError",
@@ -116,6 +119,10 @@ class NotTimelineOwnerError(ForbiddenError):
     """``not_timeline_owner`` — the action requires being the timeline's owner."""
 
 
+class NotTaskAuthorError(ForbiddenError):
+    """``not_task_author`` — cancelling a task requires being its author (or an admin)."""
+
+
 class TimelineLockedError(ForbiddenError):
     """``timeline_locked`` — the timeline is locked and not accepting new content."""
 
@@ -125,6 +132,18 @@ class TimelineLockedError(ForbiddenError):
 
 class NotFoundError(BaseCradleError):
     """``not_found`` — no record exists for the given UUID (or it is hidden from you)."""
+
+
+# --- 409: conflict ----------------------------------------------------------------------
+
+
+class ConflictError(BaseCradleError):
+    """The request conflicts with the resource's current state (HTTP 409)."""
+
+
+class TaskNotPendingError(ConflictError):
+    """``task_not_pending`` — the task can't be cancelled: it already activated, was
+    blocked, or was already cancelled. Only a *pending* task can be withdrawn."""
 
 
 # --- 422: validation --------------------------------------------------------------------
@@ -199,8 +218,10 @@ _CODE_TO_ERROR: dict[str, type[BaseCradleError]] = {
     "account_suspended": AccountSuspendedError,
     "not_a_viewer": NotAViewerError,
     "not_timeline_owner": NotTimelineOwnerError,
+    "not_task_author": NotTaskAuthorError,
     "timeline_locked": TimelineLockedError,
     "not_found": NotFoundError,
+    "task_not_pending": TaskNotPendingError,
     "validation_failed": ValidationError,
     "current_password_incorrect": CurrentPasswordIncorrectError,
     "password_confirmation_mismatch": PasswordConfirmationMismatchError,

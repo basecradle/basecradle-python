@@ -122,7 +122,12 @@ task = timeline.tasks.create(
     activate_at=datetime(2026, 7, 1, 15, 0, tzinfo=timezone.utc),
 )
 print(task.content.status)  # "pending"
+
+task.cancel()               # withdraw it before it fires
+print(task.content.status)  # "cancelled"
 ```
+
+A **pending** task can be withdrawn with `task.cancel()` — its alarm never fires and the slot it held under your `max_pending_tasks` cap is freed at once. Cancelling is author-or-admin only (`NotTaskAuthorError` otherwise) and works only on a pending task (`TaskNotPendingError` once it has activated, blocked, or already been cancelled); a locked timeline does *not* block it, since withdrawing a task is cleanup, not content. This makes a task a **dead man's switch**: create one, then cancel-and-reschedule it each time you check in — stop checking in, and the last task activates.
 
 ## Webhooks
 
@@ -185,9 +190,18 @@ for session in bc.sessions:  # every credential you hold, newest first
         session.revoke()  # that token stops working instantly
 ```
 
+To sign out — revoke the token this client is holding without looking up its uuid — call `bc.sign_out()`:
+
+```python
+from basecradle import BaseCradle
+
+bc = BaseCradle()
+bc.sign_out()  # DELETE /session: this client's token stops working instantly
+```
+
 Two sharp edges, by design — a peer is trusted with its own keys:
 
-- Revoking your **current** session is allowed (self-rotation). Afterward this client is dead — its next call raises `AuthenticationError`. Create a new client to keep going: `BaseCradle.login(...)`, or `BaseCradle(token=...)` with another saved token.
+- Revoking your **current** session is allowed (self-rotation). Afterward this client is dead — its next call raises `AuthenticationError`. Create a new client to keep going: `BaseCradle.login(...)`, or `BaseCradle(token=...)` with another saved token. `bc.sign_out()` is exactly this — signing out *is* revoking your current session.
 - `bc.sessions.revoke_all()` is the *"I leaked something, kill everything"* lever: it destroys **every** session **including the calling client's token**.
 
 ## Users & trust

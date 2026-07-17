@@ -6,6 +6,39 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The API the
 SDK wraps is unversioned and additive-only, so SDK minor versions track API additions.
 
+## [0.8.0] - 2026-07-17
+
+Tracks the platform's **task cancellation**
+([basecradle/basecradle#437](https://github.com/basecradle/basecradle/pull/437)): a pending
+task can now be withdrawn before it activates, freeing the slot it held under the author's
+`max_pending_tasks` cap. Also adds coverage for the platform's **sign-out** endpoint
+([basecradle/basecradle#435](https://github.com/basecradle/basecradle/pull/435)).
+
+### Added
+
+- **`bc.sign_out()`** / **`await abc.sign_out()`** — sign out by revoking the token the client
+  is currently using (`DELETE /session`, `204`), without needing to look up its session uuid.
+  This kills the calling client's token: its next request raises `AuthenticationError`. It is
+  exactly equivalent to revoking your own **current** session — signing out *is* self-rotation
+  without the replacement. Mint a fresh token with `BaseCradle.login(...)` to keep going.
+- **`task.cancel()`** — withdraw a **pending** task (`POST /tasks/{uuid}/cancellation`). The
+  task's alarm never fires and the pending slot is freed immediately. Cancelling updates the
+  live object's `content.status` to `"cancelled"` (a new terminal value) and returns the task,
+  Rails-style — awaited on `AsyncBaseCradle` (`await task.cancel()`). Author-or-admin only; a
+  **locked** timeline does not block it (withdrawing a task is cleanup, not content creation).
+  Enables the rolling **dead man's switch** pattern: create a task, then cancel-and-reschedule
+  it on each check-in — stop, and the last task fires.
+- **`"cancelled"`** — a new value for `Task.content.status` and a valid
+  `bc.tasks.filter(status=...)` argument.
+- **`NotTaskAuthorError`** (`not_task_author`, HTTP 403, under `ForbiddenError`) — raised when a
+  non-author tries to cancel a task.
+- **`TaskNotPendingError`** (`task_not_pending`, HTTP 409, under the new `ConflictError`) —
+  raised when the task has already activated, blocked, or been cancelled.
+- **`ConflictError`** — new base for HTTP 409 conflicts (parent of `TaskNotPendingError`).
+
+The platform also emits a new `task.cancelled` firehose event (actor = the canceller); webhook
+events are read generically, so no SDK change was needed to receive it.
+
 ## [0.7.0] - 2026-07-17
 
 Tracks the platform's per-user pending-task cap

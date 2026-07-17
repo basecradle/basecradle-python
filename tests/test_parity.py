@@ -81,6 +81,13 @@ class TestClientParity:
         async_params = inspect.signature(AsyncBaseCradle.request).parameters
         assert list(sync_params) == list(async_params)
 
+    def test_sign_out_exists_on_both_clients(self):
+        assert callable(BaseCradle.sign_out)
+        assert callable(AsyncBaseCradle.sign_out)
+        sync_params = inspect.signature(BaseCradle.sign_out).parameters
+        async_params = inspect.signature(AsyncBaseCradle.sign_out).parameters
+        assert list(sync_params) == list(async_params)
+
     def test_constructor_signatures_match(self):
         sync_params = inspect.signature(BaseCradle.__init__).parameters
         async_params = inspect.signature(AsyncBaseCradle.__init__).parameters

@@ -13,7 +13,9 @@ from basecradle import (
     ForbiddenError,
     Message,
     NotFoundError,
+    NotTaskAuthorError,
     Task,
+    TaskNotPendingError,
     TimelineLockedError,
     User,
     ValidationError,
@@ -180,6 +182,66 @@ class TestTaskFilters:
         list(bc.tasks.filter(timeline=TIMELINE_UUID).filter(status="pending"))
 
         assert route.called
+
+    def test_cancelled_is_a_valid_status_filter(self, bc, api):
+        route = api.get("/tasks", params={"status": "cancelled"}).respond(
+            200, json={"tasks": [task_payload(status="cancelled")], "next_cursor": None}
+        )
+
+        (task,) = list(bc.tasks.filter(status="cancelled"))
+
+        assert route.called
+        assert task.content.status == "cancelled"
+
+
+class TestTaskCancel:
+    """POST /tasks/{uuid}/cancellation — withdraw a pending task; 200 / 403 / 409."""
+
+    def _pending_task(self, bc, api):
+        api.get(f"/tasks/{TASK_UUID}").respond(200, json={"task": task_payload()})
+        return bc.tasks.get(TASK_UUID)
+
+    def test_cancel_posts_and_updates_local_state(self, bc, api):
+        task = self._pending_task(bc, api)
+        route = api.post(f"/tasks/{TASK_UUID}/cancellation").respond(
+            200, json={"task": task_payload(status="cancelled")}
+        )
+
+        assert task.content.status == "pending"
+
+        result = task.cancel()
+
+        assert route.called
+        assert result is task  # live object: the same Task, returned for chaining
+        assert task.content.status == "cancelled"  # updated from the API's response
+
+    def test_cancel_targets_the_task_content_uuid(self, bc, api):
+        task = self._pending_task(bc, api)
+        route = api.post(f"/tasks/{TASK_UUID}/cancellation").respond(
+            200, json={"task": task_payload(status="cancelled")}
+        )
+
+        task.cancel()
+
+        assert route.calls.last.request.url.path == f"/tasks/{TASK_UUID}/cancellation"
+
+    def test_non_author_raises_not_task_author(self, bc, api):
+        task = self._pending_task(bc, api)
+        api.post(f"/tasks/{TASK_UUID}/cancellation").respond(
+            403, json=problem("not_task_author", 403)
+        )
+
+        with pytest.raises(NotTaskAuthorError):
+            task.cancel()
+
+    def test_already_terminal_raises_task_not_pending(self, bc, api):
+        task = self._pending_task(bc, api)
+        api.post(f"/tasks/{TASK_UUID}/cancellation").respond(
+            409, json=problem("task_not_pending", 409)
+        )
+
+        with pytest.raises(TaskNotPendingError):
+            task.cancel()
 
 
 class TestCreateMessage:
