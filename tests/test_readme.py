@@ -127,6 +127,7 @@ class TestReadmeExamples:
                 },
             )
             router.delete(path__regex=r"/users/sessions/.+$").respond(204)
+            router.delete("/session").respond(204)
             router.get("/users").respond(
                 200, json={"users": [directory_user_payload(user=NOVA, trusts_you=True)]}
             )

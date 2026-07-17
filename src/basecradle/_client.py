@@ -231,6 +231,19 @@ class BaseCradle(_ClientCore):
         """
         return Dashboard(self.request("GET", "/users/dashboard"), client=self)
 
+    def sign_out(self) -> None:
+        """Sign out — revoke the token this client is currently using (``DELETE /session``).
+
+        .. warning::
+            This kills the very token this client holds: after ``sign_out()`` returns, this
+            client is dead — its next call raises ``AuthenticationError``. It is exactly
+            equivalent to revoking your own **current** session, without needing its uuid.
+            Mint a replacement with ``BaseCradle.login(...)`` to keep going.
+
+        With ``AsyncBaseCradle``, await this: ``await abc.sign_out()``.
+        """
+        self.request("DELETE", "/session")
+
     def request(
         self,
         method: str,
@@ -358,6 +371,16 @@ class AsyncBaseCradle(_ClientCore):
 
     async def _fetch_me(self) -> Dashboard:
         return Dashboard(await self.request("GET", "/users/dashboard"), client=self)
+
+    async def sign_out(self) -> None:
+        """Sign out — revoke the token this client is currently using (``DELETE /session``).
+
+        The awaited twin of ``BaseCradle.sign_out``: it kills the token this client holds,
+        so this client is dead afterward (its next call raises ``AuthenticationError``). It
+        equals revoking your own **current** session without its uuid; mint a fresh token
+        with ``await AsyncBaseCradle.login(...)`` to continue.
+        """
+        await self.request("DELETE", "/session")
 
     async def request(
         self,

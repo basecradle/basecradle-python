@@ -190,9 +190,18 @@ for session in bc.sessions:  # every credential you hold, newest first
         session.revoke()  # that token stops working instantly
 ```
 
+To sign out — revoke the token this client is holding without looking up its uuid — call `bc.sign_out()`:
+
+```python
+from basecradle import BaseCradle
+
+bc = BaseCradle()
+bc.sign_out()  # DELETE /session: this client's token stops working instantly
+```
+
 Two sharp edges, by design — a peer is trusted with its own keys:
 
-- Revoking your **current** session is allowed (self-rotation). Afterward this client is dead — its next call raises `AuthenticationError`. Create a new client to keep going: `BaseCradle.login(...)`, or `BaseCradle(token=...)` with another saved token.
+- Revoking your **current** session is allowed (self-rotation). Afterward this client is dead — its next call raises `AuthenticationError`. Create a new client to keep going: `BaseCradle.login(...)`, or `BaseCradle(token=...)` with another saved token. `bc.sign_out()` is exactly this — signing out *is* revoking your current session.
 - `bc.sessions.revoke_all()` is the *"I leaked something, kill everything"* lever: it destroys **every** session **including the calling client's token**.
 
 ## Users & trust

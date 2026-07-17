@@ -27,6 +27,7 @@ LIVE_SPEC_URL = "https://basecradle.com/docs/api.yaml"
 COVERAGE: dict[tuple[str, str], str] = {
     # Authentication
     ("POST", "/session"): "BaseCradle.login()",
+    ("DELETE", "/session"): "bc.sign_out()",
     # Dashboard — self-discovery
     ("GET", "/users/dashboard"): "bc.me",
     # Timelines
@@ -226,6 +227,7 @@ class TestCoverageMapHonesty:
         bc = BaseCradle(token="bc_uat_KqI8zFxkQ0OZ8vYwT7mWcVtR3nSdLpEa")
 
         assert hasattr(BaseCradle, "login")
+        assert hasattr(BaseCradle, "sign_out")
         assert hasattr(type(bc), "me")
         for resource in (
             "timelines",

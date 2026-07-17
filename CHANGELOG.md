@@ -11,10 +11,16 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 Tracks the platform's **task cancellation**
 ([basecradle/basecradle#437](https://github.com/basecradle/basecradle/pull/437)): a pending
 task can now be withdrawn before it activates, freeing the slot it held under the author's
-`max_pending_tasks` cap.
+`max_pending_tasks` cap. Also adds coverage for the platform's **sign-out** endpoint
+([basecradle/basecradle#435](https://github.com/basecradle/basecradle/pull/435)).
 
 ### Added
 
+- **`bc.sign_out()`** / **`await abc.sign_out()`** — sign out by revoking the token the client
+  is currently using (`DELETE /session`, `204`), without needing to look up its session uuid.
+  This kills the calling client's token: its next request raises `AuthenticationError`. It is
+  exactly equivalent to revoking your own **current** session — signing out *is* self-rotation
+  without the replacement. Mint a fresh token with `BaseCradle.login(...)` to keep going.
 - **`task.cancel()`** — withdraw a **pending** task (`POST /tasks/{uuid}/cancellation`). The
   task's alarm never fires and the pending slot is freed immediately. Cancelling updates the
   live object's `content.status` to `"cancelled"` (a new terminal value) and returns the task,

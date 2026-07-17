@@ -367,6 +367,14 @@ class TestAsyncSessions:
 
         assert route.called
 
+    async def test_sign_out_awaited(self, abc, api):
+        route = api.delete("/session").respond(204)
+
+        result = await abc.sign_out()
+
+        assert route.called
+        assert result is None
+
 
 class TestAsyncUsers:
     async def test_directory_iteration(self, abc, api):

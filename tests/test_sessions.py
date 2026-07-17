@@ -1,4 +1,4 @@
-"""Sessions: a peer managing its own credentials — list, revoke, revoke-all."""
+"""Sessions: a peer managing its own credentials — list, revoke, revoke-all, sign-out."""
 
 import httpx
 import pytest
@@ -152,6 +152,31 @@ class TestRevokeAll:
             bc.me  # the very next call on this client fails
 
 
+class TestSignOut:
+    def test_sign_out_deletes_the_current_session(self, bc, api):
+        route = api.delete("/session").respond(204)
+
+        result = bc.sign_out()
+
+        assert route.called
+        assert result is None
+
+    def test_after_sign_out_this_client_is_dead(self, bc, api):
+        """Signing out kills the calling token: the very next call on this client fails."""
+        api.delete("/session").respond(204)
+        api.get("/users/dashboard").respond(
+            401,
+            json=problem(
+                "unauthorized", 401, detail="Authentication is required to access this resource."
+            ),
+        )
+
+        bc.sign_out()
+
+        with pytest.raises(UnauthorizedError):
+            bc.me
+
+
 class TestDocumentation:
     """The dangerous semantics must be documented where a consumer will see them."""
 
@@ -165,6 +190,13 @@ class TestDocumentation:
         docstring = Session.revoke.__doc__
         assert "current" in docstring.lower()
         assert "self-rotation" in docstring.lower()
+
+    def test_sign_out_docstring_warns_the_client_dies(self):
+        from basecradle import BaseCradle
+
+        docstring = BaseCradle.sign_out.__doc__
+        assert "AuthenticationError" in docstring
+        assert "current" in docstring.lower()  # equals revoking your current session
 
     def test_readme_documents_both_sharp_edges(self):
         from pathlib import Path
