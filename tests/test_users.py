@@ -82,6 +82,7 @@ class TestGet:
 
         assert john.about == "Building things at BaseCradle."
         assert john.max_timelines == 15
+        assert john.max_pending_tasks == 3
         # Still not the self/admin cluster.
         assert not hasattr(john, "integration_url")
 
