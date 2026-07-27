@@ -98,7 +98,7 @@ class ApiObject:
         return hash((type(self), tuple(sorted(self._data))))
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def _nested_classes(cls: type) -> dict[str, type[ApiObject]]:
     """Which annotated fields of ``cls`` are models (or lists of models) to auto-wrap.
 
