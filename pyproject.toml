@@ -43,9 +43,27 @@ packages = ["src/basecradle"]
 
 [tool.ruff]
 line-length = 100
+# Ruff 0.16 began formatting Python code blocks inside Markdown by default. We opt out:
+# CLAUDE.md carries verbatim fleet-shared blocks a reformat would corrupt (tripping the
+# NOC drift-guard), and the README's inline comments are hand-aligned. Ruff never touched
+# Markdown before 0.16 — keep it that way.
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 extend-select = ["I"]
+# PYI034 wants __enter__/__aenter__ to return `Self`, but typing.Self is 3.11+ and we
+# support 3.10 without adding typing_extensions (httpx is the only runtime dependency) —
+# returning the concrete client type is correct. RUF022 would alphabetize __all__, but
+# ours are ordered deliberately (public surface in __init__, error taxonomy in _exceptions).
+ignore = ["PYI034", "RUF022"]
+
+[tool.ruff.lint.per-file-ignores]
+# Deliberate test patterns, not smells:
+#   B018   — bare attribute access inside `pytest.raises` triggers __getattr__ on purpose
+#   S102   — exec() runs the README's code blocks verbatim to prove they work
+#   RUF012 — class-level parametrize tables need no ClassVar ceremony
+#   DTZ001 — fabricated naive datetimes are fine as fixtures
+"tests/**" = ["B018", "S102", "RUF012", "DTZ001"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
