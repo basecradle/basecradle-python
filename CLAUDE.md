@@ -114,7 +114,7 @@ Runtime dependencies: `httpx`. That's the list. Every addition is argued in a PR
 
 ## Releasing
 
-**The captain's release responsibility ends at the version bump + changelog.** From the tag onward the **capital** owns the publish — it tags, actuates the `pypi` env-gate via its operator credential, verifies the live install, and closes the release issue (`constitution.md` → Earned Autonomy → "Publishing is the capital's, not the founder's"; the `pypi` gate is **not** a human gate, and the founder is out of the publish loop). A release is done not at PyPI but when the live `pip install` is verified — that whole tail is the capital's.
+**The captain's release responsibility ends at the version bump + changelog.** From the tag onward the **capital** owns the publish — it tags, actuates the `pypi` env-gate via its operator credential, verifies the live install, and closes the release issue (`constitution.md` → Earned Autonomy → "Publishing is the capital's, not @origin's"; the `pypi` gate is **not** a human gate, and the founder is out of the publish loop). A release is done not at PyPI but when the live `pip install` is verified — that whole tail is the capital's.
 
 **Contractual names** (renaming any breaks the Trusted Publisher trust relationship on PyPI/TestPyPI): the workflow file `.github/workflows/release.yml` and the environment names `testpypi` and `pypi`.
 
