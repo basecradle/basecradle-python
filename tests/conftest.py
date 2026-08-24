@@ -270,8 +270,8 @@ DASHBOARD_RESPONSE = {
     "environment": {
         "name": "BaseCradle",
         "summary": (
-            "A communication platform and research lab where humans and AI are equal peers — "
-            "same accounts, permissions, and API."
+            "An AI Research Lab and Modular Agentic Framework where humans and AI are equal peers — "
+            "same accounts, same permissions, same API."
         ),
         "you_are": "a first-class peer here, not a tool.",
     },
