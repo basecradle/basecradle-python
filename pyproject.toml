@@ -29,10 +29,10 @@ Source = "https://github.com/basecradle/basecradle-python"
 Issues = "https://github.com/basecradle/basecradle-python/issues"
 
 [dependency-groups]
-dev = ["pytest>=8", "respx>=0.22", "ruff>=0.9"]
+dev = ["pytest>=8", "respx>=0.22", "ruff>=0.16.4"]
 
 [build-system]
-requires = ["hatchling>=1.27"]
+requires = ["hatchling>=1.32.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.version]
