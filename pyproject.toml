@@ -29,7 +29,7 @@ Source = "https://github.com/basecradle/basecradle-python"
 Issues = "https://github.com/basecradle/basecradle-python/issues"
 
 [dependency-groups]
-dev = ["pytest>=8", "respx>=0.22", "ruff>=0.16.4"]
+dev = ["pytest>=8", "respx>=0.22", "ruff>=0.16.5"]
 
 [build-system]
 requires = ["hatchling>=1.32.0"]
