@@ -1,6 +1,6 @@
 ---
 name: bot-auth-setup
-description: Per-session operational setup for acting on GitHub as the basecradle-python-ai[bot] identity — set the local git author, mint a short-lived installation token, and route gh/git through it (laptop helper vs. fleet-server GH_APP_* minting). Use at the start of any session that will push commits, open PRs, or post issue/PR comments as the bot. The identity facts (slug, App ID, bot user ID, commit-author, no-Co-Authored-By rule, CI-uses-no-secrets) live in CLAUDE.md → Fleet Bot Identity; this skill carries the setup steps.
+description: Per-session operational setup for acting on GitHub as the basecradle-python-ai[bot] identity — set the local git author, mint a short-lived installation token, route gh through it, and push with the token in the environment (never in a URL). Use at the start of any session that will push commits, open PRs, or post issue/PR comments as the bot. The identity facts (slug, App ID, bot user ID, commit-author, no-Co-Authored-By rule, CI-uses-no-secrets) live in CLAUDE.md → Fleet Bot Identity; this skill carries the setup steps.
 ---
 
 # Bot Auth Setup — acting as `basecradle-python-ai[bot]`
@@ -18,15 +18,49 @@ git config --local user.email "290976240+basecradle-python-ai[bot]@users.noreply
 
 It lives in `.git/config` only — a fresh clone starts without it, so re-run after cloning.
 
-## 2. Auth routing — mint a short-lived installation token, route gh/git through it
+## 2. Mint the token and route `gh` through it
 
-**On the laptop**, use the shared fleet helper:
+**On the fleet server** — where this agent runs — the box has its own helper on `PATH` at `/usr/local/bin/gh-app-token`. It reads this agent's provisioned `GH_APP_*` credentials (`GH_APP_ID`, `GH_APP_PEM_B64`, `GH_APP_SLUG`, `GH_APP_BOT_USER_ID`) from the environment and mints a short-lived (~1h) installation token:
+
+```bash
+export GH_TOKEN="$(gh-app-token)"      # bare invocation is the default --token mode
+```
+
+The installed helper's modes are **`--token`** (the default, so a bare call works), **`--author`** (prints the commit-author string), and **`--git-credential`** (git's credential-helper protocol — see §3). It takes a **mode flag, not a slug**: `gh-app-token basecradle-python-ai`, the laptop helper's calling convention, fails with `unknown mode`. With `GH_TOKEN` exported, `gh issue comment`, `gh pr`, etc. all go out as the bot; the token is short-lived, so re-mint if a session runs long.
+
+**On a laptop**, the shared fleet helper takes the slug instead:
 
 ```bash
 export GH_TOKEN="$(~/Documents/claude-workspace/2026-06-05-fleet-identity/gh-app-token basecradle-python-ai)"
-# push via:  https://x-access-token:<token>@github.com/basecradle/basecradle-python.git
 ```
 
-The helper (`gh-app-token`) and registry (`fleet-apps.json`) live in the Claude workspace on the laptop; `--author` prints the commit-author string, `--remote` the authenticated push URL.
+That helper and its registry (`fleet-apps.json`) live in the Claude workspace; `--author` prints the commit-author string there too. Never wrap either minter in `2>/dev/null` — on a laptop that hides a "command not found" and lets `gh` fall through silently to the ambient `drawkkwast` login.
 
-**On the fleet server** there is no shared helper. Each agent's own provisioned credentials — the `GH_APP_*` env vars in its environment (`GH_APP_ID`, `GH_APP_PEM_B64`, `GH_APP_SLUG`, `GH_APP_BOT_USER_ID`) — serve this role, and the agent mints its own installation token from them: base64-decode the PEM, build an RS256 JWT (`iss` = App ID), `GET /app/installations` → take `[0].id`, `POST /app/installations/{id}/access_tokens` → the `ghs_` token. See the "Mint GH token on fleet server" memory for the exact steps.
+## 3. `git push` as the bot — the token rides the environment, never argv
+
+**Never put the token in a URL** (`https://x-access-token:${GH_TOKEN}@github.com/…`): the shell expands it into `git`'s argv, and argv is readable by other accounts on a shared box (`/proc/<pid>/cmdline`, `ps`) for as long as the push runs (`basecradle-noc#694`, `basecradle#539`). The remote stays tokenless; git gets the token from a credential helper that reads `GH_TOKEN` out of the environment, which only the same uid can read.
+
+**On the fleet box** the NOC registers the minter as this agent's credential helper on every converge — in `~/.gitconfig`, scoped to `https://github.com` — so the recipe is just:
+
+```bash
+GH_TOKEN="$(gh-app-token)" git push origin <branch>
+```
+
+The helper answers only `https://github.com` and stores nothing: the token lives in the caller's environment and dies with it. If `GH_TOKEN` is unset it tells git to `quit`, so the failure is a clear message rather than a hung username prompt.
+
+**On a laptop**, where that helper is not installed, pass one per command:
+
+```bash
+git -c 'credential.https://github.com.helper=' \
+    -c 'credential.https://github.com.helper=!f() { if [ "$1" = get ]; then if [ -z "$GH_TOKEN" ]; then echo quit=1; else echo username=x-access-token; echo "password=$GH_TOKEN"; fi; fi; }; f' \
+    push origin <branch>
+```
+
+Four details are load-bearing, each mirroring a guard the on-box helper enforces in code:
+
+- **The single quotes** keep `$GH_TOKEN` literal in argv — the helper's own shell expands it from the environment.
+- **The empty `…helper=` reset first** clears the inherited helper list. Without it the laptop's system `osxkeychain` helper is asked **first** (measured, git 2.55) — it can answer with the `drawkkwast` credential and, after a successful push, would **store** the bot token in the keychain.
+- **Both entries are scoped to `https://github.com`**, so the token cannot reach another host. An unscoped `credential.helper` answers for *every* host git asks about — a fetch or push against any other origin gets handed the bot token (verified with `git credential fill`).
+- **The `quit=1` branch** stops git when `GH_TOKEN` is unset. Without it the helper sends an empty password and the push fails with a generic GitHub auth error instead of naming the real problem.
+
+(The `http.extraheader="AUTHORIZATION: bearer $TOKEN"` form **fails** — "invalid credentials" — for App installation tokens, and is argv besides.)
