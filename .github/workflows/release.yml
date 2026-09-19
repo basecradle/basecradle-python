@@ -22,10 +22,20 @@ jobs:
       - uses: astral-sh/setup-uv@v10.1.0
       - name: Build the wheel and sdist
         run: uv build
+      # A pure inter-job handoff: this artifact exists only to carry the build to
+      # the two publish jobs, and its purpose is served the moment PyPI has the
+      # wheel. Left unset it inherits GitHub's 90-day default, so every release
+      # would strand a stale copy of its dist for three months with nobody
+      # deciding to keep it (constitution.md -> How We Build, "whatever creates,
+      # cleans up"). 30 days is the shortest end that cannot break a release:
+      # GitHub holds a waiting deployment -- the pypi gate the capital actuates --
+      # for up to 30 days, and an artifact that expired first would fail
+      # publish-pypi's download and force a re-tag.
       - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
+          retention-days: 30
 
   publish-testpypi:
     name: publish to TestPyPI (rehearsal)
