@@ -38,7 +38,13 @@ That helper and its registry (`fleet-apps.json`) live in the Claude workspace; `
 
 ## 3. `git push` as the bot — the token rides the environment, never argv
 
-**Never put the token in a URL** (`https://x-access-token:${GH_TOKEN}@github.com/…`): the shell expands it into `git`'s argv, and argv is readable by other accounts on a shared box (`/proc/<pid>/cmdline`, `ps`) for as long as the push runs (`basecradle-noc#694`, `basecradle#539`). The remote stays tokenless; git gets the token from a credential helper that reads `GH_TOKEN` out of the environment, which only the same uid can read.
+**Never put the token in a URL** (`https://x-access-token:${GH_TOKEN}@github.com/…`): the shell expands it into `git`'s argv, and argv is readable by other accounts on a shared box (`/proc/<pid>/cmdline`, `ps`) for as long as the command runs (`basecradle-noc#694`, `basecradle#539`). **A token URL handed to `clone`/`pull`/`fetch` also outlives the command**: git records it verbatim in the reflog (`.git/logs`) *and* in `.git/FETCH_HEAD` — a secret at rest for the life of the clone. This clone held 16 such reflog entries between 2026-06-29 and 2026-09-03 before they were expired. (A `push` to a token URL updates no local ref, so it writes no reflog entry — it leaks through argv only.) The remote stays tokenless; git gets the token from a credential helper that reads `GH_TOKEN` out of the environment, which only the same uid can read — and reading a public repo needs no token at all. To clean an existing clone, expire the reflog **and** truncate `FETCH_HEAD`, which `reflog expire` does not touch:
+
+```bash
+git reflog expire --expire=now --expire-unreachable=now --all
+: > .git/FETCH_HEAD
+grep -rl x-access-token .git    # must return nothing
+```
 
 **On the fleet box** the NOC registers the minter as this agent's credential helper on every converge — in `~/.gitconfig`, scoped to `https://github.com` — so the recipe is just:
 
