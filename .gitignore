@@ -14,7 +14,9 @@ build/
 .coverage
 htmlcov/
 
-# Scratch spec fetches (drift-guard checks fetch the live spec to a temp file)
+# Scratch files. Added after a stray `.api.yaml.tmp` was left in the clone (#116);
+# that came from a manual spec fetch, not from the suite — the drift-guard holds
+# the spec in memory and writes nothing.
 *.tmp
 
 # OS
