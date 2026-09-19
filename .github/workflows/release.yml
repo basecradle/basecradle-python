@@ -1,4 +1,4 @@
-# The release pipeline: tag → build → TestPyPI rehearsal → human approval → PyPI.
+# The release pipeline: tag → build → TestPyPI rehearsal → pypi env-gate → PyPI.
 #
 # Zero stored credentials: PyPI trusts this workflow via OIDC (Trusted Publishing).
 # The workflow filename and the environment names (testpypi, pypi) are contractual —
@@ -55,8 +55,10 @@ jobs:
         with:
           repository-url: https://test.pypi.org/legacy/
 
-  # The real publish. The pypi environment requires a human approval (Drawk) —
-  # the one place in this repository where a manual gate is correct.
+  # The real publish. The pypi environment gate is actuated by the capital using
+  # its operator credential — not by a founder, who is out of the publish loop
+  # (CLAUDE.md -> Releasing). So this is a deliberate gate, but not a human gate:
+  # nothing here waits on @origin, and it must never be announced as a human gate.
   publish-pypi:
     name: publish to PyPI
     runs-on: ubuntu-latest
