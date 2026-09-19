@@ -15,13 +15,19 @@ The pipeline (`.github/workflows/release.yml`): pushing a `v*` tag → build →
 
 1. **Release PR** (the captain's part): bump `src/basecradle/_version.py` from `X.Y.Z.dev0` to `X.Y.Z` and add the `CHANGELOG.md` entry (Keep a Changelog format). Merge on green CI. Do **not** put a closing keyword (`Closes #N`) on release PRs — see step 6.
 2. **Tag**: on main after the merge — `git tag vX.Y.Z && git push origin vX.Y.Z`. This triggers the release workflow.
-3. **Verify the rehearsal**: the TestPyPI publish is automatic. In a clean venv:
+3. **Verify the rehearsal**: the TestPyPI publish is automatic. Build the clean venv as a throwaway in your own `~/scratch`, and delete it the moment the check passes (see "Verification venvs" below):
+   `uv venv --seed --clear ~/scratch/verify-basecradle && source ~/scratch/verify-basecradle/bin/activate`
+   Both flags earn their place: `--seed` puts `pip` *in* the venv (without it the next line runs the ambient pip, or none at all), and `--clear` replaces whatever is at the slot (without it `uv venv` refuses and leaves a stale venv from a failed run in place — which the check would then silently reuse, and "clean venv" would be a lie). Then:
    `pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ basecradle==X.Y.Z`
    The extra index is required (httpx lives on real PyPI, not TestPyPI). Expect a minute or two of index-propagation lag — retry, don't panic.
 4. **The publish gate**: the workflow waits on the `pypi` environment. The capital approves it via its operator credential; the founder is out of the publish loop.
-5. **Verify the release**: clean venv, `pip install basecradle==X.Y.Z`, check import + `__version__` + both clients construct, and that https://pypi.org/project/basecradle/ renders. (The PyPI JSON API caches — pip resolving the new version is the real test.)
+5. **Verify the release**: a fresh throwaway venv in the same slot, built the same way, `pip install basecradle==X.Y.Z`, check import + `__version__` + both clients construct, and that https://pypi.org/project/basecradle/ renders. (The PyPI JSON API caches — pip resolving the new version is the real test.)
 6. **Close the release issue manually** with the verification record. Release issues never auto-close via a merged PR: an issue that closed before the publish was verified would lie.
 7. **Post-release version bump**: the first PR of the next cycle bumps `_version.py` to the next minor `.dev0` (after `0.2.0` ships, main becomes `0.3.0.dev0`) so dev builds are always distinguishable from releases.
+
+## Verification venvs
+
+Steps 3 and 5 each build a venv that is not the deliverable, so it gets a home and an end like anything else a release leaves behind (`CLAUDE.md` → "Whatever creates, cleans up"). The home is **one** fixed-name slot in the runner's own `~/scratch` — `~/scratch/verify-basecradle`, overwritten (`--clear`) every release. Deliberately no version in the path: a fresh name per run is the pattern that rule forbids, and it would let a step that died before its cleanup strand a `verify-v0.2.0` no later release ever reclaims. The end is `rm -rf ~/scratch/verify-basecradle` the moment that step's check passes — both venvs are gone before step 6 closes the release issue. The `~/scratch` sweeper (`CLAUDE.md` → Agent Home Storage) is the backstop, not the plan.
 
 ## Versioning facts
 
