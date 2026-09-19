@@ -14,10 +14,11 @@ build/
 .coverage
 htmlcov/
 
-# Scratch files. Added after a stray `.api.yaml.tmp` was left in the clone (#116);
-# that came from a manual spec fetch, not from the suite — the drift-guard holds
-# the spec in memory and writes nothing.
-*.tmp
+# No `*.tmp` rule, deliberately. Nothing here produces one (#167), and the stray that
+# prompted #116 came from a manual spec fetch into the clone — a thing this repo's
+# conventions now send to ~/scratch instead. Ignoring the class would only *hide* the
+# next stray; leaving it unignored makes it a finding in `git status`, which is what the
+# cleanup rule asks for (constitution.md → How We Build). Reverses #116; decided in #169.
 
 # OS
 .DS_Store
