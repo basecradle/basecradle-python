@@ -36,8 +36,10 @@ task can now be withdrawn before it activates, freeing the slot it held under th
   raised when the task has already activated, blocked, or been cancelled.
 - **`ConflictError`** — new base for HTTP 409 conflicts (parent of `TaskNotPendingError`).
 
-The platform also emits a new `task.cancelled` firehose event (actor = the canceller); webhook
-events are read generically, so no SDK change was needed to receive it.
+The platform also emits a new `task.cancelled` event through Event Delivery (actor = the
+canceller) — the platform's outbound push to a User's integration, which the SDK does not
+model, so no SDK change was needed. That is a separate feature from the inbound Webhook
+Events the SDK *does* model (`bc.webhook_events`), which are read generically.
 
 ## [0.7.0] - 2026-07-17
 
@@ -70,10 +72,10 @@ retry never duplicates a record.
   `.assets.create(...)`, `.tasks.create(...)`, and `.webhook_endpoints.create(...)` take an
   optional `idempotency_key`. When given, it is sent as the `Idempotency-Key` header; a replay
   of the same key returns the original record's envelope — no duplicate record, no duplicate
-  firehose event, no second task activation. A UUID is recommended (the platform treats the
-  value opaquely). Keys are scoped per timeline + author (per timeline for authorless webhook
-  endpoints). A key identifies one logical create — the same key with a different body returns
-  the first record. Awaitable on `AsyncBaseCradle`.
+  Event Delivery event, no second task activation. A UUID is recommended (the platform treats
+  the value opaquely). Keys are scoped per timeline + author (per timeline for authorless
+  webhook endpoints). A key identifies one logical create — the same key with a different body
+  returns the first record. Awaitable on `AsyncBaseCradle`.
 - **Opt-in automatic retry** — `BaseCradle(max_retries=N)` (and `AsyncBaseCradle`, `login`)
   re-sends a request that failed with a connection error or timeout, with exponential backoff.
   Off by default (`max_retries=0`). Only safe-to-replay requests are retried: a `GET`, or a
@@ -88,7 +90,7 @@ retry never duplicates a record.
 
 Tracks the platform's timeline-deletion capability
 ([basecradle/basecradle#315](https://github.com/basecradle/basecradle/pull/315)): timelines
-can now be permanently deleted, and the firehose gained a terminal `timeline.deleted` event.
+can now be permanently deleted, and Event Delivery gained a terminal `timeline.deleted` event.
 
 ### Added
 
@@ -97,11 +99,11 @@ can now be permanently deleted, and the firehose gained a terminal `timeline.del
   The delete cascades to all contents (messages, assets, tasks, webhook endpoints/events,
   participations), a **locked** timeline is still deletable (locking freezes content, not
   governance), and the call returns `None` on the API's `204 No Content`. Awaitable on
-  `AsyncBaseCradle`. The platform fires a terminal `timeline.deleted` firehose event to
-  everyone who was a viewer at deletion; its `resource` pointer 404s, so receivers stop
-  dereferencing it. (The SDK does not yet model the outbound firehose, so there is no
-  event-name surface to extend here — when one is added, `timeline.deleted` belongs in it,
-  treated as terminal.)
+  `AsyncBaseCradle`. The platform sends a terminal `timeline.deleted` event through Event
+  Delivery to everyone who was a viewer at deletion; its `resource` pointer 404s, so receivers
+  stop dereferencing it. (The SDK does not yet model Event Delivery, so there is no event-name
+  surface to extend here — when one is added, `timeline.deleted` belongs in it, treated as
+  terminal.)
 
 ## [0.4.0] - 2026-06-10
 

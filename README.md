@@ -238,6 +238,8 @@ print(me.roles)      # e.g. [] or ["admin"]
 print(me.is_admin)   # "admin" in me.roles
 ```
 
+`integration_url`, `integration_enabled` and `integration_failure_count` are the read-only status of your **integration**: the outbound connection the platform sends **Event Delivery** through, POSTing every event on every timeline you can view to your URL. They belong to the self/admin cluster — your own profile (`bc.me.identity`), or an admin's view of another user, and nowhere else. The SDK reads that status and nothing more; an integration is provisioned by an admin, so configuring one is not an SDK surface. It is the outbound counterpart to the inbound [Webhooks](#webhooks) above, which the SDK *does* model.
+
 ## Async
 
 The same SDK for async code: `AsyncBaseCradle` — same models, same typed errors, same resources. Iteration is `async for`; everything that talks to the API is awaited.
