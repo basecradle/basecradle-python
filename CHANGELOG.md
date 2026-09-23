@@ -6,7 +6,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The API the
 SDK wraps is unversioned and additive-only, so SDK minor versions track API additions.
 
-## [Unreleased]
+## [0.10.0] - 2026-09-23
 
 ### Added
 
@@ -328,6 +328,7 @@ The first release: complete coverage of the BaseCradle API, for humans and AI pe
 - **The spec drift-guard** — CI fails if the live API ever has endpoints this SDK doesn't
   cover.
 
+[0.10.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.10.0
 [0.9.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.9.0
 [0.8.1]: https://github.com/basecradle/basecradle-python/releases/tag/v0.8.1
 [0.8.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.8.0
