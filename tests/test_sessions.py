@@ -1,10 +1,29 @@
-"""Sessions: a peer managing its own credentials — list, revoke, revoke-all, sign-out."""
+"""A peer managing its own credentials: list, revoke, revoke-all, sign out, change password."""
+
+import json as jsonlib
 
 import httpx
 import pytest
 
-from basecradle import NotFoundError, Session, SessionsResource, UnauthorizedError
-from tests.conftest import API_SESSION_UUID, WEB_SESSION_UUID, problem, session_payload
+from basecradle import (
+    CurrentPasswordIncorrectError,
+    NotFoundError,
+    PasswordConfirmationMismatchError,
+    Session,
+    SessionsResource,
+    UnauthorizedError,
+    ValidationError,
+)
+from tests.conftest import (
+    API_SESSION_UUID,
+    DASHBOARD_RESPONSE,
+    WEB_SESSION_UUID,
+    problem,
+    session_payload,
+)
+
+CURRENT = "correct-horse-battery-staple"
+NEW = "Tr0ub4dor&3-new"
 
 
 class TestListing:
@@ -177,6 +196,107 @@ class TestSignOut:
             bc.me
 
 
+class TestChangePassword:
+    """``bc.change_password()`` — the last self-credential a peer could not touch typed."""
+
+    def test_sends_all_three_fields_and_returns_none(self, bc, api):
+        route = api.patch("/users/password").respond(204)
+
+        result = bc.change_password(
+            current_password=CURRENT, password=NEW, password_confirmation=NEW
+        )
+
+        assert result is None
+        assert jsonlib.loads(route.calls.last.request.read()) == {
+            "current_password": CURRENT,
+            "password": NEW,
+            "password_confirmation": NEW,
+        }
+
+    def test_confirmation_defaults_to_the_new_password(self, bc, api):
+        """The API requires the field; handing one string to two arguments is not a check."""
+        route = api.patch("/users/password").respond(204)
+
+        bc.change_password(current_password=CURRENT, password=NEW)
+
+        assert jsonlib.loads(route.calls.last.request.read())["password_confirmation"] == NEW
+
+    def test_an_explicit_confirmation_is_sent_verbatim(self, bc, api):
+        """A caller with a real second entry keeps it — the platform, not the SDK, judges it."""
+        route = api.patch("/users/password").respond(
+            422, json=problem("password_confirmation_mismatch", 422)
+        )
+
+        with pytest.raises(PasswordConfirmationMismatchError):
+            bc.change_password(
+                current_password=CURRENT, password=NEW, password_confirmation="mistyped"
+            )
+
+        assert jsonlib.loads(route.calls.last.request.read())["password_confirmation"] == "mistyped"
+
+    def test_wrong_current_password_raises_typed(self, bc, api):
+        api.patch("/users/password").respond(
+            422,
+            json=problem(
+                "current_password_incorrect", 422, detail="The current password is incorrect."
+            ),
+        )
+
+        with pytest.raises(CurrentPasswordIncorrectError) as caught:
+            bc.change_password(current_password="wrong", password=NEW)
+
+        assert caught.value.code == "current_password_incorrect"
+        assert isinstance(caught.value, ValidationError)
+
+    def test_a_weak_new_password_raises_validation_error(self, bc, api):
+        """Strength rules are the platform's; the SDK sends what it is given."""
+        api.patch("/users/password").respond(
+            422, json=problem("validation_failed", 422, errors={"password": ["is too short"]})
+        )
+
+        with pytest.raises(ValidationError):
+            bc.change_password(current_password=CURRENT, password="short")
+
+    def test_arguments_are_keyword_only(self, bc, api):
+        """Three interchangeable strings must never be positional — a swap is silent.
+
+        ``api`` is requested even though nothing should be sent: if the guard regresses,
+        the call falls through to a real ``PATCH`` and respx must be there to catch it
+        rather than letting the suite reach basecradle.com.
+        """
+        with pytest.raises(TypeError):
+            bc.change_password(CURRENT, NEW)
+
+    def test_an_explicit_none_confirmation_is_refused(self, bc, api):
+        """``password_confirmation=form.get("confirm")`` with no box filled is a caller bug.
+
+        Falling back to ``password`` here would change the password with no confirmation at
+        all — precisely what a caller passing the argument was trying to guard against.
+        """
+        with pytest.raises(TypeError, match="Omit it entirely"):
+            bc.change_password(current_password=CURRENT, password=NEW, password_confirmation=None)
+
+    def test_the_verb_leaves_this_client_untouched(self, bc, api):
+        """Changing a password signs nothing out, so the SDK must not tear the client down.
+
+        The platform's half of that ("every session stays valid") is its own; what is
+        *this* SDK's to keep is the client — the token it holds, and the credential
+        ``login()`` recorded. A later "helpful" edit that signed out or cleared the token
+        after a password change would break the documented semantics, and fail here.
+        """
+        api.patch("/users/password").respond(204)
+        api.get("/users/dashboard").respond(200, json=DASHBOARD_RESPONSE)
+        token_before, session_before = bc.token, bc.session
+
+        bc.change_password(current_password=CURRENT, password=NEW)
+        next_call = bc.me
+
+        assert bc.token == token_before
+        assert bc.session is session_before
+        assert next_call.identity.handle  # the same client still works, same credential
+        assert api.calls.last.request.headers["Authorization"] == f"Bearer {token_before}"
+
+
 class TestDocumentation:
     """The dangerous semantics must be documented where a consumer will see them."""
 
@@ -197,6 +317,15 @@ class TestDocumentation:
         docstring = BaseCradle.sign_out.__doc__
         assert "AuthenticationError" in docstring
         assert "current" in docstring.lower()  # equals revoking your current session
+
+    def test_change_password_docstrings_say_it_signs_nothing_out(self):
+        """Both clients, or an async reader gets a stale claim from ``help()``."""
+        from basecradle import AsyncBaseCradle, BaseCradle
+
+        for cls in (BaseCradle, AsyncBaseCradle):
+            docstring = cls.change_password.__doc__
+            assert "signs nothing out" in docstring, f"{cls.__name__} lost the warning"
+            assert "revoke" in docstring  # points at what remediation actually is
 
     def test_readme_documents_both_sharp_edges(self):
         from pathlib import Path

@@ -217,6 +217,27 @@ Two sharp edges, by design — a peer is trusted with its own keys:
 - Revoking your **current** session is allowed (self-rotation). Afterward this client is dead — its next call raises `AuthenticationError`. Create a new client to keep going: `BaseCradle.login(...)`, or `BaseCradle(token=...)` with another saved token. `bc.sign_out()` is exactly this — signing out *is* revoking your current session.
 - `bc.sessions.revoke_all()` is the *"I leaked something, kill everything"* lever: it destroys **every** session **including the calling client's token**.
 
+### Changing your password
+
+The other credential an account holds is its password, and a peer rotates that itself too:
+
+```python
+from basecradle import BaseCradle
+
+bc = BaseCradle()
+
+bc.change_password(
+    current_password="correct-horse-battery-staple",
+    password="Tr0ub4dor&3-new",
+)
+```
+
+Holding the **current** password is what authorizes the change — the token alone is not enough, so a stolen token cannot lock an owner out of their own account. `password_confirmation` is optional: omit it and the new password confirms itself. The confirmation field exists to catch a human mistyping into a second box, and passing one string to two keyword arguments is not that check — so give it only when you *do* have a separate second entry, where a difference raises `PasswordConfirmationMismatchError` instead of going through. (Passing an explicit `None` raises `TypeError`: a second entry that was expected and never arrived is not a confirmation.) A wrong current password raises `CurrentPasswordIncorrectError`; a new password that fails the platform's strength rules raises `ValidationError`.
+
+A lost response leaves the outcome unknown — the request is not replayable, so `max_retries` never re-sends it, and a retry after an `APIConnectionError` may come back `CurrentPasswordIncorrectError` because the change did land. Settle that by signing in, not by guessing.
+
+**A password change signs nothing out.** Every session stays valid — this client's token, your other API tokens, and every web sign-in — so changing a password is *not* remediation for a leaked credential. Revoke it: `session.revoke()`, or `bc.sessions.revoke_all()`.
+
 ## Users & trust
 
 Trust is the platform's consent model: two peers can share a timeline only after **both** have trusted each other. You control your outgoing edge; they control theirs.

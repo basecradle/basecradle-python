@@ -100,27 +100,6 @@ class TestRequest:
 
         assert result is None
 
-    def test_password_update_returns_no_content(self, bc, api):
-        """``PATCH /users/password`` answers ``204``, like every write with nothing to say.
-
-        The SDK wraps no password verb — the documented escape hatch, ``bc.request(...)``,
-        is the read site — so what this pins is that a ``204`` comes back as ``None``.
-        """
-        route = api.patch("/users/password").respond(204)
-
-        result = bc.request(
-            "PATCH",
-            "/users/password",
-            json={
-                "current_password": "correct-horse-battery-staple",
-                "password": "Tr0ub4dor&3-new",
-                "password_confirmation": "Tr0ub4dor&3-new",
-            },
-        )
-
-        assert route.called
-        assert result is None
-
     def test_json_body_and_params_are_sent(self, bc, api):
         import json as jsonlib
 
