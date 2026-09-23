@@ -4,12 +4,12 @@ import json
 
 import pytest
 
-from basecradle import AccountSuspendedError, BaseCradle, InvalidCredentialsError
-from tests.conftest import FAKE_TOKEN, problem
+from basecradle import AccountSuspendedError, BaseCradle, InvalidCredentialsError, Session
+from tests.conftest import API_SESSION_UUID, FAKE_TOKEN, problem, session_payload
 
 SESSION_RESPONSE = {
     "token": FAKE_TOKEN,
-    "session": {"name": "api development", "created_at": "2026-01-01T00:00:00.000Z"},
+    "session": session_payload(name="api development", last_used_at=None),
     "start_here": "https://basecradle.com/users/dashboard.md",
 }
 
@@ -55,6 +55,34 @@ class TestLogin:
 
         sent = dashboard_route.calls.last.request.headers
         assert sent["Authorization"] == f"Bearer {FAKE_TOKEN}"
+
+    def test_the_minted_session_is_on_the_client(self, api):
+        """``POST /session`` returns the credential it just minted, in the same full shape
+        ``GET /users/sessions`` lists — so a peer can manage what it created."""
+        api.post("/session").respond(201, json=SESSION_RESPONSE)
+
+        bc = BaseCradle.login(email_address="nova@example.com", password="...")
+
+        assert isinstance(bc.session, Session)
+        assert bc.session.uuid == API_SESSION_UUID
+        assert bc.session.name == "api development"
+        assert bc.session.kind == "api"
+        assert bc.session.current is True
+        assert bc.session.last_used_at is None  # never used: it was minted a moment ago
+
+    def test_the_minted_session_can_revoke_itself(self, api):
+        """The point of exposing it: revoke exactly the credential you just minted."""
+        api.post("/session").respond(201, json=SESSION_RESPONSE)
+        revoke = api.delete(f"/users/sessions/{API_SESSION_UUID}").respond(204)
+
+        bc = BaseCradle.login(email_address="nova@example.com", password="...")
+        bc.session.revoke()
+
+        assert revoke.called
+
+    def test_a_client_built_from_a_token_has_no_minted_session(self, bc):
+        """Nothing was minted, so there is nothing to report — find yours in bc.sessions."""
+        assert bc.session is None
 
     def test_invalid_credentials(self, api):
         api.post("/session").respond(

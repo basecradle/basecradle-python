@@ -28,7 +28,8 @@ bc = BaseCradle(token="bc_uat_...")  # …or pass it explicitly
 ```
 
 No token yet? Mint one with your basecradle.com credentials. `login` hands back a
-ready-to-use client — the new token is on `bc.token`:
+ready-to-use client — the new token is on `bc.token`, and the credential it belongs to is
+on `bc.session`:
 
 ```python
 from basecradle import BaseCradle
@@ -40,6 +41,7 @@ bc = BaseCradle.login(
 )
 
 bc.token  # the minted token — shown once, never retrievable again. Save it.
+bc.session.uuid  # the credential you just minted, in full — bc.session.revoke() kills it
 ```
 
 Tokens never expire. Mint once, save it (a secrets manager, your shell profile,
@@ -104,6 +106,8 @@ for task in bc.tasks.filter(status="pending"):
     print(task.content.instructions, task.content.activate_at)
 ```
 
+A timeline and everything on it — messages, assets, tasks, webhook endpoints, webhook events — carries `created_at` **and** `updated_at`. `updated_at` moves when the record changes — a task's `status`, an endpoint's description or ingest URL — so you can tell a refreshed record from a stale one without diffing it. Inside `timeline.items` the one difference is `created_at`: there it is the *item's*, the moment the record landed on the timeline (for a task, when it activated), while `updated_at` is still the record's own. (A session is the exception — it is a credential, so it dates with `created_at` and `last_used_at`.)
+
 Asset upload is multipart and takes a path or a file object; tasks accept a `datetime` for `activate_at`:
 
 ```python
@@ -141,6 +145,7 @@ timeline = bc.timelines.create(name="Incident response")
 
 endpoint = timeline.webhook_endpoints.create(description="CI notifications")
 print(endpoint.content.ingest_url)  # give this to the external sender
+print(endpoint.user.handle)  # the endpoint's author — the peer who created it
 
 endpoint.disable()  # pause deliveries (410 to senders) without losing history
 endpoint.enable()  # resume
@@ -149,11 +154,13 @@ endpoint.rotate()  # leaked URL? new ingest_url, old one dies, uuid unchanged
 # Read what came in — across all timelines, or narrowed
 for event in bc.webhook_events.filter(endpoint=endpoint):
     print(event.content.content_type, event.content.payload)
+    print(event.content.verified_at_receipt)  # was its signature verified on arrival?
+    print(event.webhook_endpoint.content.ingest_url)  # where the endpoint is *now*
 ```
 
-**An event's endpoint is changing shape — this release reads both.** `event.webhook_endpoint` is the endpoint a delivery arrived on. The platform is replacing the bare reference it sends today (`event.webhook_endpoint.uuid`) with the endpoint's full form, moving the identity to `event.webhook_endpoint.content.uuid` and making the endpoint's verbs reachable straight off the event (`event.webhook_endpoint.rotate()`) — [basecradle/basecradle#585](https://github.com/basecradle/basecradle/issues/585). This release reads whichever the server sends, so upgrade *before* the platform deploys; a later release drops the reference fallback. Either shape works as a `bc.webhook_events.filter(endpoint=...)` value.
+**An event embeds its endpoint in full** — the API's one deliberate exception to "a record references its container", because a reader of an event almost always wants the endpoint next. So `event.webhook_endpoint` is a whole `WebhookEndpoint`: its identity is `event.webhook_endpoint.content.uuid`, its verbs work straight off the event (`event.webhook_endpoint.rotate()`), and it is a `bc.webhook_events.filter(endpoint=...)` value as it stands. Everything inside it is the endpoint's state **now**. The event's only *historical* facts are the two in its own `content`: `ingest_token_at_receipt` (which — possibly since-rotated — URL the delivery came in on) and `verified_at_receipt` (whether its signature checked out when it arrived).
 
-The same change lands on timeline items: a `webhook_event` row of `timeline.items` embeds the full endpoint and **loses its `user`** — an inbound delivery has no author, and the timeline owner it used to carry there was a placeholder, never a fact. Branch on `item.type` before reading `item.user`.
+**An endpoint has an author; an event does not.** `endpoint.user` is the peer who created the endpoint, and every delivery there inherits that author — but the event itself carries no `user`, because an inbound delivery came from an external sender, not a peer. The same goes for a `webhook_event` row of `timeline.items`: branch on `item.type` before reading `item.user`, and reach the author at `item.webhook_endpoint.user`.
 
 ## Idempotent creates and automatic retries
 
@@ -202,6 +209,8 @@ from basecradle import BaseCradle
 bc = BaseCradle()
 bc.sign_out()  # DELETE /session: this client's token stops working instantly
 ```
+
+`BaseCradle.login(...)` hands back the credential it just minted on `bc.session`, so a peer can revoke exactly what it created — `bc.session.revoke()` — without hunting through the list. A client built from a token you already had has nothing to report there (`bc.session` is `None`); that credential is the row in `bc.sessions` with `current` set.
 
 Two sharp edges, by design — a peer is trusted with its own keys:
 

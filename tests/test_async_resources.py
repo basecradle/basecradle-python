@@ -105,23 +105,17 @@ class TestAsyncTimelines:
         assert timeline.name == "Incident response"
         assert timeline.items == []
 
-    @pytest.mark.parametrize("enveloped", [False, True], ids=["stub", "enveloped"])
-    async def test_lock_is_awaited_and_updates_live_object(self, abc, api, timeline, enveloped):
-        """Both lock wire shapes (basecradle#585) read the same way through the async client."""
-        api.post(f"/timelines/{TIMELINE_UUID}/lock").respond(
-            200, json=lock_response(enveloped=enveloped)
-        )
+    async def test_lock_is_awaited_and_updates_live_object(self, abc, api, timeline):
+        api.post(f"/timelines/{TIMELINE_UUID}/lock").respond(200, json=lock_response())
 
         assert timeline.locked is False
         await timeline.lock()
 
         assert timeline.locked is True
 
-    @pytest.mark.parametrize("enveloped", [False, True], ids=["bare", "enveloped"])
-    async def test_add_participant_awaited(self, abc, api, timeline, enveloped):
-        """Both participation wire shapes (basecradle#585) read the same way, async."""
+    async def test_add_participant_awaited(self, abc, api, timeline):
         route = api.post(f"/timelines/{TIMELINE_UUID}/participations").respond(
-            201, json=participation_response(enveloped=enveloped)
+            201, json=participation_response()
         )
 
         added = await timeline.add_participant(NOVA["uuid"])
@@ -347,32 +341,23 @@ class TestAsyncWebhooks:
         assert route.called
         assert all(isinstance(e, WebhookEvent) for e in events)
 
-    @pytest.mark.parametrize("embed_endpoint", [False, True], ids=["reference", "embedded"])
-    async def test_event_endpoint_reads_in_both_shapes(self, abc, api, embed_endpoint):
-        """Both ``webhook_endpoint`` wire shapes (basecradle#585) read the same way, async."""
+    async def test_event_embeds_its_endpoint_in_full(self, abc, api):
         api.get("/webhook_events").respond(
             200,
-            json={
-                "webhook_events": [webhook_event_payload(embed_endpoint=embed_endpoint)],
-                "next_cursor": None,
-            },
+            json={"webhook_events": [webhook_event_payload()], "next_cursor": None},
         )
 
         (event,) = await alist(abc.webhook_events)
 
         assert isinstance(event.webhook_endpoint, WebhookEndpoint)
-        uuid = (
-            event.webhook_endpoint.content.uuid if embed_endpoint else event.webhook_endpoint.uuid
-        )
-        assert uuid == WEBHOOK_ENDPOINT_UUID
+        assert event.webhook_endpoint.content.uuid == WEBHOOK_ENDPOINT_UUID
+        assert event.webhook_endpoint.user.handle == "john"
+        assert event.content.verified_at_receipt is False
 
     async def test_embedded_endpoint_verbs_are_awaited(self, abc, api):
         api.get("/webhook_events").respond(
             200,
-            json={
-                "webhook_events": [webhook_event_payload(embed_endpoint=True)],
-                "next_cursor": None,
-            },
+            json={"webhook_events": [webhook_event_payload()], "next_cursor": None},
         )
         rotation = api.post(f"/webhook_endpoints/{WEBHOOK_ENDPOINT_UUID}/rotation").respond(
             200,

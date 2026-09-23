@@ -9,12 +9,14 @@ from basecradle import (
     ForbiddenError,
     NotFoundError,
     TimelineLockedError,
+    User,
     ValidationError,
     WebhookEndpoint,
     WebhookEvent,
     WebhookVerification,
 )
 from tests.conftest import (
+    NOVA,
     TIMELINE_UUID,
     WEBHOOK_ENDPOINT_UUID,
     WEBHOOK_EVENT_UUID,
@@ -193,16 +195,18 @@ class TestEndpointCreate:
 
         assert exc_info.value.errors == {"description": ["can't be blank"]}
 
-    def test_endpoints_have_no_user(self, bc, api, timeline):
-        """Endpoints belong to the timeline, not a user — no user block, by design."""
+    def test_endpoint_carries_its_author(self, bc, api, timeline):
+        """An endpoint is authored: ``user`` is the peer who created it, nested-actor form."""
         api.post(f"/timelines/{TIMELINE_UUID}/webhook_endpoints").respond(
-            201, json={"webhook_endpoint": webhook_endpoint_payload()}
+            201, json={"webhook_endpoint": webhook_endpoint_payload(user=NOVA)}
         )
 
         endpoint = timeline.webhook_endpoints.create(description="CI deploys")
 
-        with pytest.raises(AttributeError):
-            endpoint.user
+        assert isinstance(endpoint.user, User)
+        assert endpoint.user.handle == "nova"
+        assert endpoint.user.kind == "ai"
+        assert endpoint.updated_at == "2026-01-02T00:00:00.000Z"
 
 
 class TestEndpointsResource:
@@ -298,17 +302,33 @@ class TestEventsResource:
         assert event.content.payload == '{"status":"ok"}'
         assert event.content.headers == {"HTTP_X_EXAMPLE_EVENT": "ping"}
         assert event.content.ingest_token_at_receipt == "019e7750-66ee-705a-803c-b25c5ee9b1f3"
+        assert event.updated_at == "2026-01-02T00:00:00.000Z"
 
-    def test_event_carries_both_references(self, bc, api):
-        """The legacy shape: ``webhook_endpoint`` is a lone uuid, like ``timeline``."""
+    @pytest.mark.parametrize("verified", [False, True])
+    def test_verified_at_receipt_is_the_deliverys_own_historical_fact(self, bc, api, verified):
+        """Whether *this* delivery's signature checked out when it arrived.
+
+        It is fixed at receipt, unlike the embedded endpoint's ``verification`` block,
+        which reports the endpoint's requirements *now*.
+        """
+        api.get(f"/webhook_events/{WEBHOOK_EVENT_UUID}").respond(
+            200, json={"webhook_event": webhook_event_payload(verified_at_receipt=verified)}
+        )
+
+        event = bc.webhook_events.get(WEBHOOK_EVENT_UUID)
+
+        assert event.content.verified_at_receipt is verified
+        assert event.webhook_endpoint.content.verification.enabled is False  # current, not past
+
+    def test_event_references_its_timeline_and_embeds_its_endpoint(self, bc, api):
         api.get(f"/webhook_events/{WEBHOOK_EVENT_UUID}").respond(
             200, json={"webhook_event": webhook_event_payload()}
         )
 
         event = bc.webhook_events.get(WEBHOOK_EVENT_UUID)
 
-        assert event.webhook_endpoint.uuid == WEBHOOK_ENDPOINT_UUID
         assert event.timeline.uuid == TIMELINE_UUID
+        assert event.webhook_endpoint.content.uuid == WEBHOOK_ENDPOINT_UUID
 
     def test_events_have_no_user(self, bc, api):
         api.get(f"/webhook_events/{WEBHOOK_EVENT_UUID}").respond(
@@ -368,16 +388,15 @@ class TestEventsResource:
 
 
 class TestEventEndpointEmbed:
-    """The event's ``webhook_endpoint`` reads in both wire shapes (basecradle#585).
+    """An event embeds its endpoint in full — the API's one exception to the direction rule.
 
-    The platform is replacing the reference (``{uuid}``) with the endpoint's full subject
-    form, moving the uuid to ``webhook_endpoint.content.uuid``. The SDK must read whichever
-    the server sends, so the SDK can ship before the platform deploys.
+    A reader of an event almost always wants the endpoint's *current* ingest URL and state
+    next, so the whole endpoint rides along rather than a uuid to dereference.
     """
 
     def test_embedded_endpoint_is_a_full_endpoint_object(self, bc, api):
         api.get(f"/webhook_events/{WEBHOOK_EVENT_UUID}").respond(
-            200, json={"webhook_event": webhook_event_payload(embed_endpoint=True)}
+            200, json={"webhook_event": webhook_event_payload()}
         )
 
         event = bc.webhook_events.get(WEBHOOK_EVENT_UUID)
@@ -388,21 +407,19 @@ class TestEventEndpointEmbed:
         assert isinstance(event.webhook_endpoint.content.verification, WebhookVerification)
         assert event.webhook_endpoint.timeline.uuid == TIMELINE_UUID
 
-    def test_reference_shaped_endpoint_still_reads(self, bc, api):
+    def test_the_embedded_endpoint_carries_its_author(self, bc, api):
+        """An event has no author of its own; the endpoint it arrived on does."""
         api.get(f"/webhook_events/{WEBHOOK_EVENT_UUID}").respond(
             200, json={"webhook_event": webhook_event_payload()}
         )
 
         event = bc.webhook_events.get(WEBHOOK_EVENT_UUID)
 
-        assert isinstance(event.webhook_endpoint, WebhookEndpoint)
-        assert event.webhook_endpoint.uuid == WEBHOOK_ENDPOINT_UUID
-        with pytest.raises(AttributeError):  # a reference carries no content, hence no verbs
-            event.webhook_endpoint.content
+        assert event.webhook_endpoint.user.handle == "john"
 
     def test_endpoint_verbs_are_reachable_from_the_embed(self, bc, api):
         api.get(f"/webhook_events/{WEBHOOK_EVENT_UUID}").respond(
-            200, json={"webhook_event": webhook_event_payload(embed_endpoint=True)}
+            200, json={"webhook_event": webhook_event_payload()}
         )
         rotation = api.post(f"/webhook_endpoints/{WEBHOOK_ENDPOINT_UUID}/rotation").respond(
             200,
@@ -415,10 +432,9 @@ class TestEventEndpointEmbed:
         assert rotation.called
         assert event.webhook_endpoint.content.ingest_url == ROTATED_INGEST_URL
 
-    @pytest.mark.parametrize("embed_endpoint", [False, True])
-    def test_either_shape_is_a_filter_value(self, bc, api, embed_endpoint):
+    def test_the_embedded_endpoint_is_a_filter_value(self, bc, api):
         api.get(f"/webhook_events/{WEBHOOK_EVENT_UUID}").respond(
-            200, json={"webhook_event": webhook_event_payload(embed_endpoint=embed_endpoint)}
+            200, json={"webhook_event": webhook_event_payload()}
         )
         route = api.get("/webhook_events", params={"endpoint": WEBHOOK_ENDPOINT_UUID}).respond(
             200, json={"webhook_events": [], "next_cursor": None}

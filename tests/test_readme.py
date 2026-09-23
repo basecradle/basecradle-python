@@ -16,10 +16,11 @@ from tests.conftest import (
     DASHBOARD_RESPONSE,
     FAKE_TOKEN,
     NOVA,
-    TIMELINE_UUID,
     asset_payload,
     directory_user_payload,
+    lock_response,
     message_payload,
+    participation_response,
     session_payload,
     task_payload,
     timeline_payload,
@@ -64,7 +65,7 @@ class TestReadmeExamples:
                 201,
                 json={
                     "token": FAKE_TOKEN,
-                    "session": {"name": "Test from Python"},
+                    "session": session_payload(name="Test from Python"),
                     "start_here": "https://basecradle.com/users/dashboard.md",
                 },
             )
@@ -75,10 +76,10 @@ class TestReadmeExamples:
             router.post("/timelines").respond(
                 201, json={"timeline": timeline_payload(participants=[]), "items": []}
             )
-            router.post(path__regex=r"/timelines/.+/participations$").respond(201, json=NOVA)
-            router.post(path__regex=r"/timelines/.+/lock$").respond(
-                200, json={"uuid": TIMELINE_UUID, "locked": True}
+            router.post(path__regex=r"/timelines/.+/participations$").respond(
+                201, json=participation_response(user=NOVA)
             )
+            router.post(path__regex=r"/timelines/.+/lock$").respond(200, json=lock_response())
             router.delete(path__regex=r"/timelines/[^/]+$").respond(204)
             router.post(path__regex=r"/timelines/.+/messages$").respond(
                 201, json={"message": message_payload()}

@@ -16,23 +16,21 @@ from basecradle import (
     WebhookEndpoint,
 )
 from tests.conftest import (
-    JOHN,
     NOVA,
     TIMELINE_UUID,
     WEBHOOK_ENDPOINT_UUID,
     lock_response,
+    message_payload,
     participation_response,
     problem,
     timeline_payload,
-    webhook_event_item_payload,
+    webhook_event_payload,
 )
 
-MESSAGE_ITEM = {
-    "type": "message",
-    "created_at": "2026-01-02T00:00:00.000Z",
-    "user": JOHN,
-    "content": {"uuid": "019e7750-66ee-7c4f-bcdc-7c5d2eddc662", "body": "Hello from a peer."},
-}
+# One shape per record, everywhere it appears: an inline item *is* the record's own form
+# (only ``created_at`` differs — when it landed on the timeline), so the item fixtures are
+# the record fixtures.
+MESSAGE_ITEM = message_payload()
 
 
 class TestIteration:
@@ -127,18 +125,33 @@ class TestGet:
         assert item.user.handle == "john"
         assert item.content.body == "Hello from a peer."
 
-    def test_webhook_event_item_without_a_user_still_reads(self, bc, api):
-        """A ``webhook_event`` item has no author (basecradle#585) — and must not break.
+    def test_every_item_carries_its_own_timeline_reference_and_updated_at(self, bc, api):
+        """An item is the record's own form: it points back at its container, and dates."""
+        api.get(f"/timelines/{TIMELINE_UUID}").respond(
+            200,
+            json={
+                "timeline": timeline_payload(),
+                "items": [MESSAGE_ITEM, webhook_event_payload()],
+            },
+        )
 
-        The platform drops the timeline-owner placeholder it used to stuff into these
-        items. Every other item keeps ``user``; only this one loses it, and reading it
-        raises rather than inventing a value.
+        message_item, event_item = bc.timelines.get(TIMELINE_UUID).items
+
+        for item in (message_item, event_item):
+            assert item.timeline.uuid == TIMELINE_UUID
+            assert item.updated_at == "2026-01-02T00:00:00.000Z"
+
+    def test_webhook_event_item_has_no_user(self, bc, api):
+        """A ``webhook_event`` item has no author — an inbound delivery came from outside.
+
+        Every other item keeps ``user``; only this one has none, and reading it raises
+        rather than inventing a value. The delivery's *endpoint* does have an author.
         """
         api.get(f"/timelines/{TIMELINE_UUID}").respond(
             200,
             json={
                 "timeline": timeline_payload(),
-                "items": [webhook_event_item_payload(embed_endpoint=True), MESSAGE_ITEM],
+                "items": [webhook_event_payload(), MESSAGE_ITEM],
             },
         )
 
@@ -150,37 +163,19 @@ class TestGet:
             event_item.user
         assert "user" in str(exc_info.value)
         assert message_item.user.handle == "john"  # every other item keeps its author
+        assert event_item.webhook_endpoint.user.handle == "john"  # the endpoint has one
 
-    @pytest.mark.parametrize("embed_endpoint", [False, True], ids=["reference", "embedded"])
-    def test_webhook_event_item_endpoint_reads_in_both_shapes(self, bc, api, embed_endpoint):
+    def test_webhook_event_item_embeds_its_endpoint_in_full(self, bc, api):
         api.get(f"/timelines/{TIMELINE_UUID}").respond(
             200,
-            json={
-                "timeline": timeline_payload(),
-                "items": [webhook_event_item_payload(embed_endpoint=embed_endpoint)],
-            },
+            json={"timeline": timeline_payload(), "items": [webhook_event_payload()]},
         )
 
         (item,) = bc.timelines.get(TIMELINE_UUID).items
 
         assert isinstance(item.webhook_endpoint, WebhookEndpoint)
-        uuid = item.webhook_endpoint.content.uuid if embed_endpoint else item.webhook_endpoint.uuid
-        assert uuid == WEBHOOK_ENDPOINT_UUID
-
-    def test_legacy_webhook_event_item_still_carries_its_placeholder_user(self, bc, api):
-        """Before the platform deploys, the item still has the owner placeholder."""
-        api.get(f"/timelines/{TIMELINE_UUID}").respond(
-            200,
-            json={
-                "timeline": timeline_payload(),
-                "items": [webhook_event_item_payload(user=JOHN)],
-            },
-        )
-
-        (item,) = bc.timelines.get(TIMELINE_UUID).items
-
-        assert isinstance(item.user, User)
-        assert item.user.handle == "john"
+        assert item.webhook_endpoint.content.uuid == WEBHOOK_ENDPOINT_UUID
+        assert item.webhook_endpoint.content.ingest_url.startswith("https://basecradle.com/")
 
     def test_get_as_non_viewer_raises_forbidden(self, bc, api):
         api.get(f"/timelines/{TIMELINE_UUID}").respond(403, json=problem("not_a_viewer", 403))
@@ -196,20 +191,11 @@ class TestGet:
 
 
 class TestLock:
-    @pytest.mark.parametrize("enveloped", [False, True], ids=["stub", "enveloped"])
-    def test_lock_posts_and_updates_local_state(self, bc, api, enveloped):
-        """``locked`` is read from either wire shape (basecradle#585).
-
-        The platform is replacing the bare ``{uuid, locked}`` stub with the full timeline
-        enveloped under ``timeline``; the SDK reads whichever the server sends, so it can
-        ship before the platform deploys.
-        """
+    def test_lock_posts_and_updates_local_state(self, bc, api):
         api.get(f"/timelines/{TIMELINE_UUID}").respond(
             200, json={"timeline": timeline_payload(locked=False), "items": []}
         )
-        lock_route = api.post(f"/timelines/{TIMELINE_UUID}/lock").respond(
-            200, json=lock_response(enveloped=enveloped)
-        )
+        lock_route = api.post(f"/timelines/{TIMELINE_UUID}/lock").respond(200, json=lock_response())
 
         timeline = bc.timelines.get(TIMELINE_UUID)
         assert timeline.locked is False
@@ -218,6 +204,36 @@ class TestLock:
 
         assert lock_route.called
         assert timeline.locked is True  # live object: updated from the API's response
+
+    def test_lock_adopts_the_whole_returned_timeline(self, bc, api):
+        """The response is the timeline in subject form — every field is adopted."""
+        api.get(f"/timelines/{TIMELINE_UUID}").respond(
+            200,
+            json={
+                "timeline": timeline_payload(locked=False, updated_at="2026-01-02T00:00:00.000Z"),
+                "items": [MESSAGE_ITEM],
+            },
+        )
+        api.post(f"/timelines/{TIMELINE_UUID}/lock").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "timeline": timeline_payload(
+                        locked=True, name="Renamed", updated_at="2026-01-03T00:00:00.000Z"
+                    )
+                },
+            )
+        )
+
+        timeline = bc.timelines.get(TIMELINE_UUID)
+        timeline.lock()
+
+        assert timeline.locked is True
+        assert timeline.name == "Renamed"
+        assert timeline.updated_at == "2026-01-03T00:00:00.000Z"
+        # ``items`` is the SDK's own key and the lock response does not speak to it —
+        # locking freezes content, so what was already read stays readable.
+        assert [item.type for item in timeline.items] == ["message"]
 
     def test_lock_is_idempotent(self, bc, api):
         api.get("/timelines").respond(
@@ -291,7 +307,9 @@ class TestAddParticipant:
         return bc.timelines.get(TIMELINE_UUID)
 
     def test_add_by_user_object(self, bc, api, timeline):
-        route = api.post(f"/timelines/{TIMELINE_UUID}/participations").respond(201, json=NOVA)
+        route = api.post(f"/timelines/{TIMELINE_UUID}/participations").respond(
+            201, json=participation_response()
+        )
 
         added = timeline.add_participant(User(NOVA))
 
@@ -300,22 +318,17 @@ class TestAddParticipant:
         assert added.handle == "nova"
 
     def test_add_by_uuid_string(self, bc, api, timeline):
-        route = api.post(f"/timelines/{TIMELINE_UUID}/participations").respond(201, json=NOVA)
+        route = api.post(f"/timelines/{TIMELINE_UUID}/participations").respond(
+            201, json=participation_response()
+        )
 
         timeline.add_participant(NOVA["uuid"])
 
         assert json.loads(route.calls.last.request.read()) == {"user_id": NOVA["uuid"]}
 
-    @pytest.mark.parametrize("enveloped", [False, True], ids=["bare", "enveloped"])
-    def test_add_appends_to_local_participants(self, bc, api, timeline, enveloped):
-        """The added user is read from either wire shape (basecradle#585).
-
-        The platform is replacing the bare nested-actor user with the subject form
-        enveloped under ``user`` (matching trust-create); the SDK reads whichever the
-        server sends, so it can ship before the platform deploys.
-        """
+    def test_add_appends_to_local_participants(self, bc, api, timeline):
         api.post(f"/timelines/{TIMELINE_UUID}/participations").respond(
-            201, json=participation_response(enveloped=enveloped)
+            201, json=participation_response()
         )
 
         assert timeline.participants == []
@@ -324,10 +337,10 @@ class TestAddParticipant:
         assert added.handle == "nova"
         assert [p.handle for p in timeline.participants] == ["nova"]
 
-    def test_enveloped_add_appends_the_user_not_the_envelope(self, bc, api, timeline):
-        """The envelope is unwrapped before it lands in ``participants`` — no nesting."""
+    def test_add_appends_the_user_not_the_envelope(self, bc, api, timeline):
+        """The ``{"user": ...}`` envelope is unwrapped before it lands — no nesting."""
         api.post(f"/timelines/{TIMELINE_UUID}/participations").respond(
-            201, json=participation_response(enveloped=True)
+            201, json=participation_response()
         )
 
         timeline.add_participant(NOVA["uuid"])
@@ -336,10 +349,9 @@ class TestAddParticipant:
         assert participant.uuid == NOVA["uuid"]
         assert participant.trust.mutual is True  # the subject form's own trust block
 
-    @pytest.mark.parametrize("enveloped", [False, True], ids=["bare", "enveloped"])
-    def test_idempotent_add_does_not_duplicate_locally(self, bc, api, timeline, enveloped):
+    def test_idempotent_add_does_not_duplicate_locally(self, bc, api, timeline):
         api.post(f"/timelines/{TIMELINE_UUID}/participations").respond(
-            201, json=participation_response(enveloped=enveloped)
+            201, json=participation_response()
         )
 
         timeline.add_participant(NOVA["uuid"])

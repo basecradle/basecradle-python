@@ -1,9 +1,9 @@
 """Timeline items — messages, assets, and tasks. Three resources, one pattern, two clients.
 
-Every item shares one envelope shape: ``type``, ``created_at``, ``user`` (nested-actor
-form), ``timeline`` (reference form — just a uuid to dereference), and a type-specific
-``content``. Each has a nested creator (``timeline.messages.create(...)``) and a
-top-level, cross-timeline list + get (``bc.messages``, ``bc.messages.get(uuid)``).
+Every item shares one envelope shape: ``type``, ``created_at``, ``updated_at``, ``user``
+(nested-actor form), ``timeline`` (reference form — just a uuid to dereference), and a
+type-specific ``content``. Each has a nested creator (``timeline.messages.create(...)``)
+and a top-level, cross-timeline list + get (``bc.messages``, ``bc.messages.get(uuid)``).
 
 Filterable lists use ``.filter(...)`` — the one idiom, everywhere: it returns a new lazy
 iterable resource; filters compose; values may be model objects or uuid strings.
@@ -57,11 +57,14 @@ class Item(ApiObject):
     """The envelope shape every timeline item shares.
 
     ``timeline`` is in reference form (just a uuid) — dereference it with
-    ``bc.timelines.get(item.timeline.uuid)`` when you need the detail.
+    ``bc.timelines.get(item.timeline.uuid)`` when you need the detail. ``created_at`` is
+    when the record was made; ``updated_at`` moves when it changes (a task's status, say),
+    so you can tell a refreshed record from a stale one without diffing it.
     """
 
     type: str  # "message" | "asset" | "task"
     created_at: str
+    updated_at: str
     user: User
     timeline: ApiObject
 

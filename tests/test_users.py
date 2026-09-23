@@ -9,6 +9,7 @@ from tests.conftest import (
     NOVA,
     TIMELINE_UUID,
     directory_user_payload,
+    participation_response,
     problem,
     timeline_payload,
     trusted_peer_user_payload,
@@ -302,7 +303,9 @@ class TestTheHandshake:
         api.post("/timelines").respond(
             201, json={"timeline": timeline_payload(participants=[]), "items": []}
         )
-        api.post(f"/timelines/{TIMELINE_UUID}/participations").respond(201, json=NOVA)
+        api.post(f"/timelines/{TIMELINE_UUID}/participations").respond(
+            201, json=participation_response(user=NOVA)
+        )
 
         # 1. Find Nova in the directory — she already trusts us, we don't trust her yet.
         (nova,) = bc.users

@@ -204,6 +204,13 @@ class TestSharedCore:
         async_binding = AsyncMessagesResource.__mro__[1]
         assert sync_binding is async_binding  # literally the same class
 
+    def test_the_login_tail_is_shared(self):
+        """One code path builds the post-mint client: token, start_here, and session."""
+        from basecradle._client import _ClientCore
+
+        for cls in (BaseCradle, AsyncBaseCradle):
+            assert cls._client_from_login.__func__ is _ClientCore._client_from_login.__func__
+
     def test_error_mapping_is_shared(self):
         """Both clients raise from the same exception factory."""
         from basecradle._client import _ClientCore
