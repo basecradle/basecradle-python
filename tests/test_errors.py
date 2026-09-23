@@ -107,10 +107,11 @@ class TestValidationErrors:
 
     def test_errors_default_to_empty_dict(self, bc, api):
         # current_password_incorrect is a 422 without a per-attribute errors map.
-        api.post("/users/password").respond(422, json=problem("current_password_incorrect", 422))
+        # PATCH, not POST: that is the only method the live spec gives /users/password.
+        api.patch("/users/password").respond(422, json=problem("current_password_incorrect", 422))
 
         with pytest.raises(CurrentPasswordIncorrectError) as exc_info:
-            bc.request("POST", "/users/password", json={})
+            bc.request("PATCH", "/users/password", json={})
 
         assert exc_info.value.errors == {}
 
