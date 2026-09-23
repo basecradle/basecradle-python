@@ -28,6 +28,9 @@ COVERAGE: dict[tuple[str, str], str] = {
     # Authentication
     ("POST", "/session"): "BaseCradle.login()",
     ("DELETE", "/session"): "bc.sign_out()",
+    # Changing your own password has no typed verb; the escape hatch every resource is
+    # built on covers it, and a 204 reads back as None. Whether it earns one: issue #189.
+    ("PATCH", "/users/password"): "bc.request('PATCH', '/users/password', ...) — escape hatch",
     # Dashboard — self-discovery
     ("GET", "/users/dashboard"): "bc.me",
     # Timelines
@@ -228,6 +231,7 @@ class TestCoverageMapHonesty:
 
         assert hasattr(BaseCradle, "login")
         assert hasattr(BaseCradle, "sign_out")
+        assert hasattr(BaseCradle, "request")  # the escape hatch PATCH /users/password uses
         assert hasattr(type(bc), "me")
         for resource in (
             "timelines",

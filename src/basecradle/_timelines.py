@@ -28,36 +28,29 @@ from basecradle._webhooks import (
 __all__ = ["AsyncTimelinesResource", "Timeline", "TimelineItem", "TimelinesResource"]
 
 
-def _unwrap(response: dict[str, Any], key: str) -> dict[str, Any]:
-    """The response body under ``key``, or the body itself when it is not enveloped.
-
-    Two verb responses are mid-migration to the platform's "a toggle returns the thing it
-    toggled, enveloped" rule (`basecradle/basecradle#585 <https://github.com/basecradle/
-    basecradle/issues/585>`_). Reading both shapes keeps the SDK correct on either side of
-    that deploy; the fallback goes away once it has landed.
-    """
-    return response.get(key, response)
-
-
 class TimelineItem(ApiObject):
     """One item on a timeline — a message, asset, webhook event, or task.
 
     ``type`` says which; ``content`` is the item itself, wire-exact (for a message:
-    ``uuid`` and ``body``). ``user`` is the author in nested-actor form.
+    ``uuid`` and ``body``). ``user`` is the author in nested-actor form. An item is the
+    record's own form, with one difference: ``created_at`` is the **item's** — when the
+    record landed on the timeline (for a task, when it activated) — while ``updated_at``
+    is the record's own.
 
     **A ``webhook_event`` item has no author**, so it carries no ``user`` — an inbound
     delivery came from an external sender, not a peer. Branch on ``type`` before reading
     ``user``, or it raises ``AttributeError`` on those items. What a webhook-event item
-    carries instead is ``webhook_endpoint``: the endpoint the delivery arrived on
-    (see ``WebhookEvent`` — the same embed, and the same legacy reference form during the
-    `basecradle/basecradle#585 <https://github.com/basecradle/basecradle/issues/585>`_
-    window).
+    carries instead is ``webhook_endpoint``: the endpoint the delivery arrived on, embedded
+    in full (see ``WebhookEvent``), whose own author is at
+    ``item.webhook_endpoint.user``.
     """
 
     type: str  # "message" | "asset" | "webhook_event" | "task"
-    created_at: str
+    created_at: str  # the item's: when the record landed on the timeline
+    updated_at: str  # the record's own
     user: User  # absent on webhook_event items — a delivery has no author
-    webhook_endpoint: WebhookEndpoint  # webhook_event items only
+    timeline: ApiObject  # reference form — this item's own container
+    webhook_endpoint: WebhookEndpoint  # webhook_event items only, embedded in full
     content: ApiObject
 
 
@@ -168,23 +161,21 @@ class Timeline(ApiObject):
     # -- live-object state updates (what the API confirmed) --
 
     def _apply_lock(self, response: dict[str, Any]) -> None:
-        """Adopt the confirmed lock state, from either wire shape.
+        """Live-object update: the API returned the whole timeline; adopt it.
 
-        The platform is moving this response from the bare ``{uuid, locked}`` stub to the
-        enveloped full timeline (`basecradle/basecradle#585 <https://github.com/basecradle/
-        basecradle/issues/585>`_). Read ``locked`` out of the envelope when it is there,
-        out of the stub when it is not.
+        Merged rather than replaced, because ``items`` is the SDK's own key — the two-key
+        ``{"timeline": ..., "items": ...}`` envelope flattened at fetch time — and a lock
+        response carries only the timeline subject. Locking freezes content; it does not
+        change what is already on the timeline, so the items read earlier stay true.
         """
-        self._data["locked"] = _unwrap(response, "timeline")["locked"]
+        self._data.update(response["timeline"])
 
     def _apply_added_participant(self, response: dict[str, Any]) -> User:
-        """Append the confirmed participant, from either wire shape.
+        """Append the confirmed participant — the API returns them in subject form.
 
-        The platform is moving this response from the bare nested-actor user to the
-        enveloped subject form (``{"user": {...}}``, as trust-create already returns) —
-        `basecradle/basecradle#585 <https://github.com/basecradle/basecradle/issues/585>`_.
+        The envelope is unwrapped first, so ``participants`` holds users, not envelopes.
         """
-        user = _unwrap(response, "user")
+        user = response["user"]
         added = User(user, client=self._client)
         participants = self._data.setdefault("participants", [])
         if not any(existing["uuid"] == added.uuid for existing in participants):

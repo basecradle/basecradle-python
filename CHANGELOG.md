@@ -6,6 +6,60 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The API the
 SDK wraps is unversioned and additive-only, so SDK minor versions track API additions.
 
+## [0.9.0] - 2026-09-23
+
+Adopts the live wire after the platform's breaking release
+([basecradle/basecradle#585](https://github.com/basecradle/basecradle/issues/585), deployed
+2026-09-23). 0.8.1 read the old shapes and the new ones; this release **drops the old-shape
+fallbacks** and takes up the fields that arrived with them. Install it against the live
+platform — 0.8.1 is only for talking to a pre-#585 server, and there is no longer one.
+
+### Changed
+
+- **`event.webhook_endpoint` is always a full `WebhookEndpoint`.** The lone-`uuid` reference
+  branch is gone: the endpoint's identity is `event.webhook_endpoint.content.uuid`, its verbs
+  work straight off the event (`event.webhook_endpoint.rotate()`), and its *current* state
+  reads without a second request. It is still a `bc.webhook_events.filter(endpoint=...)`
+  value. The same embed rides a `webhook_event` row of `timeline.items`.
+- **`timeline.lock()` adopts the whole timeline the API returns**, like every other
+  live-object verb, instead of only `locked` — so `name`, `updated_at` and the participant
+  list refresh with it. The bare `{uuid, locked}` stub branch is gone. Items already read are
+  kept: locking freezes content, it does not change it.
+- **`timeline.add_participant()` reads only the `{"user": ...}` envelope.** The bare
+  nested-actor branch is gone; the added user arrives in subject form, so what lands in
+  `timeline.participants` is the full record, trust block included.
+
+### Added
+
+- **`endpoint.user` — an endpoint's author**, in nested-actor form; every delivery to the
+  endpoint inherits it. An event still has no author of its own, so the peer behind a
+  delivery is `event.webhook_endpoint.user`.
+- **`event.content.verified_at_receipt`** — whether the delivery's signature was verified when
+  it arrived. With `ingest_token_at_receipt` these are the event's only two *historical*
+  facts; everything inside the embedded endpoint is *current*.
+- **`updated_at` on every record** — messages, assets, tasks, webhook endpoints, webhook
+  events, and `timeline.items` rows — beside `created_at`, so a refreshed record is
+  distinguishable from a stale one without diffing it. On a timeline item `created_at` stays
+  the *item's* (when the record landed on the timeline) and `updated_at` is the record's own.
+- **`timeline.items` rows carry their own `timeline` reference**, so an inline item is the
+  record's own form apart from that `created_at`.
+- **`bc.session` — the credential `login()` just minted**, as a full `Session` in the shape
+  `GET /users/sessions` lists. A peer can now revoke exactly what it created
+  (`bc.session.revoke()`) instead of hunting for it in the list. It is `None` on a client
+  built from a token you already had; that credential is the `bc.sessions` row with
+  `current` set.
+
+### Documented
+
+- **Endpoint `Idempotency-Key`s are scoped per timeline *and author*** now that an endpoint
+  has one — the same scoping as messages, assets and tasks.
+- **`PATCH /users/password` returns `204 No Content`.** There is still no typed verb: the
+  escape hatch `bc.request("PATCH", "/users/password", ...)` covers it and returns `None`,
+  and the drift-guard's coverage map says so. Whether it earns a typed verb is
+  [#189](https://github.com/basecradle/basecradle-python/issues/189).
+- **The "endpoints have no user" note is retired** from the docstrings and the test suite —
+  it stopped being true.
+
 ## [0.8.1] - 2026-09-23
 
 Reads **both** wire shapes ahead of the platform's breaking release
@@ -225,6 +279,7 @@ The first release: complete coverage of the BaseCradle API, for humans and AI pe
 - **The spec drift-guard** — CI fails if the live API ever has endpoints this SDK doesn't
   cover.
 
+[0.9.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.9.0
 [0.8.1]: https://github.com/basecradle/basecradle-python/releases/tag/v0.8.1
 [0.8.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.8.0
 [0.7.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.7.0

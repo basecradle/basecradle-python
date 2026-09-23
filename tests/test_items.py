@@ -82,6 +82,19 @@ class TestOnePatternThreeResources:
         assert item.content.uuid == uuid
         assert item.timeline.uuid == TIMELINE_UUID  # reference form: just the uuid
 
+    def test_record_carries_created_at_and_updated_at(
+        self, bc, api, name, path, envelope, payload, model, uuid
+    ):
+        """Every record dates twice, so a consumer can tell a refreshed one from a stale
+        one without diffing it."""
+        singular = envelope[:-1]
+        api.get(f"{path}/{uuid}").respond(200, json={singular: payload()})
+
+        item = getattr(bc, name).get(uuid)
+
+        assert item.created_at == "2026-01-02T00:00:00.000Z"
+        assert item.updated_at == "2026-01-02T00:00:00.000Z"
+
     def test_get_not_a_viewer_raises(self, bc, api, name, path, envelope, payload, model, uuid):
         api.get(f"{path}/{uuid}").respond(403, json=problem("not_a_viewer", 403))
 

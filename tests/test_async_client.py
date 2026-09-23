@@ -19,13 +19,19 @@ from basecradle import (
     User,
     ValidationError,
 )
-from tests.conftest import DASHBOARD_RESPONSE, FAKE_TOKEN, problem
+from tests.conftest import (
+    API_SESSION_UUID,
+    DASHBOARD_RESPONSE,
+    FAKE_TOKEN,
+    problem,
+    session_payload,
+)
 
 pytestmark = pytest.mark.anyio
 
 SESSION_RESPONSE = {
     "token": FAKE_TOKEN,
-    "session": {"name": "api development", "created_at": "2026-01-01T00:00:00.000Z"},
+    "session": session_payload(name="api development", last_used_at=None),
     "start_here": "https://basecradle.com/users/dashboard.md",
 }
 
@@ -84,12 +90,23 @@ class TestLogin:
 
         assert client.token == FAKE_TOKEN
         assert client.start_here == "https://basecradle.com/users/dashboard.md"
+        assert client.session.uuid == API_SESSION_UUID  # the credential just minted
         sent = json.loads(route.calls.last.request.read())
         assert sent == {
             "email_address": "nova@example.com",
             "password": "correct-horse-battery-staple",
             "name": "nova",
         }
+        await client.aclose()
+
+    async def test_the_minted_session_revokes_awaited(self, api):
+        api.post("/session").respond(201, json=SESSION_RESPONSE)
+        revoke = api.delete(f"/users/sessions/{API_SESSION_UUID}").respond(204)
+
+        client = await AsyncBaseCradle.login(email_address="nova@example.com", password="...")
+        await client.session.revoke()
+
+        assert revoke.called
         await client.aclose()
 
     async def test_invalid_credentials(self, api):

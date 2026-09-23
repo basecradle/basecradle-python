@@ -100,24 +100,26 @@ class TestRequest:
 
         assert result is None
 
-    def test_password_update_succeeds_on_either_wire_shape(self, bc, api):
-        """``PATCH /users/password`` is moving from ``200`` + prose to ``204`` (basecradle#585).
+    def test_password_update_returns_no_content(self, bc, api):
+        """``PATCH /users/password`` answers ``204``, like every write with nothing to say.
 
-        The SDK wraps no password verb, so the escape hatch is the read site: any 2xx is
-        success, whichever body the platform sends.
+        The SDK wraps no password verb — the documented escape hatch, ``bc.request(...)``,
+        is the read site — so what this pins is that a ``204`` comes back as ``None``.
         """
-        api.patch("/users/password").mock(
-            side_effect=[
-                httpx.Response(200, json={"message": "Password updated successfully"}),
-                httpx.Response(204),
-            ]
+        route = api.patch("/users/password").respond(204)
+
+        result = bc.request(
+            "PATCH",
+            "/users/password",
+            json={
+                "current_password": "correct-horse-battery-staple",
+                "password": "Tr0ub4dor&3-new",
+                "password_confirmation": "Tr0ub4dor&3-new",
+            },
         )
 
-        legacy = bc.request("PATCH", "/users/password", json={})
-        current = bc.request("PATCH", "/users/password", json={})
-
-        assert legacy == {"message": "Password updated successfully"}
-        assert current is None
+        assert route.called
+        assert result is None
 
     def test_json_body_and_params_are_sent(self, bc, api):
         import json as jsonlib

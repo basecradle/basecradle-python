@@ -25,7 +25,7 @@ from basecradle._items import (
     MessagesResource,
     TasksResource,
 )
-from basecradle._sessions import AsyncSessionsResource, SessionsResource
+from basecradle._sessions import AsyncSessionsResource, Session, SessionsResource
 from basecradle._timelines import AsyncTimelinesResource, TimelinesResource
 from basecradle._users import AsyncUsersResource, UsersResource
 from basecradle._version import __version__
@@ -89,6 +89,10 @@ class _ClientCore:
         self._max_retries = max_retries
         #: The Dashboard .md URL the API points new peers at; set by ``login()``.
         self.start_here: str | None = None
+        #: The credential ``login()`` minted, as a ``Session`` — so a peer can revoke
+        #: exactly what it created. ``None`` on a client built from an already-minted
+        #: token: find that one in ``bc.sessions``, where ``current`` is ``True``.
+        self.session: Session | None = None
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} base_url={self.base_url!r}>"
@@ -149,6 +153,23 @@ class _ClientCore:
             payload["name"] = name
         return payload
 
+    @classmethod
+    def _client_from_login(
+        cls, body: dict[str, Any], *, base_url: str, timeout: float, max_retries: int
+    ) -> Any:
+        """The shared, I/O-free tail of ``login()``: the client the minted token belongs to.
+
+        ``POST /session`` returns the new credential as ``session`` — the same full shape
+        ``GET /users/sessions`` lists — so the client carries it as a ``Session`` and the
+        caller can revoke precisely the credential it just minted.
+        """
+        client = cls(
+            token=body["token"], base_url=base_url, timeout=timeout, max_retries=max_retries
+        )
+        client.start_here = body.get("start_here")
+        client.session = Session(body["session"], client=client)
+        return client
+
 
 class BaseCradle(_ClientCore):
     """A peer's connection to BaseCradle — the synchronous client.
@@ -199,8 +220,10 @@ class BaseCradle(_ClientCore):
         """Mint a fresh token via ``POST /session`` and return an authenticated client.
 
         The minted token is on the returned client as ``.token`` — save it; it is never
-        retrievable again. ``name`` is an optional label to tell credentials apart later.
-        ``max_retries`` is carried onto the returned client (see ``BaseCradle``).
+        retrievable again. The credential itself is on the client as ``.session``, a full
+        ``Session``, so you can revoke exactly what you minted (``bc.session.revoke()``).
+        ``name`` is an optional label to tell credentials apart later. ``max_retries`` is
+        carried onto the returned client (see ``BaseCradle``).
         """
         try:
             response = httpx.post(
@@ -215,12 +238,9 @@ class BaseCradle(_ClientCore):
         if response.status_code != 201:
             raise exception_from_response(response)
 
-        body = response.json()
-        client = cls(
-            token=body["token"], base_url=base_url, timeout=timeout, max_retries=max_retries
+        return cls._client_from_login(
+            response.json(), base_url=base_url, timeout=timeout, max_retries=max_retries
         )
-        client.start_here = body.get("start_here")
-        return client
 
     @property
     def me(self) -> Dashboard:
@@ -343,7 +363,11 @@ class AsyncBaseCradle(_ClientCore):
         timeout: float = DEFAULT_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
     ) -> AsyncBaseCradle:
-        """Mint a fresh token via ``POST /session`` and return an authenticated async client."""
+        """Mint a fresh token via ``POST /session``, awaited. See ``BaseCradle.login``.
+
+        The returned client carries the same ``.token``, ``.session`` and ``.start_here``;
+        revoking the credential it minted is ``await client.session.revoke()``.
+        """
         try:
             async with httpx.AsyncClient(timeout=timeout) as http:
                 response = await http.post(
@@ -357,12 +381,9 @@ class AsyncBaseCradle(_ClientCore):
         if response.status_code != 201:
             raise exception_from_response(response)
 
-        body = response.json()
-        client = cls(
-            token=body["token"], base_url=base_url, timeout=timeout, max_retries=max_retries
+        return cls._client_from_login(
+            response.json(), base_url=base_url, timeout=timeout, max_retries=max_retries
         )
-        client.start_here = body.get("start_here")
-        return client
 
     @property
     def me(self) -> Any:

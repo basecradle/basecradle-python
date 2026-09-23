@@ -22,6 +22,7 @@ from basecradle._items import (
     _NestedCreatorCore,
 )
 from basecradle._models import ApiObject
+from basecradle._users import User
 
 __all__ = [
     "AsyncTimelineWebhookEndpoints",
@@ -64,13 +65,16 @@ class WebhookEndpointContent(ApiObject):
 class WebhookEndpoint(ApiObject):
     """An inbound webhook URL on a timeline.
 
-    Endpoints belong to the timeline, not a user, so there is no ``user`` block.
-    Verbs update this object from the full endpoint the API returns (live objects).
-    With ``AsyncBaseCradle``, await the verbs: ``await endpoint.rotate()``.
+    An endpoint is **authored**: ``user`` is the peer who created it, in nested-actor form,
+    and every event delivered here inherits that author. Verbs update this object from the
+    full endpoint the API returns (live objects). With ``AsyncBaseCradle``, await the
+    verbs: ``await endpoint.rotate()``.
     """
 
     type: str  # "webhook_endpoint"
     created_at: str
+    updated_at: str  # moves when the description, enabled state or ingest URL changes
+    user: User  # the endpoint's author, in nested-actor form
     timeline: ApiObject  # reference form — dereference via bc.timelines.get(...)
     content: WebhookEndpointContent
 
@@ -107,37 +111,39 @@ class WebhookEndpoint(ApiObject):
 
 
 class WebhookEventContent(ApiObject):
-    """One inbound delivery: what was sent, and on which (possibly retired) ingest URL."""
+    """One inbound delivery: what was sent, and the two facts fixed when it arrived.
+
+    ``ingest_token_at_receipt`` and ``verified_at_receipt`` are the event's only
+    **historical** fields — the endpoint as it was at delivery time. Everything inside the
+    embedded ``webhook_endpoint`` is **current**, so comparing the token here with the one
+    at the end of ``event.webhook_endpoint.content.ingest_url`` tells you whether the
+    endpoint has rotated since.
+    """
 
     uuid: str
     content_type: str
     headers: dict
     payload: str  # the raw request body, exactly as delivered
-    ingest_token_at_receipt: str
+    ingest_token_at_receipt: str  # the (possibly now-retired) ingest token it arrived on
+    verified_at_receipt: bool  # was the delivery's signature verified on arrival?
 
 
 class WebhookEvent(ApiObject):
     """One inbound delivery to a webhook endpoint. Read-only — produced by external senders.
 
-    An event has no author, so there is no ``user`` block. ``webhook_endpoint`` is the
-    endpoint the delivery arrived on, embedded as a full ``WebhookEndpoint``: read its
-    identity at ``event.webhook_endpoint.content.uuid`` and reach its verbs directly
-    (``event.webhook_endpoint.rotate()``).
-
-    .. note::
-        Until the platform ships `basecradle/basecradle#585
-        <https://github.com/basecradle/basecradle/issues/585>`_, the server may still send
-        ``webhook_endpoint`` in **reference** form — a lone ``uuid``, nothing else. The SDK
-        reads either shape: in the reference form the uuid is ``event.webhook_endpoint.uuid``
-        and ``content`` (with the endpoint's verbs) is not there yet. Either shape works as
-        a ``bc.webhook_events.filter(endpoint=...)`` value.
+    An event has no author, so there is no ``user`` block — but its **endpoint** has one:
+    read it at ``event.webhook_endpoint.user``. ``webhook_endpoint`` is the endpoint the
+    delivery arrived on, embedded as a full ``WebhookEndpoint``: read its identity at
+    ``event.webhook_endpoint.content.uuid``, reach its verbs directly
+    (``event.webhook_endpoint.rotate()``), and pass it straight to
+    ``bc.webhook_events.filter(endpoint=...)``.
     """
 
     type: str  # "webhook_event"
     created_at: str
+    updated_at: str
     timeline: ApiObject  # reference form
-    # The event's direct container. Full endpoint; the legacy reference form still reads.
-    webhook_endpoint: WebhookEndpoint
+    webhook_endpoint: WebhookEndpoint  # the event's direct container, embedded in full
     content: WebhookEventContent
 
 
@@ -202,8 +208,8 @@ class TimelineWebhookEndpoints(_NestedCreatorCore):
 
         Pass ``idempotency_key`` (a UUID is ideal) to make the create safe to retry: a replay
         of the same key returns the original endpoint, never a duplicate. Endpoint keys are
-        scoped per timeline (endpoints have no author). See the client's ``max_retries`` for
-        opt-in automatic retry of keyed creates.
+        scoped per timeline **and author**, like every other keyed create. See the client's
+        ``max_retries`` for opt-in automatic retry of keyed creates.
         """
         method, path, payload = _endpoint_request(self._timeline_uuid, description)
         response = self._client.request(
