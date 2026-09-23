@@ -9,6 +9,7 @@ import pytest
 
 from basecradle import (
     Asset,
+    CurrentPasswordIncorrectError,
     Message,
     Session,
     Task,
@@ -412,6 +413,26 @@ class TestAsyncSessions:
 
         assert route.called
         assert result is None
+
+    async def test_change_password_awaited(self, abc, api):
+        route = api.patch("/users/password").respond(204)
+
+        result = await abc.change_password(
+            current_password="correct-horse-battery-staple", password="Tr0ub4dor&3-new"
+        )
+
+        assert result is None
+        assert json.loads(route.calls.last.request.read()) == {
+            "current_password": "correct-horse-battery-staple",
+            "password": "Tr0ub4dor&3-new",
+            "password_confirmation": "Tr0ub4dor&3-new",
+        }
+
+    async def test_change_password_raises_typed_awaited(self, abc, api):
+        api.patch("/users/password").respond(422, json=problem("current_password_incorrect", 422))
+
+        with pytest.raises(CurrentPasswordIncorrectError):
+            await abc.change_password(current_password="wrong", password="Tr0ub4dor&3-new")
 
 
 class TestAsyncUsers:

@@ -6,6 +6,49 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The API the
 SDK wraps is unversioned and additive-only, so SDK minor versions track API additions.
 
+## [Unreleased]
+
+### Added
+
+- **`bc.change_password()` / `await abc.change_password(...)`** — the last self-credential a
+  peer could not touch with a typed verb (`PATCH /users/password`). Holding the **current**
+  password is what authorizes the change, so a stolen token cannot lock an owner out of
+  their own account:
+
+  ```python
+  bc.change_password(
+      current_password="correct-horse-battery-staple",
+      password="Tr0ub4dor&3-new",
+  )
+  ```
+
+  `password_confirmation` is optional — omitted, the new password confirms itself. The
+  confirmation field exists to catch a human mistyping into a second box, and handing one
+  string to two keyword arguments is not that check. Pass it when you have a genuinely
+  separate second entry, and a difference raises `PasswordConfirmationMismatchError`
+  rather than going through; passing an explicit `None` raises `TypeError`, because a
+  second entry that was expected and never arrived is not a confirmation. A wrong current
+  password raises `CurrentPasswordIncorrectError` — both error classes have shipped in the
+  public API since 0.1.0 and now have a first-party raise site. All three arguments are
+  keyword-only: they are interchangeable strings, and a positional swap would be silent.
+
+  A lost response leaves the outcome unknown: the request is not replayable, so
+  `max_retries` never re-sends it, and a retry after an `APIConnectionError` may report
+  `CurrentPasswordIncorrectError` because the change did land. Settle it by signing in.
+
+  **A password change signs nothing out.** Every session stays valid — this client's token
+  included — so it is not remediation for a leaked credential; revoke that separately
+  (`session.revoke()`, or `bc.sessions.revoke_all()`).
+
+### Changed
+
+- **The drift-guard's `PATCH /users/password` coverage entry now names `bc.change_password()`**
+  instead of the `bc.request(...)` escape hatch that covered it in 0.9.0. The endpoint entered
+  the live OpenAPI spec with [basecradle#585](https://github.com/basecradle/basecradle/issues/585);
+  0.9.0 covered it honestly but untyped, and
+  [#189](https://github.com/basecradle/basecradle-python/issues/189) resolved that it earns a
+  verb — two typed errors already in the public API pointed at one that did not exist.
+
 ## [0.9.0] - 2026-09-23
 
 Adopts the live wire after the platform's breaking release

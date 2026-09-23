@@ -88,6 +88,26 @@ class TestClientParity:
         async_params = inspect.signature(AsyncBaseCradle.sign_out).parameters
         assert list(sync_params) == list(async_params)
 
+    def test_change_password_exists_on_both_clients(self):
+        assert callable(BaseCradle.change_password)
+        assert callable(AsyncBaseCradle.change_password)
+        sync_params = inspect.signature(BaseCradle.change_password).parameters
+        async_params = inspect.signature(AsyncBaseCradle.change_password).parameters
+        assert list(sync_params) == list(async_params)
+
+    def test_change_password_is_keyword_only_on_both_clients(self):
+        """Three interchangeable strings: a positional swap would be silent, on either client.
+
+        Names matching is not enough — dropping the bare ``*`` from one client keeps every
+        name and order intact, so only the parameter *kinds* catch it.
+        """
+        for cls in (BaseCradle, AsyncBaseCradle):
+            params = inspect.signature(cls.change_password).parameters
+            for name in ("current_password", "password", "password_confirmation"):
+                assert params[name].kind is inspect.Parameter.KEYWORD_ONLY, (
+                    f"{cls.__name__}.change_password({name}=...) became positional"
+                )
+
     def test_constructor_signatures_match(self):
         sync_params = inspect.signature(BaseCradle.__init__).parameters
         async_params = inspect.signature(AsyncBaseCradle.__init__).parameters
