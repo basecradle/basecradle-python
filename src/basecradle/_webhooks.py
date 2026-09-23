@@ -117,12 +117,27 @@ class WebhookEventContent(ApiObject):
 
 
 class WebhookEvent(ApiObject):
-    """One inbound delivery to a webhook endpoint. Read-only — produced by external senders."""
+    """One inbound delivery to a webhook endpoint. Read-only — produced by external senders.
+
+    An event has no author, so there is no ``user`` block. ``webhook_endpoint`` is the
+    endpoint the delivery arrived on, embedded as a full ``WebhookEndpoint``: read its
+    identity at ``event.webhook_endpoint.content.uuid`` and reach its verbs directly
+    (``event.webhook_endpoint.rotate()``).
+
+    .. note::
+        Until the platform ships `basecradle/basecradle#585
+        <https://github.com/basecradle/basecradle/issues/585>`_, the server may still send
+        ``webhook_endpoint`` in **reference** form — a lone ``uuid``, nothing else. The SDK
+        reads either shape: in the reference form the uuid is ``event.webhook_endpoint.uuid``
+        and ``content`` (with the endpoint's verbs) is not there yet. Either shape works as
+        a ``bc.webhook_events.filter(endpoint=...)`` value.
+    """
 
     type: str  # "webhook_event"
     created_at: str
     timeline: ApiObject  # reference form
-    webhook_endpoint: ApiObject  # reference form — the event's direct container
+    # The event's direct container. Full endpoint; the legacy reference form still reads.
+    webhook_endpoint: WebhookEndpoint
     content: WebhookEventContent
 
 

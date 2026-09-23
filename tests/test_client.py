@@ -100,6 +100,25 @@ class TestRequest:
 
         assert result is None
 
+    def test_password_update_succeeds_on_either_wire_shape(self, bc, api):
+        """``PATCH /users/password`` is moving from ``200`` + prose to ``204`` (basecradle#585).
+
+        The SDK wraps no password verb, so the escape hatch is the read site: any 2xx is
+        success, whichever body the platform sends.
+        """
+        api.patch("/users/password").mock(
+            side_effect=[
+                httpx.Response(200, json={"message": "Password updated successfully"}),
+                httpx.Response(204),
+            ]
+        )
+
+        legacy = bc.request("PATCH", "/users/password", json={})
+        current = bc.request("PATCH", "/users/password", json={})
+
+        assert legacy == {"message": "Password updated successfully"}
+        assert current is None
+
     def test_json_body_and_params_are_sent(self, bc, api):
         import json as jsonlib
 

@@ -193,13 +193,25 @@ def webhook_event_payload(
     endpoint_uuid=WEBHOOK_ENDPOINT_UUID,
     timeline_uuid=TIMELINE_UUID,
     payload='{"status":"ok"}',
+    embed_endpoint=False,
 ):
-    """A webhook event in subject form (the docs' documented example). No user block."""
+    """A webhook event in subject form (the docs' documented example). No user block.
+
+    ``embed_endpoint`` picks the wire shape of ``webhook_endpoint``: the **legacy
+    reference** (a lone uuid, the default while the platform still sends it) or the
+    **full endpoint** the platform moves to in basecradle/basecradle#585. The SDK reads
+    both, so both shapes are fixtures.
+    """
+    endpoint = (
+        webhook_endpoint_payload(uuid=endpoint_uuid, timeline_uuid=timeline_uuid)
+        if embed_endpoint
+        else {"uuid": endpoint_uuid}
+    )
     return {
         "type": "webhook_event",
         "created_at": "2026-01-02T00:00:00.000Z",
         "timeline": {"uuid": timeline_uuid},
-        "webhook_endpoint": {"uuid": endpoint_uuid},
+        "webhook_endpoint": endpoint,
         "content": {
             "uuid": uuid,
             "content_type": "application/json",
@@ -208,6 +220,44 @@ def webhook_event_payload(
             "ingest_token_at_receipt": "019e7750-66ee-705a-803c-b25c5ee9b1f3",
         },
     }
+
+
+def webhook_event_item_payload(*, user=None, **kwargs):
+    """A ``webhook_event`` row of ``GET /timelines/{uuid}`` → ``items``.
+
+    Same keys as the event's subject form. Pass ``user`` for the timeline-owner
+    placeholder the platform sends today; the default (``None``) is the authorless shape
+    it moves to in basecradle/basecradle#585 — an inbound delivery has no author.
+    """
+    item = webhook_event_payload(**kwargs)
+    if user is not None:
+        item["user"] = dict(user)
+    return item
+
+
+def lock_response(*, enveloped=False, uuid=TIMELINE_UUID):
+    """The ``POST /timelines/{uuid}/lock`` body, in either wire shape.
+
+    ``enveloped`` picks the full timeline under ``timeline`` that the platform moves to in
+    basecradle/basecradle#585; the default is today's bare ``{uuid, locked}`` stub. Both
+    confirm ``locked: true`` — that is the whole point of a lock response, so neither
+    shape is parameterized on it.
+    """
+    if enveloped:
+        return {"timeline": timeline_payload(uuid=uuid, locked=True)}
+    return {"uuid": uuid, "locked": True}
+
+
+def participation_response(*, enveloped=False, user=None):
+    """The ``POST /timelines/{uuid}/participations`` body, in either wire shape.
+
+    ``enveloped`` picks the subject-form user under ``user`` that the platform moves to in
+    basecradle/basecradle#585 (matching trust-create); the default is today's bare
+    nested-actor user.
+    """
+    if enveloped:
+        return {"user": directory_user_payload(user=user, you_trust=True, trusts_you=True)}
+    return dict(user or NOVA)
 
 
 def task_payload(

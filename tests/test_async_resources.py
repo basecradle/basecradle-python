@@ -26,7 +26,9 @@ from tests.conftest import (
     WEBHOOK_ENDPOINT_UUID,
     asset_payload,
     directory_user_payload,
+    lock_response,
     message_payload,
+    participation_response,
     problem,
     session_payload,
     task_payload,
@@ -103,9 +105,11 @@ class TestAsyncTimelines:
         assert timeline.name == "Incident response"
         assert timeline.items == []
 
-    async def test_lock_is_awaited_and_updates_live_object(self, abc, api, timeline):
+    @pytest.mark.parametrize("enveloped", [False, True], ids=["stub", "enveloped"])
+    async def test_lock_is_awaited_and_updates_live_object(self, abc, api, timeline, enveloped):
+        """Both lock wire shapes (basecradle#585) read the same way through the async client."""
         api.post(f"/timelines/{TIMELINE_UUID}/lock").respond(
-            200, json={"uuid": TIMELINE_UUID, "locked": True}
+            200, json=lock_response(enveloped=enveloped)
         )
 
         assert timeline.locked is False
@@ -113,13 +117,18 @@ class TestAsyncTimelines:
 
         assert timeline.locked is True
 
-    async def test_add_participant_awaited(self, abc, api, timeline):
-        route = api.post(f"/timelines/{TIMELINE_UUID}/participations").respond(201, json=NOVA)
+    @pytest.mark.parametrize("enveloped", [False, True], ids=["bare", "enveloped"])
+    async def test_add_participant_awaited(self, abc, api, timeline, enveloped):
+        """Both participation wire shapes (basecradle#585) read the same way, async."""
+        route = api.post(f"/timelines/{TIMELINE_UUID}/participations").respond(
+            201, json=participation_response(enveloped=enveloped)
+        )
 
         added = await timeline.add_participant(NOVA["uuid"])
 
         assert json.loads(route.calls.last.request.read()) == {"user_id": NOVA["uuid"]}
         assert isinstance(added, User)
+        assert [p.handle for p in timeline.participants] == ["nova"]
 
     async def test_remove_participant_awaited(self, abc, api, timeline):
         route = api.delete(f"/timelines/{TIMELINE_UUID}/participations/{NOVA['uuid']}").respond(204)
@@ -337,6 +346,50 @@ class TestAsyncWebhooks:
 
         assert route.called
         assert all(isinstance(e, WebhookEvent) for e in events)
+
+    @pytest.mark.parametrize("embed_endpoint", [False, True], ids=["reference", "embedded"])
+    async def test_event_endpoint_reads_in_both_shapes(self, abc, api, embed_endpoint):
+        """Both ``webhook_endpoint`` wire shapes (basecradle#585) read the same way, async."""
+        api.get("/webhook_events").respond(
+            200,
+            json={
+                "webhook_events": [webhook_event_payload(embed_endpoint=embed_endpoint)],
+                "next_cursor": None,
+            },
+        )
+
+        (event,) = await alist(abc.webhook_events)
+
+        assert isinstance(event.webhook_endpoint, WebhookEndpoint)
+        uuid = (
+            event.webhook_endpoint.content.uuid if embed_endpoint else event.webhook_endpoint.uuid
+        )
+        assert uuid == WEBHOOK_ENDPOINT_UUID
+
+    async def test_embedded_endpoint_verbs_are_awaited(self, abc, api):
+        api.get("/webhook_events").respond(
+            200,
+            json={
+                "webhook_events": [webhook_event_payload(embed_endpoint=True)],
+                "next_cursor": None,
+            },
+        )
+        rotation = api.post(f"/webhook_endpoints/{WEBHOOK_ENDPOINT_UUID}/rotation").respond(
+            200,
+            json={
+                "webhook_endpoint": webhook_endpoint_payload(
+                    ingest_url="https://basecradle.com/webhooks/rotated"
+                )
+            },
+        )
+
+        (event,) = await alist(abc.webhook_events)
+        await event.webhook_endpoint.rotate()
+
+        assert rotation.called
+        assert event.webhook_endpoint.content.ingest_url == (
+            "https://basecradle.com/webhooks/rotated"
+        )
 
 
 class TestAsyncSessions:

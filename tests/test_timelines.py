@@ -13,8 +13,19 @@ from basecradle import (
     TimelineItem,
     User,
     ValidationError,
+    WebhookEndpoint,
 )
-from tests.conftest import JOHN, NOVA, TIMELINE_UUID, problem, timeline_payload
+from tests.conftest import (
+    JOHN,
+    NOVA,
+    TIMELINE_UUID,
+    WEBHOOK_ENDPOINT_UUID,
+    lock_response,
+    participation_response,
+    problem,
+    timeline_payload,
+    webhook_event_item_payload,
+)
 
 MESSAGE_ITEM = {
     "type": "message",
@@ -116,6 +127,61 @@ class TestGet:
         assert item.user.handle == "john"
         assert item.content.body == "Hello from a peer."
 
+    def test_webhook_event_item_without_a_user_still_reads(self, bc, api):
+        """A ``webhook_event`` item has no author (basecradle#585) — and must not break.
+
+        The platform drops the timeline-owner placeholder it used to stuff into these
+        items. Every other item keeps ``user``; only this one loses it, and reading it
+        raises rather than inventing a value.
+        """
+        api.get(f"/timelines/{TIMELINE_UUID}").respond(
+            200,
+            json={
+                "timeline": timeline_payload(),
+                "items": [webhook_event_item_payload(embed_endpoint=True), MESSAGE_ITEM],
+            },
+        )
+
+        event_item, message_item = bc.timelines.get(TIMELINE_UUID).items
+
+        assert event_item.type == "webhook_event"
+        assert event_item.content.payload == '{"status":"ok"}'
+        with pytest.raises(AttributeError) as exc_info:
+            event_item.user
+        assert "user" in str(exc_info.value)
+        assert message_item.user.handle == "john"  # every other item keeps its author
+
+    @pytest.mark.parametrize("embed_endpoint", [False, True], ids=["reference", "embedded"])
+    def test_webhook_event_item_endpoint_reads_in_both_shapes(self, bc, api, embed_endpoint):
+        api.get(f"/timelines/{TIMELINE_UUID}").respond(
+            200,
+            json={
+                "timeline": timeline_payload(),
+                "items": [webhook_event_item_payload(embed_endpoint=embed_endpoint)],
+            },
+        )
+
+        (item,) = bc.timelines.get(TIMELINE_UUID).items
+
+        assert isinstance(item.webhook_endpoint, WebhookEndpoint)
+        uuid = item.webhook_endpoint.content.uuid if embed_endpoint else item.webhook_endpoint.uuid
+        assert uuid == WEBHOOK_ENDPOINT_UUID
+
+    def test_legacy_webhook_event_item_still_carries_its_placeholder_user(self, bc, api):
+        """Before the platform deploys, the item still has the owner placeholder."""
+        api.get(f"/timelines/{TIMELINE_UUID}").respond(
+            200,
+            json={
+                "timeline": timeline_payload(),
+                "items": [webhook_event_item_payload(user=JOHN)],
+            },
+        )
+
+        (item,) = bc.timelines.get(TIMELINE_UUID).items
+
+        assert isinstance(item.user, User)
+        assert item.user.handle == "john"
+
     def test_get_as_non_viewer_raises_forbidden(self, bc, api):
         api.get(f"/timelines/{TIMELINE_UUID}").respond(403, json=problem("not_a_viewer", 403))
 
@@ -130,12 +196,19 @@ class TestGet:
 
 
 class TestLock:
-    def test_lock_posts_and_updates_local_state(self, bc, api):
+    @pytest.mark.parametrize("enveloped", [False, True], ids=["stub", "enveloped"])
+    def test_lock_posts_and_updates_local_state(self, bc, api, enveloped):
+        """``locked`` is read from either wire shape (basecradle#585).
+
+        The platform is replacing the bare ``{uuid, locked}`` stub with the full timeline
+        enveloped under ``timeline``; the SDK reads whichever the server sends, so it can
+        ship before the platform deploys.
+        """
         api.get(f"/timelines/{TIMELINE_UUID}").respond(
             200, json={"timeline": timeline_payload(locked=False), "items": []}
         )
         lock_route = api.post(f"/timelines/{TIMELINE_UUID}/lock").respond(
-            200, json={"uuid": TIMELINE_UUID, "locked": True}
+            200, json=lock_response(enveloped=enveloped)
         )
 
         timeline = bc.timelines.get(TIMELINE_UUID)
@@ -150,9 +223,7 @@ class TestLock:
         api.get("/timelines").respond(
             200, json={"timelines": [timeline_payload(locked=True)], "next_cursor": None}
         )
-        api.post(f"/timelines/{TIMELINE_UUID}/lock").respond(
-            200, json={"uuid": TIMELINE_UUID, "locked": True}
-        )
+        api.post(f"/timelines/{TIMELINE_UUID}/lock").respond(200, json=lock_response())
 
         (timeline,) = bc.timelines
         timeline.lock()  # locking an already-locked timeline succeeds
@@ -235,16 +306,41 @@ class TestAddParticipant:
 
         assert json.loads(route.calls.last.request.read()) == {"user_id": NOVA["uuid"]}
 
-    def test_add_appends_to_local_participants(self, bc, api, timeline):
-        api.post(f"/timelines/{TIMELINE_UUID}/participations").respond(201, json=NOVA)
+    @pytest.mark.parametrize("enveloped", [False, True], ids=["bare", "enveloped"])
+    def test_add_appends_to_local_participants(self, bc, api, timeline, enveloped):
+        """The added user is read from either wire shape (basecradle#585).
+
+        The platform is replacing the bare nested-actor user with the subject form
+        enveloped under ``user`` (matching trust-create); the SDK reads whichever the
+        server sends, so it can ship before the platform deploys.
+        """
+        api.post(f"/timelines/{TIMELINE_UUID}/participations").respond(
+            201, json=participation_response(enveloped=enveloped)
+        )
 
         assert timeline.participants == []
-        timeline.add_participant(NOVA["uuid"])
+        added = timeline.add_participant(NOVA["uuid"])
 
+        assert added.handle == "nova"
         assert [p.handle for p in timeline.participants] == ["nova"]
 
-    def test_idempotent_add_does_not_duplicate_locally(self, bc, api, timeline):
-        api.post(f"/timelines/{TIMELINE_UUID}/participations").respond(201, json=NOVA)
+    def test_enveloped_add_appends_the_user_not_the_envelope(self, bc, api, timeline):
+        """The envelope is unwrapped before it lands in ``participants`` — no nesting."""
+        api.post(f"/timelines/{TIMELINE_UUID}/participations").respond(
+            201, json=participation_response(enveloped=True)
+        )
+
+        timeline.add_participant(NOVA["uuid"])
+
+        (participant,) = timeline.participants
+        assert participant.uuid == NOVA["uuid"]
+        assert participant.trust.mutual is True  # the subject form's own trust block
+
+    @pytest.mark.parametrize("enveloped", [False, True], ids=["bare", "enveloped"])
+    def test_idempotent_add_does_not_duplicate_locally(self, bc, api, timeline, enveloped):
+        api.post(f"/timelines/{TIMELINE_UUID}/participations").respond(
+            201, json=participation_response(enveloped=enveloped)
+        )
 
         timeline.add_participant(NOVA["uuid"])
         timeline.add_participant(NOVA["uuid"])  # idempotent on the API side too

@@ -300,6 +300,7 @@ class TestEventsResource:
         assert event.content.ingest_token_at_receipt == "019e7750-66ee-705a-803c-b25c5ee9b1f3"
 
     def test_event_carries_both_references(self, bc, api):
+        """The legacy shape: ``webhook_endpoint`` is a lone uuid, like ``timeline``."""
         api.get(f"/webhook_events/{WEBHOOK_EVENT_UUID}").respond(
             200, json={"webhook_event": webhook_event_payload()}
         )
@@ -364,3 +365,66 @@ class TestEventsResource:
 
         assert route.called
         assert all(isinstance(e, WebhookEvent) for e in events)
+
+
+class TestEventEndpointEmbed:
+    """The event's ``webhook_endpoint`` reads in both wire shapes (basecradle#585).
+
+    The platform is replacing the reference (``{uuid}``) with the endpoint's full subject
+    form, moving the uuid to ``webhook_endpoint.content.uuid``. The SDK must read whichever
+    the server sends, so the SDK can ship before the platform deploys.
+    """
+
+    def test_embedded_endpoint_is_a_full_endpoint_object(self, bc, api):
+        api.get(f"/webhook_events/{WEBHOOK_EVENT_UUID}").respond(
+            200, json={"webhook_event": webhook_event_payload(embed_endpoint=True)}
+        )
+
+        event = bc.webhook_events.get(WEBHOOK_EVENT_UUID)
+
+        assert isinstance(event.webhook_endpoint, WebhookEndpoint)
+        assert event.webhook_endpoint.content.uuid == WEBHOOK_ENDPOINT_UUID
+        assert event.webhook_endpoint.content.description == "CI deploys"
+        assert isinstance(event.webhook_endpoint.content.verification, WebhookVerification)
+        assert event.webhook_endpoint.timeline.uuid == TIMELINE_UUID
+
+    def test_reference_shaped_endpoint_still_reads(self, bc, api):
+        api.get(f"/webhook_events/{WEBHOOK_EVENT_UUID}").respond(
+            200, json={"webhook_event": webhook_event_payload()}
+        )
+
+        event = bc.webhook_events.get(WEBHOOK_EVENT_UUID)
+
+        assert isinstance(event.webhook_endpoint, WebhookEndpoint)
+        assert event.webhook_endpoint.uuid == WEBHOOK_ENDPOINT_UUID
+        with pytest.raises(AttributeError):  # a reference carries no content, hence no verbs
+            event.webhook_endpoint.content
+
+    def test_endpoint_verbs_are_reachable_from_the_embed(self, bc, api):
+        api.get(f"/webhook_events/{WEBHOOK_EVENT_UUID}").respond(
+            200, json={"webhook_event": webhook_event_payload(embed_endpoint=True)}
+        )
+        rotation = api.post(f"/webhook_endpoints/{WEBHOOK_ENDPOINT_UUID}/rotation").respond(
+            200,
+            json={"webhook_endpoint": webhook_endpoint_payload(ingest_url=ROTATED_INGEST_URL)},
+        )
+
+        event = bc.webhook_events.get(WEBHOOK_EVENT_UUID)
+        event.webhook_endpoint.rotate()
+
+        assert rotation.called
+        assert event.webhook_endpoint.content.ingest_url == ROTATED_INGEST_URL
+
+    @pytest.mark.parametrize("embed_endpoint", [False, True])
+    def test_either_shape_is_a_filter_value(self, bc, api, embed_endpoint):
+        api.get(f"/webhook_events/{WEBHOOK_EVENT_UUID}").respond(
+            200, json={"webhook_event": webhook_event_payload(embed_endpoint=embed_endpoint)}
+        )
+        route = api.get("/webhook_events", params={"endpoint": WEBHOOK_ENDPOINT_UUID}).respond(
+            200, json={"webhook_events": [], "next_cursor": None}
+        )
+
+        event = bc.webhook_events.get(WEBHOOK_EVENT_UUID)
+        list(bc.webhook_events.filter(endpoint=event.webhook_endpoint))
+
+        assert route.called
