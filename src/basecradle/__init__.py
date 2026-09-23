@@ -10,9 +10,11 @@ from basecradle._dashboard import (
     DashboardDocumentation,
     DashboardEnvironment,
     DashboardInteraction,
+    DashboardPagination,
     DashboardSdk,
     DashboardSdks,
     DashboardTimelines,
+    DashboardTools,
 )
 from basecradle._exceptions import (
     AccountSuspendedError,
@@ -95,9 +97,11 @@ __all__ = [
     "DashboardDocumentation",
     "DashboardEnvironment",
     "DashboardInteraction",
+    "DashboardPagination",
     "DashboardSdk",
     "DashboardSdks",
     "DashboardTimelines",
+    "DashboardTools",
     "Item",
     "Message",
     "MessageContent",

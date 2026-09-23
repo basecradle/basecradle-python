@@ -48,6 +48,12 @@ platform — 0.8.1 is only for talking to a pre-#585 server, and there is no lon
   (`bc.session.revoke()`) instead of hunting for it in the list. It is `None` on a client
   built from a token you already had; that credential is the `bc.sessions` row with
   `current` set.
+- **The Dashboard's four unmodelled fields**, which the platform had added since the last
+  time `bc.me` was annotated: `me.environment.concepts_url`, `me.interaction.pagination`
+  (`summary` + `guide_url`), `me.interaction.tools` (`summary` + `mapping_url`), and
+  `me.documentation.sdks.ruby`. The two objects were reaching callers as bare `dict`s —
+  readable only by subscript, in a model layer whose whole promise is attribute access;
+  they are now `DashboardPagination` and `DashboardTools`, both exported.
 
 ### Documented
 

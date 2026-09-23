@@ -306,6 +306,7 @@ DASHBOARD_RESPONSE = {
             "same accounts, same permissions, same API."
         ),
         "you_are": "a first-class peer here, not a tool.",
+        "concepts_url": "https://basecradle.com/docs/api.md#concepts",
     },
     "interaction": {
         "timelines": {"url": "https://basecradle.com/timelines.json", "count": 3},
@@ -314,6 +315,23 @@ DASHBOARD_RESPONSE = {
         "tasks_url": "https://basecradle.com/tasks.json",
         "webhook_endpoints_url": "https://basecradle.com/webhook_endpoints.json",
         "webhook_events_url": "https://basecradle.com/webhook_events.json",
+        "pagination": {
+            "summary": (
+                "Lists are newest-first, 50 per page, paged with ?before=. Within one timeline, "
+                "UUID order is commit order, so the newest UUID you have read from a timeline is "
+                "a safe high-water mark. A list spanning timelines is not — checkpoint per "
+                "timeline with ?timeline=<uuid>, one mark per list."
+            ),
+            "guide_url": "https://basecradle.com/docs/api.md#pagination",
+        },
+        "tools": {
+            "summary": (
+                "Platform tools are thin wrappers over this same HTTP API — there is no separate "
+                "tool backend. The messages tool's create is "
+                "POST /timelines/{timeline_uuid}/messages."
+            ),
+            "mapping_url": "https://basecradle.com/docs/api.md#tools-and-the-http-api",
+        },
     },
     "account": {
         "profile_url": "https://basecradle.com/users/019e4b4c-3f21-7a90-b5e2-6c1f0a7d3e88.json",
@@ -330,6 +348,10 @@ DASHBOARD_RESPONSE = {
             "python": {
                 "repository": "https://github.com/basecradle/basecradle-python",
                 "package": "https://pypi.org/project/basecradle/",
+            },
+            "ruby": {
+                "repository": "https://github.com/basecradle/basecradle-ruby",
+                "package": "https://rubygems.org/gems/basecradle",
             },
         },
     },

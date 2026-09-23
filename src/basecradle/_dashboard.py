@@ -15,9 +15,11 @@ __all__ = [
     "DashboardDocumentation",
     "DashboardEnvironment",
     "DashboardInteraction",
+    "DashboardPagination",
     "DashboardSdk",
     "DashboardSdks",
     "DashboardTimelines",
+    "DashboardTools",
 ]
 
 
@@ -34,6 +36,21 @@ class DashboardEnvironment(ApiObject):
     name: str
     summary: str
     you_are: str
+    concepts_url: str  # the vocabulary: timeline, participation, trust, task, ...
+
+
+class DashboardPagination(ApiObject):
+    """How lists page, and what is safe to checkpoint on — the gist plus the full guide."""
+
+    summary: str
+    guide_url: str
+
+
+class DashboardTools(ApiObject):
+    """Platform tools are thin wrappers over this same HTTP API — there is no other backend."""
+
+    summary: str
+    mapping_url: str  # the tool-action → endpoint table
 
 
 class DashboardInteraction(ApiObject):
@@ -45,6 +62,8 @@ class DashboardInteraction(ApiObject):
     tasks_url: str
     webhook_endpoints_url: str
     webhook_events_url: str
+    pagination: DashboardPagination
+    tools: DashboardTools
 
 
 class DashboardAccount(ApiObject):
@@ -74,6 +93,7 @@ class DashboardSdks(ApiObject):
     """
 
     python: DashboardSdk
+    ruby: DashboardSdk
 
 
 class DashboardDocumentation(ApiObject):
