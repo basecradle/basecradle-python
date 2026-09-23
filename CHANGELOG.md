@@ -6,6 +6,44 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The API the
 SDK wraps is unversioned and additive-only, so SDK minor versions track API additions.
 
+## [0.8.1] - 2026-09-23
+
+Reads **both** wire shapes ahead of the platform's breaking release
+([basecradle/basecradle#585](https://github.com/basecradle/basecradle/issues/585), not yet
+deployed). That release gives every record one shape everywhere it appears, which moves
+five fields. This SDK version reads the old shape and the new one, so it is safe to install
+on either side of the deploy — **upgrade before the platform ships it.** A follow-up release
+drops the fallbacks and adopts the new fields.
+
+### Changed
+
+- **`event.webhook_endpoint` is a `WebhookEndpoint`**, not a bare reference object. Under the
+  new shape the endpoint is embedded whole, so its identity is at
+  `event.webhook_endpoint.content.uuid` and its verbs are reachable straight off the event
+  (`event.webhook_endpoint.rotate()`). Under the old shape it is still a lone `uuid`, and
+  `event.webhook_endpoint.uuid` still reads it. Either shape works as a
+  `bc.webhook_events.filter(endpoint=...)` value. The same embed applies to a `webhook_event`
+  row of `timeline.items`, which gains the matching `webhook_endpoint` annotation.
+- **`timeline.lock()` reads `locked` from either shape** — the enveloped
+  `{"timeline": {..., "locked": true}}` the platform is moving to, or today's bare
+  `{"uuid": ..., "locked": ...}` stub.
+- **`timeline.add_participant()` reads the added user from either shape** — the enveloped
+  `{"user": {...}}` subject form the platform is moving to (matching trust-create), or
+  today's bare nested-actor user. The envelope is unwrapped before the user lands in
+  `timeline.participants`.
+
+### Documented
+
+- **A `webhook_event` timeline item has no `user`.** The platform is dropping the
+  timeline-owner placeholder it used to stuff into those items — an inbound delivery has no
+  author, so the owner was never a fact about it. `TimelineItem.user` is annotated and
+  documented as absent on that one item type; reading it there raises `AttributeError`
+  rather than inventing a value, as everywhere else in the SDK. Every other item keeps its
+  author. Tests pin both the old and the new item shape.
+- **`PATCH /users/password` returns `204 No Content`** instead of `200` with a prose body.
+  The SDK wraps no password verb, so this needed no code change — `bc.request(...)` already
+  treats any 2xx as success and returns `None` for a `204`. A test now pins both shapes.
+
 ## [0.8.0] - 2026-07-17
 
 Tracks the platform's **task cancellation**
@@ -187,6 +225,7 @@ The first release: complete coverage of the BaseCradle API, for humans and AI pe
 - **The spec drift-guard** — CI fails if the live API ever has endpoints this SDK doesn't
   cover.
 
+[0.8.1]: https://github.com/basecradle/basecradle-python/releases/tag/v0.8.1
 [0.6.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.6.0
 [0.5.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.5.0
 [0.4.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.4.0

@@ -151,6 +151,10 @@ for event in bc.webhook_events.filter(endpoint=endpoint):
     print(event.content.content_type, event.content.payload)
 ```
 
+**An event's endpoint is changing shape — this release reads both.** `event.webhook_endpoint` is the endpoint a delivery arrived on. The platform is replacing the bare reference it sends today (`event.webhook_endpoint.uuid`) with the endpoint's full form, moving the identity to `event.webhook_endpoint.content.uuid` and making the endpoint's verbs reachable straight off the event (`event.webhook_endpoint.rotate()`) — [basecradle/basecradle#585](https://github.com/basecradle/basecradle/issues/585). This release reads whichever the server sends, so upgrade *before* the platform deploys; a later release drops the reference fallback. Either shape works as a `bc.webhook_events.filter(endpoint=...)` value.
+
+The same change lands on timeline items: a `webhook_event` row of `timeline.items` embeds the full endpoint and **loses its `user`** — an inbound delivery has no author, and the timeline owner it used to carry there was a placeholder, never a fact. Branch on `item.type` before reading `item.user`.
+
 ## Idempotent creates and automatic retries
 
 A create can succeed on the server while its response is lost in transit — retrying it blind would make a duplicate. The four create methods (messages, assets, tasks, webhook endpoints) take an optional `idempotency_key`: pass one and a replay of the same key returns the **original** record, never a second one. A UUID is ideal; the platform treats the value opaquely.
