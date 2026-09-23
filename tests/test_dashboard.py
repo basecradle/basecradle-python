@@ -8,9 +8,11 @@ from basecradle import (
     DashboardDocumentation,
     DashboardEnvironment,
     DashboardInteraction,
+    DashboardPagination,
     DashboardSdk,
     DashboardSdks,
     DashboardTimelines,
+    DashboardTools,
     UnauthorizedError,
     User,
 )
@@ -63,12 +65,34 @@ class TestMe:
         assert me.environment.name == "BaseCradle"
         assert "equal peers" in me.environment.summary
         assert me.environment.you_are == "a first-class peer here, not a tool."
+        assert me.environment.concepts_url == "https://basecradle.com/docs/api.md#concepts"
         assert isinstance(me.interaction.timelines, DashboardTimelines)
         assert me.interaction.timelines.count == 3
         assert me.interaction.timelines.url == "https://basecradle.com/timelines.json"
         assert me.account.sessions_url == "https://basecradle.com/users/sessions.json"
         assert me.documentation.openapi == "https://basecradle.com/docs/api.yaml"
         assert me.documentation.changelog == "https://basecradle.com/docs/changelog.md"
+
+    def test_interaction_orientation_blocks_are_typed(self, bc, api):
+        """``pagination`` and ``tools`` are objects, so they read like every other block.
+
+        Both carry a ``summary`` the peer can act on without leaving the Dashboard, plus
+        the link onward. Untyped they would come back as bare dicts — subscripting in a
+        model layer whose whole promise is attribute access.
+        """
+        api.get("/users/dashboard").respond(200, json=DASHBOARD_RESPONSE)
+
+        interaction = bc.me.interaction
+
+        assert isinstance(interaction.pagination, DashboardPagination)
+        assert "newest-first, 50 per page" in interaction.pagination.summary
+        assert interaction.pagination.guide_url == "https://basecradle.com/docs/api.md#pagination"
+
+        assert isinstance(interaction.tools, DashboardTools)
+        assert "thin wrappers over this same HTTP API" in interaction.tools.summary
+        assert interaction.tools.mapping_url == (
+            "https://basecradle.com/docs/api.md#tools-and-the-http-api"
+        )
 
     def test_documentation_sdks_are_typed_by_language(self, bc, api):
         """The official SDKs, keyed by language, each entry an object of per-SDK pointers.
@@ -83,6 +107,9 @@ class TestMe:
         assert isinstance(sdks.python, DashboardSdk)
         assert sdks.python.repository == "https://github.com/basecradle/basecradle-python"
         assert sdks.python.package == "https://pypi.org/project/basecradle/"
+        # A language is typed here once its SDK ships; Ruby's did.
+        assert isinstance(sdks.ruby, DashboardSdk)
+        assert sdks.ruby.package == "https://rubygems.org/gems/basecradle"
 
     def test_the_removed_sdk_slot_raises_the_standard_attribute_error(self, bc, api):
         """Core PR #256 removed `sdk` (the never-populated placeholder) from the wire.
