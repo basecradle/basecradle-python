@@ -118,6 +118,17 @@ class WebhookEventContent(ApiObject):
     embedded ``webhook_endpoint`` is **current**, so comparing the token here with the one
     at the end of ``event.webhook_endpoint.content.ingest_url`` tells you whether the
     endpoint has rotated since.
+
+    ``headers`` is the delivery's request headers, one pair per header in wire spelling,
+    ``Content-Type`` and ``Content-Length`` included — but **the sender's casing is not
+    preserved**: names arrive canonicalized to Title-Case per segment, and the SDK hands
+    them back exactly as the wire gave them. A vendor's own published spelling can
+    therefore miss: ``headers["X-Github-Delivery"]`` reads GitHub's delivery id, while
+    ``headers["X-GitHub-Delivery"]`` — the spelling GitHub itself publishes — raises
+    ``KeyError``. Match case-insensitively instead. ``httpx`` is already this SDK's only
+    runtime dependency, so its header mapping is the one-expression way to do it::
+
+        httpx.Headers(event.content.headers)["x-github-delivery"]
     """
 
     uuid: str
