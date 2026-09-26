@@ -310,6 +310,29 @@ class TestEventsResource:
         assert event.content.ingest_token_at_receipt == "019e7750-66ee-705a-803c-b25c5ee9b1f3"
         assert event.updated_at == "2026-01-02T00:00:00.000Z"
 
+    def test_header_names_come_back_in_the_wires_own_spelling(self, bc, api):
+        """The SDK never normalizes header names, so a sender's own spelling can miss.
+
+        The platform canonicalizes names to Title-Case per segment and this SDK passes the
+        hash through untouched — which is why ``WebhookEventContent`` tells you to match
+        case-insensitively rather than by the spelling a vendor publishes.
+        """
+        delivery_id = "019e7750-66ee-7d42-b8a5-4f1c9e3a7b60"
+        event_payload = webhook_event_payload()
+        event_payload["content"]["headers"] = {"X-Github-Delivery": delivery_id}
+        api.get(f"/webhook_events/{WEBHOOK_EVENT_UUID}").respond(
+            200, json={"webhook_event": event_payload}
+        )
+
+        headers = bc.webhook_events.get(WEBHOOK_EVENT_UUID).content.headers
+
+        assert headers["X-Github-Delivery"] == delivery_id
+        with pytest.raises(KeyError):
+            headers["X-GitHub-Delivery"]  # GitHub's own spelling — not what the wire carries
+
+        # The idiom the docstring recommends, using the SDK's one runtime dependency.
+        assert httpx.Headers(headers)["x-github-delivery"] == delivery_id
+
     @pytest.mark.parametrize("verified", [False, True])
     def test_verified_at_receipt_is_the_deliverys_own_historical_fact(self, bc, api, verified):
         """Whether *this* delivery's signature checked out when it arrived.

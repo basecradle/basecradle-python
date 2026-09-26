@@ -6,6 +6,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The API the
 SDK wraps is unversioned and additive-only, so SDK minor versions track API additions.
 
+## [Unreleased]
+
+### Documented
+
+- **`WebhookEventContent.headers` now carries the casing caveat the platform documents.** A
+  delivery's header names arrive canonicalized to Title-Case per segment, and the SDK hands
+  them back exactly as the wire gave them — so a sender's own published spelling can miss.
+  `headers["X-Github-Delivery"]` reads GitHub's delivery id, while
+  `headers["X-GitHub-Delivery"]` — the spelling GitHub publishes — raises `KeyError`. Match
+  case-insensitively instead; `httpx.Headers(event.content.headers)["x-github-delivery"]`
+  does it in one expression, and `httpx` is already the only runtime dependency. A test
+  pins it. No behavior change — the SDK has always passed the hash through untouched.
+
 ## [0.10.0] - 2026-09-23
 
 ### Added
