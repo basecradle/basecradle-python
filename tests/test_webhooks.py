@@ -300,7 +300,13 @@ class TestEventsResource:
 
         assert event.content.content_type == "application/json"
         assert event.content.payload == '{"status":"ok"}'
-        assert event.content.headers == {"HTTP_X_EXAMPLE_EVENT": "ping"}
+        assert event.content.headers == {
+            "Host": "basecradle.com",
+            "User-Agent": "Example-Hooks/1.0",
+            "Content-Type": "application/json",
+            "Content-Length": "15",
+            "X-Example-Event": "ping",
+        }
         assert event.content.ingest_token_at_receipt == "019e7750-66ee-705a-803c-b25c5ee9b1f3"
         assert event.updated_at == "2026-01-02T00:00:00.000Z"
 

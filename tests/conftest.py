@@ -158,7 +158,8 @@ def session_payload(
 
 WEBHOOK_ENDPOINT_UUID = "019e7750-66ee-79fc-a07f-0301cf1ace97"
 WEBHOOK_EVENT_UUID = "019e7750-66ee-7ab2-b3a1-e1b87de9d3b6"
-INGEST_URL = "https://basecradle.com/webhooks/019e7750-66ee-705a-803c-b25c5ee9b1f3"
+INGEST_HOST = "basecradle.com"
+INGEST_URL = f"https://{INGEST_HOST}/webhooks/019e7750-66ee-705a-803c-b25c5ee9b1f3"
 
 
 def webhook_endpoint_payload(
@@ -200,6 +201,7 @@ def webhook_event_payload(
     endpoint_uuid=WEBHOOK_ENDPOINT_UUID,
     timeline_uuid=TIMELINE_UUID,
     payload='{"status":"ok"}',
+    content_type="application/json",
     verified_at_receipt=False,
 ):
     """A webhook event in subject form (the docs' documented example). No user block.
@@ -208,6 +210,12 @@ def webhook_event_payload(
     references its container" — so the endpoint's uuid lives at
     ``webhook_endpoint.content.uuid``. One shape per record, so this is also exactly what a
     ``webhook_event`` row of ``GET /timelines/{uuid}`` → ``items`` looks like.
+
+    ``headers`` is the delivery's request headers in wire form: one pair per header as sent,
+    names in canonical Title-Case per segment, ``Content-Type`` and ``Content-Length``
+    included. The three that merely restate another part of the record — ``Host``,
+    ``Content-Type``, ``Content-Length`` — are derived from it, so overriding ``payload`` or
+    ``content_type`` cannot leave a header contradicting what it describes.
     """
     return {
         "type": "webhook_event",
@@ -219,8 +227,14 @@ def webhook_event_payload(
         ),
         "content": {
             "uuid": uuid,
-            "content_type": "application/json",
-            "headers": {"HTTP_X_EXAMPLE_EVENT": "ping"},
+            "content_type": content_type,
+            "headers": {
+                "Host": INGEST_HOST,
+                "User-Agent": "Example-Hooks/1.0",
+                "Content-Type": content_type,
+                "Content-Length": str(len(payload.encode())),
+                "X-Example-Event": "ping",
+            },
             "payload": payload,
             "ingest_token_at_receipt": "019e7750-66ee-705a-803c-b25c5ee9b1f3",
             "verified_at_receipt": verified_at_receipt,
