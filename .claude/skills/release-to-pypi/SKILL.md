@@ -28,7 +28,7 @@ The pipeline (`.github/workflows/release.yml`): pushing a `v*` tag → build →
 
 ## Verification venvs
 
-Steps 3 and 5 each build a venv that is not the deliverable, so it gets a home and an end like anything else a release leaves behind (`CLAUDE.md` → "Whatever creates, cleans up"). The home is **one** fixed-name slot in the runner's own `~/scratch` — `~/scratch/verify-basecradle`, overwritten (`--clear`) every release. Deliberately no version in the path: a fresh name per run is the pattern that rule forbids, and it would let a step that died before its cleanup strand a `verify-v0.2.0` no later release ever reclaims. The end is `rm -rf ~/scratch/verify-basecradle` the moment that step's check passes — both venvs are gone before step 6 closes the release issue. The `~/scratch` sweeper (`CLAUDE.md` → Agent Home Storage) is the backstop, not the plan.
+Steps 3 and 5 each build a venv that is not the deliverable, so it gets a home and an end like anything else a release leaves behind (`CLAUDE.md` → "Whatever creates, cleans up"). The home is **one** fixed-name slot in the runner's own `~/scratch` — `~/scratch/verify-basecradle`, overwritten (`--clear`) every release. Deliberately no version in the path: a fresh name per run is the pattern that rule forbids, and it would let a step that died before its cleanup strand a `verify-v0.2.0` no later release ever reclaims. The end is `rm -rf ~/scratch/verify-basecradle` the moment that step's check passes — both venvs are gone before step 6 closes the release issue. The `~/scratch` sweeper (`~/.claude/CLAUDE.md` → Your Home) is the backstop, not the plan.
 
 ## Versioning facts
 
