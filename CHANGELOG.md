@@ -8,6 +8,10 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.12.0] - 2026-09-30
+
 ### Changed
 
 - **A `timeline.items` row now hands back the record's own content class.** `item.content`
@@ -26,11 +30,13 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
   - **`repr(item.content)`** changes from `<ApiObject [...]>` to `<MessageContent [...]>`
     (and the other three) — it now names the class you actually have.
-  - **Equality now holds across the two read paths.** `ApiObject.__eq__` requires the same
-    type, so `item.content` and the same record's own `content` fetched directly compared
-    *unequal* before and compare **equal** now. Code relying on that inequality to tell the
-    paths apart should branch on `item.type` instead. (The *item* is still a `TimelineItem`
-    and still does not equal the record itself — only the contents match.)
+  - **Equality across the two read paths is no longer ruled out by type.**
+    `ApiObject.__eq__` is `same type and same wire data`, so `item.content` and the same
+    record's own `content` fetched directly could never compare equal before, whatever the
+    API returned; now they compare equal whenever the two responses carry the same fields,
+    which is what the spec describes. Code relying on the old unconditional inequality to
+    tell the paths apart should branch on `item.type` instead. (The *item* is still a
+    `TimelineItem` and still does not equal the record itself — only the contents match.)
   - **On a `webhook_event` row, `item.content.headers` is now a `WebhookEventHeaders`
     copy rather than the wire dict itself.** Previously that path handed back the very dict
     inside the item's data, so `item.content.headers is item._data["content"]["headers"]`
@@ -389,6 +395,7 @@ The first release: complete coverage of the BaseCradle API, for humans and AI pe
 - **The spec drift-guard** — CI fails if the live API ever has endpoints this SDK doesn't
   cover.
 
+[0.12.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.12.0
 [0.11.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.11.0
 [0.10.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.10.0
 [0.9.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.9.0
