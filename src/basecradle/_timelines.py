@@ -19,6 +19,7 @@ from basecradle._items import (
 )
 from basecradle._models import ApiObject
 from basecradle._pagination import apaginate, paginate
+from basecradle._resources import Resource
 from basecradle._users import User
 from basecradle._webhooks import (
     AsyncTimelineWebhookEndpoints,
@@ -262,8 +263,12 @@ def _subject_timeline(response: dict[str, Any], client: Any) -> Timeline:
     return Timeline({**response["timeline"], "items": response["items"]}, client=client)
 
 
-class _TimelinesResourceCore:
-    """What the sync and async timeline resources share."""
+class _TimelinesResourceCore(Resource):
+    """What the sync and async timeline resources share.
+
+    It carries nothing but the client, so its repr is just its class name (see
+    ``Resource``) — there is no state to show and the client is never shown.
+    """
 
     def __init__(self, client: Any) -> None:
         self._client = client

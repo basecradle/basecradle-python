@@ -22,6 +22,7 @@ from typing import IO, Any, Generic, TypeVar, cast
 
 from basecradle._models import ApiObject
 from basecradle._pagination import apaginate, paginate
+from basecradle._resources import Resource
 from basecradle._users import User
 
 __all__ = [
@@ -174,7 +175,7 @@ _R = TypeVar("_R", bound="_ItemsResourceCore[Any]")
 _RTasks = TypeVar("_RTasks", bound="_TasksBinding")
 
 
-class _ItemsResourceCore(Generic[_M]):
+class _ItemsResourceCore(Resource, Generic[_M]):
     """What sync and async resources share: bindings, construction, filter logic."""
 
     _path: str
@@ -185,6 +186,23 @@ class _ItemsResourceCore(Generic[_M]):
     def __init__(self, client: Any, filters: dict[str, str] | None = None) -> None:
         self._client = client
         self._filters = filters or {}
+
+    def _repr_fields(self) -> dict[str, Any]:
+        """The endpoint this resource lists and the filters narrowing it — its whole state.
+
+        Filters are shown even when empty: ``filters={}`` is the difference between a
+        resource that will list everything you can see and one a ``filter(...)`` already
+        narrowed, which is the first thing you want from a repr of a lazy list.
+
+        ``_path`` is read defensively because ``ItemsResource`` and ``AsyncItemsResource``
+        are exported unbound — there ``_path`` is a bare annotation and only the
+        per-resource bindings supply a value — and a repr that raises takes the whole
+        ``logging`` record down with it.
+        """
+        path = getattr(self, "_path", None)
+        if path is None:
+            return {"filters": self._filters}
+        return {"path": path, "filters": self._filters}
 
     def filter(self: _R, *, timeline: Any | None = None) -> _R:
         """A new lazy resource narrowed to one timeline (a ``Timeline`` or a uuid)."""
@@ -300,10 +318,13 @@ class AsyncTasksResource(_TasksBinding, AsyncItemsResource[Task]): ...
 # are the thin I/O layers over them.
 
 
-class _NestedCreatorCore:
+class _NestedCreatorCore(Resource):
     def __init__(self, client: Any, timeline_uuid: str) -> None:
         self._client = client
         self._timeline_uuid = timeline_uuid
+
+    def _repr_fields(self) -> dict[str, Any]:
+        return {"timeline": self._timeline_uuid}
 
 
 def _idempotency_headers(idempotency_key: str | None) -> dict[str, str] | None:

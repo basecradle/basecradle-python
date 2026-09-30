@@ -8,6 +8,95 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 ## [Unreleased]
 
+### Security
+
+- **Nothing generic emits the bearer token any more.** A sweep of every way the SDK's
+  objects can be rendered, walked, or serialized (#242) found the credential coming out of
+  three of them. The client holds a `bc_uat_` token and every resource and model holds the
+  client, so all three object kinds were affected:
+
+  - **`vars(client)` and `client.__dict__` carried the token**, because it was a plain
+    instance attribute. Two consequences were worse than they look. `json.dump(obj, fp,
+    default=vars)` **writes the credential to the stream and only then raises** — the
+    `ValueError: Circular reference detected` that stops `json.dumps` discards its partial
+    result, but a dump to a file, socket or log stream has already flushed it, and this
+    held for a resource and a model too, through the client they hold. And any crash
+    reporter that expands frame locals one level through `__dict__` — Sentry, `rich`,
+    `cgitb`, IPython's `%debug` — put the token in the report for any traceback with a
+    client in scope. The token now lives in a `__slots__` slot on the client core, which
+    is absent from `__dict__`, so neither walk reaches it.
+  - **`__reduce__` handed out the whole instance dict.** `pickle.dumps(client)` failed only
+    by accident — `httpx` happens to hold an unpicklable lock — *after* the protocol hook
+    had already returned the credential, and `copy.copy(client)` succeeded outright,
+    yielding a second live client on the same token.
+  - **`repr(client)` was silent about the credential** rather than explicit. Silence cannot
+    be told from "this object holds no secret", which is exactly the distinction you need
+    when reading a log for a leak.
+
+  Everything else measured already held: `repr`/`str`/`format`/`pprint`/`%r`-logging of a
+  client, resource or model never emitted it, `ApiObject.__repr__` shows field *names* and
+  never values (so a webhook endpoint's `ingest_url` was never printed either), `ApiObject`
+  offers no `to_dict` and is not iterable, `__eq__`/`__hash__` read wire data only, and
+  `BaseCradleError` keeps only the parsed problem document — no `httpx` request or response
+  — so no caught error reaches the `Authorization` header. Those are now pinned by tests
+  rather than resting on nobody having looked.
+
+  One thing the sweep found and deliberately did **not** change: `WebhookEventHeaders` is a
+  `dict` subclass, so unlike every `ApiObject` it renders and JSON-serializes its values
+  directly. Those are an inbound delivery's own request headers, never this client's
+  `Authorization` — but a sender that authenticates its POST puts *its* secret there, and
+  `log.debug("%r", event.content.headers)` prints it. Redacting would break the SDK's
+  wire-exactness rule ("reads match the wire"), so this is raised for a decision rather
+  than settled here.
+
+  **What you may notice:**
+
+  - `repr(client)` gained a field: `<BaseCradle base_url='https://basecradle.com'
+    token=[REDACTED]>`. The redaction is deliberately explicit.
+  - **Resources have real reprs.** `<MessagesResource path='/messages' filters={}>`,
+    `<MessagesResource path='/messages' filters={'timeline': '019e...'}>`,
+    `<TimelineMessages timeline='019e...'>`, and `<TimelinesResource>` for the three that
+    carry nothing but the client — in place of `<... object at 0x7f...>`.
+  - **Pickling or copying a client or a resource now raises `BaseCradleError`** naming the
+    risk, at every pickle protocol and through `copy.copy`, `copy.deepcopy` and `copyreg`.
+    A client cannot be serialized because it authenticates with your token; a resource
+    cannot because it is a live handle whose records are fetched lazily, so the message
+    points at iterating it explicitly instead. `copy.copy(client)` previously returned a
+    working clone and `pickle.dumps` previously raised `TypeError`.
+  - **Deep-copying anything that holds a client refuses too**, with the same error: a
+    `deepcopy` of a resource or of an attached record (`Timeline`, `Message`, …) recurses
+    into the client and lands on its refusal. `copy.copy` of a *record* still works — a
+    shallow copy never touches the client, so it was never a route out with the
+    credential.
+  - **`client.token` is unchanged** — it reads and assigns exactly as before. `login()`
+    still documents it as the one place a minted credential can be read, and that is still
+    true; only where it is *kept* moved. As before, assigning it does not re-authenticate
+    an existing client: the transport's `Authorization` header is built once, at
+    construction.
+  - **`vars(client)` no longer lists `base_url`, `start_here`, `session`, `_timeout` or
+    `_max_retries`** either — they share the slots declaration with the token, because a
+    class cannot assign a name its `__slots__` omits. Every one is unchanged as an
+    attribute (`client.base_url`, `client.session`, …) and `base_url` is in the repr; only
+    a `vars()`-based diagnostic dump sees less.
+
+  **Two stated limits, rather than quiet ones.** Neither is the #242 class of bug — a
+  *generic* serializer emitting the credential unasked — and both are pinned by tests so
+  they stay documented:
+
+  - **An exhaustive attribute walker still reaches it.** A client must hold its credential
+    to authenticate, and it hands it to `httpx` as a default header, so a serializer that
+    recursively walks every attribute of every object it reaches — tolerating cycles,
+    following private names — arrives at `httpx`'s own header storage: measured at depth 8
+    from a client and depth 10 from a resource or a record. Nothing has to be *named* to
+    get there. (`httpx` redacts `authorization` in its own `Headers.__repr__`, so only a
+    walker that bypasses reprs sees the value. The `json.dump(…, default=vars)` idiom above
+    is closed; combining a `TypeError`-tolerant `default` with `sort_keys=True` is deep
+    enough to reach it.) Closing this would mean authenticating per request instead of once
+    per client — a design change, not a fix, so it is raised rather than taken.
+  - **A caller-registered reducer bypasses the refusal.** `copyreg.dispatch_table` and
+    `Pickler.reducer_override` are consulted *before* `__reduce__`. That is a caller
+    overriding on purpose, not a hole to plug.
+
 ### Changed
 
 - **Iteration and `get()` are now typed by the record they yield, not `Any`.** The
