@@ -174,7 +174,6 @@ jobs:
   publish-testpypi:
     name: publish to TestPyPI (rehearsal)
     runs-on: ubuntu-latest
-    continue-on-error: true
     needs: build
     environment:
       name: testpypi
