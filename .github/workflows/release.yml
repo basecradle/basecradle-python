@@ -22,6 +22,50 @@ jobs:
       - uses: astral-sh/setup-uv@v10.2.0
       - name: Build the wheel and sdist
         run: uv build
+      # The tag is only a trigger: `uv build` derives the version from
+      # src/basecradle/_version.py via [tool.hatch.version], and nothing else here
+      # reads the tag. So a hand-typed tag that disagrees with the tree publishes
+      # the wrong version number under the right tag name -- and a PyPI filename
+      # can only be superseded by another release, never replaced. The tag is typed
+      # by the capital in a separate turn from the captain who set _version.py, so
+      # assert the two agree here, where a mismatch costs a deleted tag rather than
+      # a burned version number (#214).
+      #
+      # The artifacts' own filenames are the reading, and BOTH are checked: the
+      # publish steps below upload all of dist/, so the sdist reaches PyPI under a
+      # filename just as immutable as the wheel's. (`uv version --short`, the other
+      # candidate, cannot be used -- it refuses a dynamic project version, which is
+      # exactly what hatch gives this project. See #214.)
+      - name: The tag must name the version being built
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          tagged="${GITHUB_REF_NAME#v}"
+          wheels=(dist/*.whl)
+          sdists=(dist/*.tar.gz)
+
+          if [ "${#wheels[@]}" -ne 1 ] || [ "${#sdists[@]}" -ne 1 ]; then
+            echo "::error::Expected one wheel and one sdist in dist/, found ${#wheels[@]} and ${#sdists[@]}."
+            exit 1
+          fi
+
+          mismatched=0
+          for artifact in "${wheels[@]}" "${sdists[@]}"; do
+            file="$(basename "$artifact")"
+            built="$(basename "$file" .tar.gz | cut -d- -f2)"
+            if [ "$built" != "$tagged" ]; then
+              echo "::error::Tag $GITHUB_REF_NAME builds $file -- version $built, not $tagged. Refusing to publish a mismatch."
+              mismatched=1
+            fi
+          done
+
+          if [ "$mismatched" -ne 0 ]; then
+            echo "::error::Recover by deleting the tag and retyping it (git tag -d TAG && git push origin :refs/tags/TAG), or -- if the two differ only by PEP 440 normalization -- by canonicalizing src/basecradle/_version.py."
+            exit 1
+          fi
+
+          echo "Tag $GITHUB_REF_NAME matches both built artifacts (version $tagged)."
       # A pure inter-job handoff: this artifact exists only to carry the build to
       # the two publish jobs, and its purpose is served the moment PyPI has the
       # wheel. Left unset it inherits GitHub's 90-day default, so every release

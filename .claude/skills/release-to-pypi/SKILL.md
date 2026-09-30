@@ -15,7 +15,18 @@ The pipeline (`.github/workflows/release.yml`): pushing a `v*` tag → build →
 
 1. **Release PR** (the captain's part): bump `src/basecradle/_version.py` from `X.Y.Z.dev0` to `X.Y.Z` and add the `CHANGELOG.md` entry (Keep a Changelog format). Merge on green CI. Do **not** put a closing keyword (`Closes #N`) on release PRs — see step 6.
 1b. **Hand off to the capital — the step that ends the captain's turn.** The merge wakes nobody, and steps 2–6 are not yours, so a release turn that ends at the merge leaves the publish with no owner (`CLAUDE.md` → Conventions, "arm auto-merge — never end a turn parked on CI"). Post a comment on the release issue naming the version, the merge commit, and that `_version.py` now reads `X.Y.Z`, and apply **`needs-capital`** — the capital's inbox is the org-wide `needs-capital` query, and the label is what puts the ball in its court. Leave the issue **open**: step 6 is the capital's close. That comment is the last thing the captain owes a release.
-2. **Tag**: on main after the merge — `git tag vX.Y.Z && git push origin vX.Y.Z`. This triggers the release workflow.
+2. **Tag**: on main after the merge — **derive the tag from `_version.py` rather than retyping it.** The tree is the single source of truth, and a hand-typed tag is the one thing in this pipeline that can disagree with it:
+
+   ```bash
+   version="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/basecradle/_version.py)"
+   git tag "v$version" && git push origin "v$version"
+   ```
+
+   This triggers the release workflow. Should a mismatched tag be pushed anyway, `release.yml`'s tag/version guard fails the `build` job **before** either publish job runs, so nothing reaches TestPyPI or PyPI and no version number is burned (#214). Recover by deleting the tag and retagging — remember the remote half, which is the non-obvious one:
+
+   ```bash
+   git tag -d "vX.Y.Z" && git push origin ":refs/tags/vX.Y.Z"
+   ```
 3. **Verify the rehearsal**: the TestPyPI publish is automatic. Build the clean venv as a throwaway in your own `~/scratch`, and delete it the moment the check passes (see "Verification venvs" below):
    `uv venv --seed --clear ~/scratch/verify-basecradle && source ~/scratch/verify-basecradle/bin/activate`
    Both flags earn their place: `--seed` puts `pip` *in* the venv (without it the next line runs the ambient pip, or none at all), and `--clear` replaces whatever is at the slot (without it `uv venv` refuses and leaves a stale venv from a failed run in place — which the check would then silently reuse, and "clean venv" would be a lie). Then:
