@@ -15,14 +15,44 @@ The pipeline (`.github/workflows/release.yml`): pushing a `v*` tag → build →
 
 1. **Release PR** (the captain's part): bump `src/basecradle/_version.py` from `X.Y.Z.dev0` to `X.Y.Z` and add the `CHANGELOG.md` entry (Keep a Changelog format). Merge on green CI. Do **not** put a closing keyword (`Closes #N`) on release PRs — see step 6.
 1b. **Hand off to the capital — the step that ends the captain's turn.** The merge wakes nobody, and steps 2–6 are not yours, so a release turn that ends at the merge leaves the publish with no owner (`CLAUDE.md` → Conventions, "arm auto-merge — never end a turn parked on CI"). Post a comment on the release issue naming the version, the merge commit, and that `_version.py` now reads `X.Y.Z`, and apply **`needs-capital`** — the capital's inbox is the org-wide `needs-capital` query, and the label is what puts the ball in its court. Leave the issue **open**: step 6 is the capital's close. That comment is the last thing the captain owes a release.
-2. **Tag**: on main after the merge — **derive the tag from `_version.py` rather than retyping it.** The tree is the single source of truth, and a hand-typed tag is the one thing in this pipeline that can disagree with it:
+2. **Tag**: on main after the merge — **never type the tag. Derive it from the version the tree builds, so the tag cannot name a version other than the one that gets published** (#214, #216). Run it from the repo root, as one block:
 
    ```bash
-   version="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/basecradle/_version.py)"
-   git tag "v$version" && git push origin "v$version"
+   (
+     set -euo pipefail
+
+     git switch main
+     git pull --ff-only
+     [ -z "$(git status --porcelain)" ] || { echo "tree is not clean — refusing to tag" >&2; exit 1; }
+
+     out="$(mktemp -d)"
+     trap 'rm -rf "$out"' EXIT
+     uv build --wheel --out-dir "$out"
+     version="$(basename "$out"/*.whl | cut -d- -f2)"
+
+     if [[ ! $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+       echo "this tree builds '$version', not a plain X.Y.Z release — refusing to tag." >&2
+       echo "a .dev0 means main is not on the release commit: step 1 has not merged," >&2
+       echo "or step 7 already bumped past it. Tag that commit, not main's tip." >&2
+       exit 1
+     fi
+
+     git tag "v$version"
+     git push origin "v$version"
+   )
    ```
 
-   This triggers the release workflow. Should a mismatched tag be pushed anyway, `release.yml`'s tag/version guard fails the `build` job **before** either publish job runs, so nothing reaches TestPyPI or PyPI and no version number is burned (#214). Recover by deleting the tag and retagging — remember the remote half, which is the non-obvious one:
+   **Why the wheel's filename and not `_version.py`:** `basename …*.whl | cut -d- -f2` is the *same expression* `release.yml`'s guard applies to the wheel it is about to publish (#214), so the tag and its backstop read one artifact one way. Neither candidate #216 named fits: `uv version --short` refuses a `dynamic = ["version"]` project, and `hatch` (the CLI) is not a declared dependency here — only `hatchling`, the backend. Reading `_version.py` by hand is the third option and the trap: it means re-implementing hatchling's version regex, which is case-insensitive, accepts `VERSION`, either quote and any spacing, and **strips a leading `v`** — so `__version__ = "v0.12.0"` builds `0.12.0` while a plain `sed` tags `vv0.12.0` (measured: the two disagree on five of seven realistic version lines). It is blind to PEP 440 normalization besides, which the filename has already applied.
+
+   Every other line closes a way the tag could still lie, and each is load-bearing:
+
+   - **`set -euo pipefail`, and one command per line.** The `&&` chains this step used to carry *defeat* `set -e`: a failure in a `&&` list is exempt unless it is the last command, so `git switch main && git pull --ff-only` continued past a failed switch and tagged whatever `HEAD` was, and `git tag … && git push …` exited **0** when the tag already existed — pushing nothing and reporting success. Split, both halt.
+   - **A `( … )` subshell, not a `bash <<'EOF'` heredoc.** The block is indented inside this list, and a heredoc terminator only closes at column 0 — pasted with its indentation it does not terminate, and bash runs the delimiter as a command and swallows the rest of the block. A subshell is indentation-proof, keeps `set -e` and the `trap` out of the caller's shell, and makes the refusals' `exit 1` exit the block rather than the operator's session. It is bash, for `[[ … =~ … ]]` and `pipefail`.
+   - **`git status --porcelain`, not `git diff --quiet`.** `git diff` does not see *untracked* files, and hatchling packages untracked-but-unignored files under `src/basecradle/` — so the wheel built here would not be the wheel CI builds from the tag, which is the whole point of building it. (`dist/` is gitignored, so this does not trip on ordinary build output.)
+   - **`uv build --wheel --out-dir "$(mktemp -d)"`.** Building into a fresh directory makes exactly one wheel matchable, so the glob cannot pick up a stale or foreign one — `basename` given two operands treats the second as a *suffix* rather than erroring, so a second wheel in a shared `dist/` would be silently accepted. It also touches nothing the clone's owner put there (`CLAUDE.md` → "Clean only what you created"), removes only its own directory, and skips the sdist nothing here reads.
+   - **An anchored `^[0-9]+\.[0-9]+\.[0-9]+$`.** A character-class test (`*[!0-9.]*`) accepts `1.2.3.4`, `0.12`, `0`, and `...`; anchoring refuses them. What it most matters for is main's steady state *between* releases, `X.Y.Z.dev0`: that is the one mismatch #214's guard **cannot** catch — tag and build agree — so it would sail through and put a dev build on PyPI under a filename that can never be replaced. This procedure tags plain releases only; this repo has never shipped a pre-release, and adding one is a capital call, not a local edit.
+
+   Pushing the tag triggers the release workflow. Should a mismatched tag be pushed anyway, `release.yml`'s tag/version guard fails the `build` job **before** either publish job runs, so nothing reaches TestPyPI or PyPI and no version number is burned (#214). Recover by deleting the tag and retagging — remember the remote half, which is the non-obvious one:
 
    ```bash
    git tag -d "vX.Y.Z" && git push origin ":refs/tags/vX.Y.Z"
