@@ -174,3 +174,50 @@ class TestForwardCompatibility:
         assert type(error) is BaseCradleError
         assert error.status == 500
         assert error.problem == {"message": "something broke"}
+
+    @pytest.mark.parametrize(
+        ("label", "code"),
+        [
+            ("a list", []),
+            ("an object", {"nested": "code"}),
+            ("a number", 42),
+            ("a bool", True),
+        ],
+    )
+    def test_a_code_that_is_not_a_string_does_not_crash(self, bc, api, label, code):
+        """``code`` is whatever the wire sent, and the registry is keyed by ``str``.
+
+        An unhashable value raised ``TypeError: unhashable type`` straight out of the
+        registry lookup, so a malformed problem document crashed the SDK instead of
+        producing the ``BaseCradleError`` this path promises -- and the caller got no
+        status, no code and no problem document with which to work out why. Found by
+        `mypy --strict`, which had been reporting the unnarrowed lookup all along (#229).
+        """
+        api.get("/users/dashboard").respond(500, json={"code": code, "detail": "broke"})
+
+        with pytest.raises(BaseCradleError) as exc_info:
+            bc.request("GET", "/users/dashboard")
+
+        error = exc_info.value
+        assert type(error) is BaseCradleError, label
+        assert error.status == 500
+        assert error.problem == {"code": code, "detail": "broke"}  # nothing is discarded
+        assert str(error) == "broke"  # the rich path still applies
+
+    def test_a_null_code_keeps_the_rich_problem_path(self, bc, api):
+        """A regression guard on the fix above: ``None`` is hashable, so it never crashed.
+
+        Narrowing to ``str`` must not quietly demote this case to the bare
+        HTTP-status-only error -- ``detail`` is still the message, and the problem
+        document is still attached.
+        """
+        api.get("/users/dashboard").respond(500, json={"code": None, "detail": "broke"})
+
+        with pytest.raises(BaseCradleError) as exc_info:
+            bc.request("GET", "/users/dashboard")
+
+        error = exc_info.value
+        assert error.code is None
+        assert error.detail == "broke"
+        assert str(error) == "broke"
+        assert error.problem == {"code": None, "detail": "broke"}
