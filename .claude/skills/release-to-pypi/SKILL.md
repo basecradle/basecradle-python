@@ -13,7 +13,13 @@ The pipeline (`.github/workflows/release.yml`): pushing a `v*` tag → build →
 
 ## The procedure, in order
 
-1. **Release PR** (the captain's part): bump `src/basecradle/_version.py` from `X.Y.Z.dev0` to `X.Y.Z` and add the `CHANGELOG.md` entry (Keep a Changelog format). Merge on green CI. Do **not** put a closing keyword (`Closes #N`) on release PRs — see step 6.
+1. **Release PR** (the captain's part): bump `src/basecradle/_version.py` from `X.Y.Z.dev0` to `X.Y.Z`, and make **three** edits to `CHANGELOG.md` — all three are CI-enforced since #229, because they are hand-typed copies of the same version and a mismatch would announce a release that was never built:
+
+   - rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`, in **exactly** that shape (`tests/test_version.py` reads it literally: four-digit year, zero-padded month and day, a plain hyphen — not an en dash),
+   - leave a fresh `## [Unreleased]` section above it, or the next cycle's changes have nowhere to go (after 0.11.0 it was renamed away and seven PRs merged into the gap),
+   - add the link definition at the bottom: `[X.Y.Z]: https://github.com/basecradle/basecradle-python/releases/tag/vX.Y.Z` — the label and the tag in the URL must be the same version.
+
+   Merge on green CI. Do **not** put a closing keyword (`Closes #N`) on release PRs — see step 6.
 1b. **Hand off to the capital — the step that ends the captain's turn.** The merge wakes nobody, and steps 2–6 are not yours, so a release turn that ends at the merge leaves the publish with no owner (`CLAUDE.md` → Conventions, "arm auto-merge — never end a turn parked on CI"). Post a comment on the release issue naming the version, the merge commit, and that `_version.py` now reads `X.Y.Z`, and apply **`needs-capital`** — the capital's inbox is the org-wide `needs-capital` query, and the label is what puts the ball in its court. Leave the issue **open**: step 6 is the capital's close. That comment is the last thing the captain owes a release.
 2. **Tag**: on main after the merge — **never type the tag. Derive it from the version the tree builds, so the tag cannot name a version other than the one that gets published** (#214, #216). **Cut it before anything else merges:** since #218 the tag must sit on main's tip, and step 7's `.dev0` bump moves the tip past the release commit — after which the shape check below and #218's guard exclude each other and nothing is taggable until a fresh release commit lands. Tag first, bump after. Run it from the repo root, as one block:
 
