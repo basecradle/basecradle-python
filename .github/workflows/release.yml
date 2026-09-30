@@ -52,9 +52,17 @@ jobs:
         run: |
           set -euo pipefail
 
-          tip="$(git ls-remote origin refs/heads/main | cut -f1)"
+          # Captured, then checked, in two statements on purpose. As one --
+          # tip="$(git ls-remote ... | cut -f1)" -- `set -e` plus `pipefail` makes a
+          # failed ls-remote abort the step on the assignment itself, so the branch
+          # below never runs and the capital sees a bare non-zero exit with no
+          # annotation: indistinguishable from a genuinely bad tag, which is the one
+          # distinction this branch exists to draw.
+          refs="$(git ls-remote origin refs/heads/main || true)"
+          tip="$(printf '%s' "$refs" | cut -f1)"
+
           if [ -z "$tip" ]; then
-            echo "::error::Could not read origin's refs/heads/main. Refusing to publish without confirming the tag is main's tip -- re-run the job if this was a network failure."
+            echo "::error::Could not read origin's refs/heads/main, so whether this tag is main's tip is unknown -- refusing to publish rather than guessing. Re-run the job if this was a network blip."
             exit 1
           fi
 
