@@ -1339,15 +1339,19 @@ class TestEachFailOpenEditIsCaught:
         with pytest.raises(AssertionError, match="'lint': 'true'"):
             check_no_gate_dependency_continues_on_error(broken)
 
-    def test_a_dependencys_step_may_continue_on_error(self, ci):
-        """The false-alarm direction, and it is live: one of the gate's dependencies
-        really does carry a step-level ``continue-on-error`` (the advisory pass over the
-        capital's stubs), and a check that flagged it would be unlandable.
+    def test_a_dependency_really_does_carry_a_step_level_continue_on_error(self, ci):
+        """The false-alarm direction is live, not hypothetical: one of the gate's
+        dependencies really does carry a step-level ``continue-on-error`` (the advisory
+        pass over the capital's stubs), so the column distinction is exercised against
+        this workflow and not only against fabricated fragments.
 
         Read from whichever job has one rather than by name, so renaming that job is not
-        a failure of the gate's test. If this ever fails because the last step-level
-        ``continue-on-error`` in ``ci.yml`` was removed, the column distinction is no
-        longer exercised against the real file — retire this test with it, the way
+        a failure of the gate's test. That the check stays green with it there is
+        ``test_no_gate_dependency_continues_on_error``'s assertion, not this one's —
+        making it here as well would report one regression as two failures.
+
+        If this ever fails because the last step-level ``continue-on-error`` in
+        ``ci.yml`` was removed, retire this test with it, the way
         ``test_the_scanner_finds_the_upload_steps`` says to.
         """
         bodies = job_bodies(ci)
@@ -1363,7 +1367,6 @@ class TestEachFailOpenEditIsCaught:
             "no dependency of the gate carries a step-level `continue-on-error` any "
             "more, so nothing proves this check tolerates one against the real ci.yml"
         )
-        check_no_gate_dependency_continues_on_error(ci)
 
     def test_renaming_the_gates_reported_check_is_still_caught(self, ci):
         """#238's guard, re-proved: this change rewired ``gate_check_name`` off its own
