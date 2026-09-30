@@ -24,12 +24,19 @@ jobs:
         run: uv build
       # The tag is only a trigger: `uv build` derives the version from
       # src/basecradle/_version.py via [tool.hatch.version], and nothing else here
-      # reads the tag. So a hand-typed tag that disagrees with the tree publishes
+      # reads the tag. So any tag that disagrees with the tree publishes
       # the wrong version number under the right tag name -- and a PyPI filename
-      # can only be superseded by another release, never replaced. The tag is typed
+      # can only be superseded by another release, never replaced. The tag is pushed
       # by the capital in a separate turn from the captain who set _version.py, so
       # assert the two agree here, where a mismatch costs a deleted tag rather than
       # a burned version number (#214).
+      #
+      # Since #216 the release-to-pypi skill's tag step derives the tag from the
+      # built wheel instead of having it typed, which takes the typo out of that
+      # route. This step still covers what the derivation does not: a tag pushed by
+      # any other route, and the sdist, which the skill never reads. It does NOT
+      # catch a version that is wrong on both sides at once -- a .dev0 tree, or a
+      # mis-bumped _version.py, agrees with its own artifacts and passes here.
       #
       # The artifacts' own filenames are the reading, and BOTH are checked: the
       # publish steps below upload all of dist/, so the sdist reaches PyPI under a
@@ -61,7 +68,10 @@ jobs:
           done
 
           if [ "$mismatched" -ne 0 ]; then
-            echo "::error::Recover by deleting the tag and retyping it (git tag -d TAG && git push origin :refs/tags/TAG), or -- if the two differ only by PEP 440 normalization -- by canonicalizing src/basecradle/_version.py."
+            echo "::error::Recover: delete the tag, then fix whichever side is actually wrong."
+            echo "::error::Delete it: git tag -d TAG ; git push origin :refs/tags/TAG -- two commands, because a failed local delete must not skip the remote."
+            echo "::error::Tag wrong? Re-run the release-to-pypi skill's tag step, which derives the tag from the built wheel. Do not retype it."
+            echo "::error::Tree wrong (mis-bump, or a PEP 440 normalization difference)? src/basecradle/_version.py needs a captain PR -- the capital does not write to this repo."
             exit 1
           fi
 
