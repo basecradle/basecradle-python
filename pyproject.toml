@@ -29,7 +29,7 @@ Source = "https://github.com/basecradle/basecradle-python"
 Issues = "https://github.com/basecradle/basecradle-python/issues"
 
 [dependency-groups]
-dev = ["pytest>=8", "respx>=0.22", "ruff>=0.16.8"]
+dev = ["mypy>=1.18", "pytest>=8", "respx>=0.22", "ruff>=0.16.8"]
 
 [build-system]
 requires = ["hatchling>=1.32.0"]
@@ -40,6 +40,20 @@ path = "src/basecradle/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/basecradle"]
+
+# py.typed promises every downstream user that these annotations are real, so something
+# has to check them -- a promise nothing checks is theater (#229 Part 2). Configured here
+# rather than in the CI job's flags, so `uv run mypy` locally and the `types` job cannot
+# disagree about what "strict" means.
+#
+# The baseline is four `# type: ignore[...]` sites in src/, each with a reason above it
+# saying why the code cannot be typed instead -- never a per-module or config-level
+# allowance, which would hide whatever arrives next in the same file. `strict` includes
+# `warn_unused_ignores`, so an ignore that stops being needed becomes an error: the
+# baseline shrinks only by fixing and cannot silently grow.
+[tool.mypy]
+strict = true
+files = ["src/basecradle"]
 
 [tool.ruff]
 line-length = 100

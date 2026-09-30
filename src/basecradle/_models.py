@@ -48,7 +48,11 @@ class ApiObject:
 
     def _wrap(self, name: str, value: Any) -> Any:
         """Wrap dicts (and lists of dicts) in their annotated model class, if any."""
-        nested_class = _nested_classes(type(self)).get(name)
+        # mypy baseline: `functools.cache` wants a `Hashable`, and on `type[ApiObject]` mypy
+        # resolves `__hash__` to the *unbound* instance method, whose arity does not match
+        # `Hashable.__hash__`. The class is hashable at runtime; this is mypy reading the
+        # descriptor, and there is no annotation on this call that changes its mind.
+        nested_class = _nested_classes(type(self)).get(name)  # type: ignore[arg-type]
         if nested_class is None:
             return value
         if isinstance(value, dict):
@@ -70,7 +74,9 @@ class ApiObject:
             )
         return self._client
 
-    def _verb(self, method: str, path: str, apply: Callable[[Any], Any], **request_kwargs: Any):
+    def _verb(
+        self, method: str, path: str, apply: Callable[[Any], Any], **request_kwargs: Any
+    ) -> Any:
         """Run a verb against the API — the sync/async dispatch, written once.
 
         Attached to a sync client: executes now and returns ``apply``'s result.
@@ -83,7 +89,7 @@ class ApiObject:
 
     async def _averb(
         self, client: Any, method: str, path: str, apply: Callable[[Any], Any], **kwargs: Any
-    ):
+    ) -> Any:
         return apply(await client.request(method, path, **kwargs))
 
     def __repr__(self) -> str:

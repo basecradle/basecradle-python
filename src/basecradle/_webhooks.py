@@ -13,7 +13,7 @@ as raw paths. With ``AsyncBaseCradle``, await the verbs.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterator
-from typing import Any, TypeVar, overload
+from typing import Any, TypeVar, cast, overload
 
 from basecradle._items import (
     AsyncItemsResource,
@@ -81,7 +81,7 @@ class WebhookEndpoint(ApiObject):
     timeline: ApiObject  # reference form — dereference via bc.timelines.get(...)
     content: WebhookEndpointContent
 
-    def disable(self):
+    def disable(self) -> Any:
         """Soft-stop: refuse inbound deliveries (410 Gone) until re-enabled.
 
         The endpoint and its event history are kept; reversible via ``enable()``.
@@ -89,14 +89,14 @@ class WebhookEndpoint(ApiObject):
         """
         return self._verb("DELETE", self._enablement_path(), self._adopt)
 
-    def enable(self):
+    def enable(self) -> Any:
         """Re-enable a disabled endpoint — inbound deliveries are accepted again.
 
         With ``AsyncBaseCradle``, await this.
         """
         return self._verb("POST", self._enablement_path(), self._adopt)
 
-    def rotate(self):
+    def rotate(self) -> Any:
         """Regenerate the ingest URL. The old URL dies immediately; the uuid is unchanged.
 
         Use this when an ingest URL leaks. Recorded events are preserved.
@@ -147,7 +147,10 @@ class WebhookEventHeaders(dict[str, str]):
             )
         return super().__getitem__(wire_name)
 
-    @overload
+    # mypy baseline: these overloads deliberately restate `dict.get`'s contract more
+    # narrowly -- keys here are header names, so `str`. Widening them to match
+    # `dict.get` exactly is the opposite of what #199 landed this class for.
+    @overload  # type: ignore[override]
     def get(self, name: str) -> str | None: ...
 
     @overload
@@ -248,7 +251,7 @@ class _WebhookEndpointsBinding:
     _path = "/webhook_endpoints"
     _plural = "webhook_endpoints"
     _singular = "webhook_endpoint"
-    _model = WebhookEndpoint
+    _model: type[ApiObject] = WebhookEndpoint
 
 
 class _WebhookEventsBinding:
@@ -257,12 +260,15 @@ class _WebhookEventsBinding:
     _path = "/webhook_events"
     _plural = "webhook_events"
     _singular = "webhook_event"
-    _model = WebhookEvent
+    _model: type[ApiObject] = WebhookEvent
 
-    def filter(self, *, timeline: Any | None = None, endpoint: Any | None = None):
+    def filter(self, *, timeline: Any | None = None, endpoint: Any | None = None) -> Any:
         """A new lazy resource narrowed by timeline and/or endpoint (objects or uuids)."""
         filters = self._merge_filters(timeline=timeline, endpoint=endpoint)  # type: ignore[attr-defined]
-        return type(self)(self._client, filters=filters)  # type: ignore[attr-defined]
+        # mypy baseline: `_WebhookEventsBinding` is a mixin -- its `__init__` comes from the
+        # `ItemsResource` it is combined with, which mypy cannot see from the mixin alone.
+        # No annotation expresses that; typing it needs the two to become one class.
+        return type(self)(self._client, filters=filters)  # type: ignore[attr-defined, call-arg]
 
 
 class WebhookEndpointsResource(_WebhookEndpointsBinding, ItemsResource): ...
@@ -327,10 +333,13 @@ class AsyncTimelineWebhookEndpoints(_NestedCreatorCore):
         return _endpoint_from(response, self._client)
 
     def __aiter__(self) -> AsyncIterator[WebhookEndpoint]:
-        return (
-            AsyncWebhookEndpointsResource(self._client)
-            .filter(timeline=self._timeline_uuid)
-            .__aiter__()
+        return cast(
+            AsyncIterator[WebhookEndpoint],
+            (
+                AsyncWebhookEndpointsResource(self._client)
+                .filter(timeline=self._timeline_uuid)
+                .__aiter__()
+            ),
         )
 
 
@@ -345,8 +354,11 @@ class AsyncTimelineWebhookEvents(_NestedCreatorCore):
     """One timeline's webhook events, async — read-only."""
 
     def __aiter__(self) -> AsyncIterator[WebhookEvent]:
-        return (
-            AsyncWebhookEventsResource(self._client)
-            .filter(timeline=self._timeline_uuid)
-            .__aiter__()
+        return cast(
+            AsyncIterator[WebhookEvent],
+            (
+                AsyncWebhookEventsResource(self._client)
+                .filter(timeline=self._timeline_uuid)
+                .__aiter__()
+            ),
         )

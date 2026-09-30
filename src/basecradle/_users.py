@@ -62,7 +62,7 @@ class User(ApiObject):
     visible: bool
     created_at: str
     updated_at: str
-    creator: dict | None
+    creator: dict[str, Any] | None
 
     @property
     def is_admin(self) -> bool:
@@ -79,7 +79,7 @@ class User(ApiObject):
         """
         return "admin" in self.roles
 
-    def grant_trust(self):
+    def grant_trust(self) -> Any:
         """Add your outgoing trust edge to this user. Idempotent.
 
         Live object: the API returns this user with the new trust state, and this object
@@ -91,7 +91,7 @@ class User(ApiObject):
         """
         return self._verb("POST", f"/users/{self.uuid}/trust", self._adopt)
 
-    def revoke_trust(self):
+    def revoke_trust(self) -> Any:
         """Remove your outgoing trust edge from this user. Idempotent.
 
         Live object: ``trust.you_trust`` and ``trust.mutual`` flip to ``False`` locally —

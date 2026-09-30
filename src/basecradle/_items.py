@@ -18,7 +18,7 @@ import os
 from collections.abc import AsyncIterator, Iterator
 from datetime import datetime
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, Any, cast
 
 from basecradle._models import ApiObject
 from basecradle._pagination import apaginate, paginate
@@ -123,7 +123,7 @@ class Task(Item):
 
     content: TaskContent
 
-    def cancel(self):
+    def cancel(self) -> Any:
         """Withdraw this **pending** task before it activates.
 
         The task's alarm never fires and the slot it held under your
@@ -162,7 +162,7 @@ class _ItemsResourceCore:
         self._client = client
         self._filters = filters or {}
 
-    def filter(self, *, timeline: Any | None = None):
+    def filter(self, *, timeline: Any | None = None) -> Any:
         """A new lazy resource narrowed to one timeline (a ``Timeline`` or a uuid)."""
         return type(self)(self._client, filters=self._merge_filters(timeline=timeline))
 
@@ -220,7 +220,7 @@ class _MessagesBinding:
     _path = "/messages"
     _plural = "messages"
     _singular = "message"
-    _model = Message
+    _model: type[ApiObject] = Message
 
 
 class _AssetsBinding:
@@ -229,7 +229,7 @@ class _AssetsBinding:
     _path = "/assets"
     _plural = "assets"
     _singular = "asset"
-    _model = Asset
+    _model: type[ApiObject] = Asset
 
 
 class _TasksBinding:
@@ -238,9 +238,9 @@ class _TasksBinding:
     _path = "/tasks"
     _plural = "tasks"
     _singular = "task"
-    _model = Task
+    _model: type[ApiObject] = Task
 
-    def filter(self, *, timeline: Any | None = None, status: str | None = None):
+    def filter(self, *, timeline: Any | None = None, status: str | None = None) -> Any:
         """A new lazy resource narrowed by timeline and/or status.
 
         ``status`` is one of ``pending``, ``activated``, ``blocked_timeline_locked``,
@@ -249,7 +249,10 @@ class _TasksBinding:
         filters = self._merge_filters(timeline=timeline)  # type: ignore[attr-defined]
         if status is not None:
             filters["status"] = status
-        return type(self)(self._client, filters=filters)  # type: ignore[attr-defined]
+        # mypy baseline: `_TasksBinding` is a mixin -- its `__init__` comes from the
+        # `ItemsResource` it is combined with, which mypy cannot see from the mixin alone.
+        # No annotation expresses that; typing it needs the two to become one class.
+        return type(self)(self._client, filters=filters)  # type: ignore[attr-defined, call-arg]
 
 
 class MessagesResource(_MessagesBinding, ItemsResource): ...
@@ -361,7 +364,10 @@ class AsyncTimelineMessages(_NestedCreatorCore):
         return _message_from(response, self._client)
 
     def __aiter__(self) -> AsyncIterator[Message]:
-        return AsyncMessagesResource(self._client).filter(timeline=self._timeline_uuid).__aiter__()
+        return cast(
+            AsyncIterator[Message],
+            AsyncMessagesResource(self._client).filter(timeline=self._timeline_uuid).__aiter__(),
+        )
 
 
 class TimelineAssets(_NestedCreatorCore):
@@ -416,7 +422,10 @@ class AsyncTimelineAssets(_NestedCreatorCore):
         return _asset_from(response, self._client)
 
     def __aiter__(self) -> AsyncIterator[Asset]:
-        return AsyncAssetsResource(self._client).filter(timeline=self._timeline_uuid).__aiter__()
+        return cast(
+            AsyncIterator[Asset],
+            AsyncAssetsResource(self._client).filter(timeline=self._timeline_uuid).__aiter__(),
+        )
 
 
 class TimelineTasks(_NestedCreatorCore):
@@ -467,7 +476,10 @@ class AsyncTimelineTasks(_NestedCreatorCore):
         return _task_from(response, self._client)
 
     def __aiter__(self) -> AsyncIterator[Task]:
-        return AsyncTasksResource(self._client).filter(timeline=self._timeline_uuid).__aiter__()
+        return cast(
+            AsyncIterator[Task],
+            AsyncTasksResource(self._client).filter(timeline=self._timeline_uuid).__aiter__(),
+        )
 
 
 # --- helpers ------------------------------------------------------------------------------
@@ -480,10 +492,10 @@ def _uuid_of(value: Any) -> str:
     ``content.uuid`` (items, webhook endpoints) — mirroring how the API addresses them.
     """
     if not isinstance(value, ApiObject):
-        return value
+        return cast(str, value)
     if "uuid" in value._data:
-        return value._data["uuid"]
-    return value._data["content"]["uuid"]
+        return cast(str, value._data["uuid"])
+    return cast(str, value._data["content"]["uuid"])
 
 
 def _open_upload(file: str | Path | IO[bytes]) -> tuple[str, IO[bytes], bool]:
