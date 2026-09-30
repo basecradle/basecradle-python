@@ -44,7 +44,8 @@ jobs:
         run: uv run pytest
 
   # The spec drift-guard: fails when the live API has endpoints the SDK doesn't cover.
-  # The one job that touches the network (a single GET of the public spec).
+  # The only job that reaches the live platform (a single GET of the public spec);
+  # actionlint below also leaves the runner, but only to a pinned linter image.
   drift:
     name: drift-guard
     runs-on: ubuntu-latest
@@ -125,12 +126,88 @@ jobs:
           done
           [ ${#bad[@]} -eq 0 ]
 
+  # release.yml runs only on a `v*` tag push, so nothing else in CI ever parses it --
+  # and it is where both publish guards live (#214, #218). A mis-indented step or a
+  # malformed expression would first surface against a real tag, at the one moment a
+  # broken pipeline costs a burned version number. Lint every workflow on every PR
+  # instead (#224).
+  #
+  # Pinned by DIGEST, not by tag and not @latest: a linter that moves under us turns an
+  # unrelated PR red, and "the lint changed" is the one CI failure nobody's diff
+  # explains. The image is the pin for all three linters at once -- actionlint ships
+  # shellcheck and pyflakes inside it, so the shell in every `run:` block is checked
+  # against a fixed shellcheck rather than whatever `ubuntu-latest` happens to carry
+  # this week. Bumping means one digest, with the version comment beside it.
+  #
+  # No arguments: actionlint then lints every workflow the repo has, so a new file --
+  # or a `.yaml` one -- is covered without this job being edited, which is the failure
+  # mode a `*.yml` glob invites. That includes the two stubs carried verbatim from the
+  # capital (needs-human-alert.yml, dependabot-auto-merge.yml). Worth knowing before it
+  # happens: a finding in one of those cannot be fixed here -- editing a shared
+  # artifact trips the NOC drift-guard -- so it is a capital handoff, and `-ignore` is
+  # the local hold in the meantime rather than leaving the gate red on every PR.
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10  # the gate now needs this job; never let it wedge every merge
+    env:
+      # rhysd/actionlint 1.7.12
+      ACTIONLINT_IMAGE: "rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Pull the linter
+        # Retried: one transient registry 5xx would otherwise redden a PR that touched
+        # no workflow file -- the same unexplainable failure the digest pin avoids.
+        run: |
+          set -euo pipefail
+
+          for attempt in 1 2 3; do
+            if docker pull --quiet "$ACTIONLINT_IMAGE"; then
+              exit 0
+            fi
+            echo "pull failed (attempt $attempt/3)" >&2
+            sleep $((attempt * 5))
+          done
+
+          echo "::error::Could not pull $ACTIONLINT_IMAGE after 3 attempts."
+          exit 1
+      - name: Every linter actionlint delegates to must be present
+        # actionlint shells out for the shell and python checks and simply SKIPS the
+        # rule when the tool is missing -- exit 0, no warning, no mention. Measured
+        # locally: the same workflow with one unquoted expansion exits 1 with
+        # shellcheck on PATH and 0 without it. So assert on actionlint's own report of
+        # what it disabled, rather than on a PATH lookup standing in for it: that keeps
+        # holding if it ever grows another reason to disable a rule.
+        run: |
+          set -euo pipefail
+
+          disabled="$(docker run --rm -v "$PWD:/repo" --workdir /repo "$ACTIONLINT_IMAGE" \
+            -verbose 2>&1 >/dev/null | grep 'was disabled' | sort -u || true)"
+
+          if [ -n "$disabled" ]; then
+            echo "$disabled" >&2
+            echo "::error::actionlint disabled a rule because its tool is missing from the image, so those checks would pass silently. See the log above."
+            exit 1
+          fi
+
+          echo "actionlint has every delegated linter; no rule disabled."
+      - name: Lint every workflow
+        # -format so findings land as annotations on the PR's changed files, the way
+        # this repo's other guards report (the trailers job below, release.yml's two
+        # publish guards). Default output only reaches whoever opens the job log.
+        run: |
+          set -euo pipefail
+
+          format=$'{{range $err := .}}::error file={{$err.Filepath}},line={{$err.Line}},col={{$err.Column}}::{{$err.Message}}\n{{end}}'
+
+          docker run --rm -v "$PWD:/repo" --workdir /repo "$ACTIONLINT_IMAGE" -format "$format"
+
   # The gate: the single required status check in branch protection.
   # Adding or dropping Python versions never requires a ruleset change.
   ci:
     name: CI
     runs-on: ubuntu-latest
-    needs: [lint, test, drift, trailers]
+    needs: [lint, test, drift, trailers, actionlint]
     if: always()
     steps:
       - name: Fail unless every required job succeeded
