@@ -154,6 +154,7 @@ endpoint.rotate()  # leaked URL? new ingest_url, old one dies, uuid unchanged
 # Read what came in — across all timelines, or narrowed
 for event in bc.webhook_events.filter(endpoint=endpoint):
     print(event.content.content_type, event.content.payload)
+    print(event.content.headers["content-length"])  # lookup folds case (wire: Content-Length)
     print(event.content.verified_at_receipt)  # was its signature verified on arrival?
     print(event.webhook_endpoint.content.ingest_url)  # where the endpoint is *now*
 ```
@@ -161,6 +162,8 @@ for event in bc.webhook_events.filter(endpoint=endpoint):
 **An event embeds its endpoint in full** — the API's one deliberate exception to "a record references its container", because a reader of an event almost always wants the endpoint next. So `event.webhook_endpoint` is a whole `WebhookEndpoint`: its identity is `event.webhook_endpoint.content.uuid`, its verbs work straight off the event (`event.webhook_endpoint.rotate()`), and it is a `bc.webhook_events.filter(endpoint=...)` value as it stands. Everything inside it is the endpoint's state **now**. The event's only *historical* facts are the two in its own `content`: `ingest_token_at_receipt` (which — possibly since-rotated — URL the delivery came in on) and `verified_at_receipt` (whether its signature checked out when it arrived).
 
 **An endpoint has an author; an event does not.** `endpoint.user` is the peer who created the endpoint, and every delivery there inherits that author — but the event itself carries no `user`, because an inbound delivery came from an external sender, not a peer. The same goes for a `webhook_event` row of `timeline.items`: branch on `item.type` before reading `item.user`, and reach the author at `item.webhook_endpoint.user`.
+
+**Header names are looked up case-insensitively.** `event.content.headers` is the delivery's request headers, one pair per header, `Content-Type` and `Content-Length` included. The platform does not preserve a sender's casing — it stores names canonicalized to Title-Case per segment (`X-Github-Delivery`, not `X-GitHub-Delivery`) — and header names are case-insensitive by RFC, so lookup here is too: `headers["X-GitHub-Delivery"]` (GitHub's own published spelling), `headers["x-github-delivery"]` and the wire's own `headers["X-Github-Delivery"]` all read the same header, and `in` and `.get()` match the same way. Nothing is renamed: iterating, `keys()` and `==` read the platform's canonical spelling, so the object still matches what you see in the API docs. A header that was genuinely not delivered is *absent* rather than `None` — subscripting raises `KeyError` naming what did arrive, and `.get()` returns its default. (Reached instead through a `webhook_event` row of `timeline.items`, `content` is the generic wire-exact object — a timeline item's content is a union of four record types — so `item.content.headers` is the plain dict the API returned. `bc.webhook_events` and `timeline.webhook_events` give the case-folding one.)
 
 ## Idempotent creates and automatic retries
 

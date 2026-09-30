@@ -8,16 +8,21 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 ## [Unreleased]
 
-### Documented
+### Changed
 
-- **`WebhookEventContent.headers` now carries the casing caveat the platform documents.** A
-  delivery's header names arrive canonicalized to Title-Case per segment, and the SDK hands
-  them back exactly as the wire gave them — so a sender's own published spelling can miss.
-  `headers["X-Github-Delivery"]` reads GitHub's delivery id, while
-  `headers["X-GitHub-Delivery"]` — the spelling GitHub publishes — raises `KeyError`. Match
-  case-insensitively instead; `httpx.Headers(event.content.headers)["x-github-delivery"]`
-  does it in one expression, and `httpx` is already the only runtime dependency. A test
-  pins it. No behavior change — the SDK has always passed the hash through untouched.
+- **`WebhookEventContent.headers` now looks header names up case-insensitively.** Header
+  names are case-insensitive by RFC, the platform rewrites them to canonical Title-Case per
+  segment (`X-Github-Delivery`, not `X-GitHub-Delivery`), and its docs tell consumers to
+  match case-insensitively — so a case-sensitive headers object was a defect in the object.
+  `headers["X-GitHub-Delivery"]` (GitHub's own published spelling),
+  `headers["x-github-delivery"]` and the wire's own `headers["X-Github-Delivery"]` now all
+  read the same header; `in` and `.get()` fold case the same way. **Reads still match the
+  wire:** the value is a `dict` of exactly the pairs the API returned, so iterating,
+  `keys()` and `==` read the platform's spelling and nothing is renamed. A header that was
+  genuinely not delivered stays *absent* rather than becoming `None` — subscripting raises
+  `KeyError` naming the headers that did arrive, and `.get()` returns its default. The type
+  is exported as `WebhookEventHeaders`. Both SDKs changed in lockstep (python#199,
+  ruby#173).
 
 ## [0.10.0] - 2026-09-23
 

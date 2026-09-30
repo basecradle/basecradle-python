@@ -36,6 +36,7 @@ __all__ = [
     "WebhookEndpointsResource",
     "WebhookEvent",
     "WebhookEventContent",
+    "WebhookEventHeaders",
     "WebhookEventsResource",
     "WebhookVerification",
 ]
@@ -110,6 +111,66 @@ class WebhookEndpoint(ApiObject):
         self._data.update(response["webhook_endpoint"])
 
 
+class WebhookEventHeaders(dict[str, str]):
+    """One delivery's request headers: the wire's own spelling, looked up case-insensitively.
+
+    A plain ``dict`` of exactly what the wire carried — one pair per header,
+    ``Content-Type`` and ``Content-Length`` included — so iterating, ``keys()`` and ``==``
+    all read the platform's own spelling and nothing is renamed. Only **lookup** folds
+    case, because header names are case-insensitive by RFC and the platform does not
+    preserve the sender's casing: it stores names canonicalized to Title-Case per segment
+    (``X-Github-Delivery``, not ``X-GitHub-Delivery``). So a vendor's published spelling
+    finds the header it names, and so does any other casing of it::
+
+        event.content.headers["X-GitHub-Delivery"]  # GitHub's own published spelling
+        event.content.headers["x-github-delivery"]  # the lowercase form
+        event.content.headers["X-Github-Delivery"]  # what the wire actually carried
+
+    ``in`` and ``get()`` fold case the same way, and ``copy()`` gives another of these. A
+    header that was genuinely not delivered is **absent**, never ``None``: subscripting
+    raises ``KeyError`` naming the headers that did arrive, and ``get()`` returns its
+    default — plain ``dict`` behavior. Converting away from this type gives up the case
+    folding (``dict(headers)``, ``{**headers}``, ``headers | other``), and so does writing
+    to it: this is a read of one delivery that already happened, so the ``dict`` mutators
+    are left exactly as ``dict`` defines them, case-sensitive.
+    """
+
+    def __getitem__(self, name: str) -> str:
+        wire_name = self._wire_name(name)
+        if wire_name is None:
+            raise KeyError(
+                f"No {name!r} header on this delivery. Header names are matched "
+                f"case-insensitively, so no casing of it was delivered either. "
+                f"Headers present: {sorted(self)}"
+            )
+        return super().__getitem__(wire_name)
+
+    def get(self, name: str, default: Any = None) -> Any:
+        """The header's value, matched case-insensitively, or ``default`` if not delivered."""
+        wire_name = self._wire_name(name)
+        return default if wire_name is None else super().__getitem__(wire_name)
+
+    def __contains__(self, name: object) -> bool:
+        return self._wire_name(name) is not None
+
+    def copy(self) -> WebhookEventHeaders:
+        """Another headers object — ``dict.copy()`` would silently downgrade to a plain dict."""
+        return WebhookEventHeaders(self)
+
+    def _wire_name(self, name: object) -> str | None:
+        """The wire's own spelling of ``name``, or ``None`` if no casing of it was delivered.
+
+        Anything but a string is simply not a header name, so it reads as absent rather than
+        blowing up in ``str.lower`` — ``headers[object()]`` owes a ``KeyError``.
+        """
+        if not isinstance(name, str):
+            return None
+        if super().__contains__(name):
+            return name
+        folded = name.lower()
+        return next((wire_name for wire_name in self if wire_name.lower() == folded), None)
+
+
 class WebhookEventContent(ApiObject):
     """One inbound delivery: what was sent, and the two facts fixed when it arrived.
 
@@ -119,24 +180,32 @@ class WebhookEventContent(ApiObject):
     at the end of ``event.webhook_endpoint.content.ingest_url`` tells you whether the
     endpoint has rotated since.
 
-    ``headers`` is the delivery's request headers, one pair per header in wire spelling,
-    ``Content-Type`` and ``Content-Length`` included — but **the sender's casing is not
-    preserved**: names arrive canonicalized to Title-Case per segment, and the SDK hands
-    them back exactly as the wire gave them. A vendor's own published spelling can
-    therefore miss: ``headers["X-Github-Delivery"]`` reads GitHub's delivery id, while
-    ``headers["X-GitHub-Delivery"]`` — the spelling GitHub itself publishes — raises
-    ``KeyError``. Match case-insensitively instead. ``httpx`` is already this SDK's only
-    runtime dependency, so its header mapping is the one-expression way to do it::
+    ``headers`` is the delivery's request headers. The platform rewrites header names to
+    canonical Title-Case per segment and its docs tell you to look them up
+    case-insensitively, so this SDK hands back the wire's own pairs in an object whose
+    lookup folds case: ``headers["X-GitHub-Delivery"]`` — GitHub's own published spelling —
+    and ``headers["x-github-delivery"]`` both read the header the wire spells
+    ``X-Github-Delivery``. See ``WebhookEventHeaders``.
 
-        httpx.Headers(event.content.headers)["x-github-delivery"]
+    Reached instead through a ``webhook_event`` row of ``timeline.items``, ``content`` is
+    the generic wire-exact object — a timeline item's content is a union of four record
+    types, so it is not a ``WebhookEventContent`` — and ``item.content.headers`` is the
+    plain dict the API returned. ``bc.webhook_events`` and ``timeline.webhook_events`` give
+    the case-folding one.
     """
 
     uuid: str
     content_type: str
-    headers: dict
+    headers: WebhookEventHeaders  # wire-exact pairs; lookup folds case
     payload: str  # the raw request body, exactly as delivered
     ingest_token_at_receipt: str  # the (possibly now-retired) ingest token it arrived on
     verified_at_receipt: bool  # was the delivery's signature verified on arrival?
+
+    def _wrap(self, name: str, value: Any) -> Any:
+        """As ``ApiObject``, plus the one field presented richer than its wire type."""
+        if name == "headers" and isinstance(value, dict):
+            return WebhookEventHeaders(value)
+        return super()._wrap(name, value)
 
 
 class WebhookEvent(ApiObject):
