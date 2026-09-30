@@ -1,4 +1,5 @@
-"""The workflow-hygiene invariant: nothing this repo's CI uploads outlives 30 days.
+"""Two workflow-hygiene invariants: bounded artifact retention, and a gate that covers
+every job.
 
 ``constitution.md`` → How We Build: whatever a build leaves behind has a named owner, a
 fixed home, and a stated end, and nothing outlives 30 days without a written reason. A
@@ -25,6 +26,17 @@ What it deliberately does not read, each failing loudly rather than passing: **f
 every workflow here does; and **reusable workflows**, whose steps live in the repo that
 owns them, so an artifact uploaded by ``basecradle/.github`` is that repo's invariant to
 keep, not this scan's to enforce.
+
+The second invariant (#238): every job in ``ci.yml`` is in the ``ci`` gate's ``needs``.
+The gate is the single required status check in branch protection, and its coverage is a
+hand-maintained list — a job added without editing that line runs on every PR, goes red,
+and **merges anyway**, because it is not the required check. That failure looks exactly
+like working CI. The list went from four entries to six in one session (#226, #236) on
+memory alone.
+
+It is read by text matching for the same reason as the scan above, and it inherits the
+same discipline: ``unreadable_job_lines`` reports a job key the matcher cannot read rather
+than dropping it, because a dropped job key is precisely the bug this is here to catch.
 """
 
 import re
@@ -421,3 +433,284 @@ class TestTheScannerItself:
             f"      - uses: actions/upload-artifact@v7\n        with:\n{body}\n"
         )
         check_bounded_retention(step)
+
+
+# ---------------------------------------------------------------------------------------
+# #238: the gate must depend on every job
+# ---------------------------------------------------------------------------------------
+
+CI_WORKFLOW = WORKFLOWS / "ci.yml"
+
+#: The gate's job key, and the check name branch protection requires. Both matter: the
+#: key is what ``needs`` entries and this scan refer to, while the **name** is what GitHub
+#: reports and what branch protection matches on -- so renaming only the name would leave
+#: the required check never arriving, with every job still listed correctly.
+GATE_JOB = "ci"
+GATE_CHECK_NAME = "CI"
+
+#: A job key: exactly two spaces, a key, nothing else. Meaningful only inside the
+#: top-level ``jobs:`` block -- ``on:`` and ``concurrency:`` carry two-space keys too
+#: (``pull_request:``, ``group:``).
+JOB_KEY = re.compile(r"^ {2}(?P<name>[A-Za-z_][\w-]*):\s*$")
+
+#: Anything else at two-space indent inside the jobs block: a quoted key, a key with a
+#: trailing comment, a key with a value. Reported rather than skipped.
+JOB_KEY_SHAPED = re.compile(r"^ {2}\S")
+
+#: An inline-array ``needs:``, tolerating a trailing comment the way RETENTION_DAYS does.
+NEEDS_LINE = re.compile(r"^ {4}needs:\s*\[(?P<jobs>[^\]]*)\]\s*(?:#.*)?$")
+
+
+def _jobs_block(text: str) -> list[str]:
+    """The lines inside the top-level ``jobs:`` block.
+
+    Indentation alone is enough to read this safely, and deliberately so -- no tracking of
+    block scalars. A ``run: |`` body is arbitrary text, but YAML requires its content to
+    be *more* indented than its key, and inside ``jobs:`` that key is already at six
+    spaces. So scalar content can never sit at the two spaces ``JOB_KEY`` reads, nor at
+    the column zero that closes the block: a column-0 line ends the scalar in YAML itself,
+    which is why the obvious counter-example (a heredoc writing ``name:`` at column 0)
+    does not parse at all -- GitHub and ``actionlint`` both reject it before this test
+    runs.
+    """
+    lines: list[str] = []
+    in_jobs = False
+
+    for line in text.splitlines():
+        if not in_jobs:
+            in_jobs = line.rstrip() == "jobs:"
+            continue
+        if line.strip() and not line.startswith((" ", "#")):
+            break  # a new top-level key closes the block
+        lines.append(line)
+
+    return lines
+
+
+def ci_job_names(text: str) -> list[str]:
+    """Every readable job key in a workflow, in the order written."""
+    return [m.group("name") for line in _jobs_block(text) if (m := JOB_KEY.match(line))]
+
+
+def unreadable_job_lines(text: str) -> list[str]:
+    """Two-space lines inside ``jobs:`` that are key-shaped but that JOB_KEY cannot read.
+
+    The blind-spot guard, and the important half of this pair. A job key written
+    ``  docs:  # new`` or ``  "docs":`` would otherwise never enter the comparison below,
+    so the job would be un-gated and the check would pass -- the exact failure it exists
+    to catch.
+    """
+    return [
+        line.rstrip()
+        for line in _jobs_block(text)
+        if JOB_KEY_SHAPED.match(line)
+        and not JOB_KEY.match(line)
+        and not line.lstrip().startswith("#")
+    ]
+
+
+def gate_needs(text: str) -> list[str] | None:
+    """The gate job's ``needs`` entries, or ``None`` if its ``needs:`` line is unreadable.
+
+    Scoped to the gate's own block: an inline ``needs:`` on any earlier job would
+    otherwise be read as the gate's, which both false-passes (an earlier list that happens
+    to match) and false-fails (blaming the gate for a list it never wrote).
+
+    ``None`` rather than ``[]`` on purpose — "the gate depends on nothing" and "this
+    matcher cannot read the line" are different failures, and only one is the gate's
+    fault.
+    """
+    in_gate = False
+    for line in _jobs_block(text):
+        job = JOB_KEY.match(line)
+        if job:
+            in_gate = job.group("name") == GATE_JOB
+            continue
+        if not in_gate:
+            continue
+        match = NEEDS_LINE.match(line)
+        if match:
+            # Quotes are legal YAML around a scalar and say nothing about the value.
+            return [
+                job.strip().strip("\"'") for job in match.group("jobs").split(",") if job.strip()
+            ]
+    return None
+
+
+def gate_check_name(text: str) -> str | None:
+    """The gate job's ``name:`` — what GitHub reports and branch protection matches."""
+    in_gate = False
+    for line in _jobs_block(text):
+        job = JOB_KEY.match(line)
+        if job:
+            in_gate = job.group("name") == GATE_JOB
+            continue
+        if in_gate and (match := re.match(r"^ {4}name:\s*(?P<name>\S+)\s*$", line)):
+            return match.group("name").strip("\"'")
+    return None
+
+
+def test_the_gate_scanner_read_the_workflow():
+    """The extraction found something — otherwise the check below is a vacuous pass."""
+    assert CI_WORKFLOW.is_file(), f"{CI_WORKFLOW} is missing"
+    jobs = ci_job_names(CI_WORKFLOW.read_text(encoding="utf-8"))
+    assert len(jobs) > 1, (
+        f"read {jobs} as the jobs in {CI_WORKFLOW.name} — either the file was restructured "
+        f"or JOB_KEY stopped matching, and the gate check below is empty"
+    )
+    assert GATE_JOB in jobs, f"no {GATE_JOB!r} job in {CI_WORKFLOW.name}"
+
+
+def test_no_job_key_escapes_the_scanner():
+    """No job is written in a shape JOB_KEY cannot read.
+
+    Without this, a job key the matcher misses is simply absent from the comparison
+    below — so the job is un-gated *and* the check is green, which is the failure this
+    whole section exists to prevent.
+    """
+    unreadable = unreadable_job_lines(CI_WORKFLOW.read_text(encoding="utf-8"))
+    assert unreadable == [], (
+        f"these lines in {CI_WORKFLOW.name}'s jobs block are key-shaped but unreadable to "
+        f"JOB_KEY, so any job among them is unchecked — write the key plainly as "
+        f"`  name:`, or widen JOB_KEY: {unreadable}"
+    )
+
+
+def test_the_gate_needs_line_is_readable():
+    """An unreadable ``needs:`` is its own failure, not "the gate depends on nothing"."""
+    assert gate_needs(CI_WORKFLOW.read_text(encoding="utf-8")) is not None, (
+        f"could not read the {GATE_JOB!r} job's inline `needs: [...]` in "
+        f"{CI_WORKFLOW.name}. If it was rewritten as a block list, widen NEEDS_LINE — do "
+        f"not leave it unread"
+    )
+
+
+def test_the_gate_depends_on_every_job():
+    """Every job in ``ci.yml`` is in the ``ci`` gate's ``needs``, and nothing else is.
+
+    Set equality, not containment, because both directions are bugs: a job missing from
+    ``needs`` is not required and merges red, and a ``needs`` entry naming a job that no
+    longer exists makes GitHub fail the whole workflow.
+
+    Not asserted here, deliberately (capital decision on #238): the gate also has to treat
+    a *skipped* dependency as a failure, since GitHub counts skipped required checks as
+    passing. It already does — see its ``if:`` — and a job that skips reddens the gate,
+    which is the safe direction.
+    """
+    text = CI_WORKFLOW.read_text(encoding="utf-8")
+    jobs = set(ci_job_names(text)) - {GATE_JOB}
+    needs = gate_needs(text)
+    assert needs is not None, "unreadable needs line; see test_the_gate_needs_line_is_readable"
+    assert jobs == set(needs), (
+        f"the {GATE_JOB!r} gate's `needs` must name every other job in "
+        f"{CI_WORKFLOW.name}. jobs={sorted(jobs)} needs={sorted(set(needs))}. A job "
+        f"missing from `needs` is not part of the required check: it runs, goes red, and "
+        f"merges anyway."
+    )
+    assert len(needs) == len(set(needs)), f"duplicate entries in the gate's `needs`: {needs}"
+
+
+def test_the_gate_reports_under_the_name_branch_protection_requires():
+    """Renaming the job's ``name:`` un-gates the repo while every ``needs`` stays correct.
+
+    Branch protection matches the *reported check name*, not the job key. So a rename here
+    means the required check never arrives and every PR is mergeable with no CI, with this
+    section's other tests all green.
+    """
+    name = gate_check_name(CI_WORKFLOW.read_text(encoding="utf-8"))
+    assert name == GATE_CHECK_NAME, (
+        f"the {GATE_JOB!r} job reports as {name!r}, but branch protection requires "
+        f"{GATE_CHECK_NAME!r}. Rename it back, or update branch protection *and* this test "
+        f"together — a mismatch means no required check arrives at all."
+    )
+
+
+class TestTheGateScannerItself:
+    """Where the job/needs extraction fires and where it does not, on fabricated files.
+
+    Every case here is a blind spot that would leave the checks above green and empty.
+    """
+
+    JOBS = "jobs:\n  lint:\n    runs-on: x\n"
+
+    def test_two_space_keys_outside_the_jobs_block_are_not_jobs(self):
+        text = (
+            "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\n"
+            "concurrency:\n  group: x\n" + self.JOBS
+        )
+        assert ci_job_names(text) == ["lint"]
+
+    def test_a_top_level_key_after_jobs_closes_the_block(self):
+        assert ci_job_names(self.JOBS + "something-else:\n  not-a-job:\n") == ["lint"]
+
+    def test_yaml_inside_a_run_block_is_not_read_as_structure(self):
+        """A script that writes YAML must not be mistaken for jobs.
+
+        Indentation is what makes this safe: the scalar's content is deeper than the
+        job keys, so nothing in it sits at the two spaces JOB_KEY reads. The column-0
+        variant of this would end the scalar in YAML itself and fail to parse, so it
+        cannot reach this scanner.
+        """
+        text = (
+            "jobs:\n"
+            "  lint:\n"
+            "    steps:\n"
+            "      - run: |\n"
+            "          cat <<'YML' > out.yml\n"
+            "          jobs:\n"
+            "            fake:\n"
+            "          YML\n"
+            "  docs:\n"
+            "    runs-on: x\n"
+        )
+        assert ci_job_names(text) == ["lint", "docs"]
+        assert unreadable_job_lines(text) == []
+
+    @pytest.mark.parametrize(
+        "line",
+        ['  "docs":', "  docs:  # the new docs job", "  docs: {}"],
+    )
+    def test_a_job_key_it_cannot_read_is_reported_not_dropped(self, line):
+        text = f"jobs:\n{line}\n    runs-on: x\n"
+        assert ci_job_names(text) == []
+        assert unreadable_job_lines(text) == [line]
+
+    def test_a_comment_inside_the_jobs_block_is_not_an_unreadable_key(self):
+        text = "jobs:\n  # a note about the jobs below\n  lint:\n    runs-on: x\n"
+        assert ci_job_names(text) == ["lint"]
+        assert unreadable_job_lines(text) == []
+
+    def test_needs_is_read_from_the_gate_and_not_an_earlier_job(self):
+        """An earlier job's inline `needs:` must not be mistaken for the gate's."""
+        text = (
+            "jobs:\n"
+            "  lint:\n    runs-on: x\n"
+            "  types:\n    needs: [lint]\n    runs-on: x\n"
+            "  ci:\n    needs: [lint, types]\n    runs-on: x\n"
+        )
+        assert gate_needs(text) == ["lint", "types"]
+
+    def test_a_gate_with_no_needs_reads_as_unreadable_not_empty(self):
+        text = "jobs:\n  lint:\n    needs: [x]\n    runs-on: x\n  ci:\n    runs-on: x\n"
+        assert gate_needs(text) is None
+
+    def test_quoted_needs_entries_are_the_same_jobs(self):
+        assert gate_needs("jobs:\n  ci:\n    needs: [\"lint\", 'test']\n") == ["lint", "test"]
+
+    def test_a_trailing_comment_on_needs_is_still_readable(self):
+        text = "jobs:\n  ci:\n    needs: [lint, test]  # every other job\n"
+        assert gate_needs(text) == ["lint", "test"]
+
+    def test_a_block_list_needs_is_reported_not_read_as_empty(self):
+        assert gate_needs("jobs:\n  ci:\n    needs:\n      - lint\n") is None
+
+    def test_an_empty_inline_list_reads_as_empty_not_unreadable(self):
+        assert gate_needs("jobs:\n  ci:\n    needs: []\n") == []
+
+    def test_reads_the_gates_reported_name(self):
+        text = "jobs:\n  lint:\n    name: lint\n  ci:\n    name: CI\n    runs-on: x\n"
+        assert gate_check_name(text) == "CI"
+
+    def test_the_gates_name_is_not_taken_from_another_job(self):
+        text = "jobs:\n  lint:\n    name: CI\n  ci:\n    runs-on: x\n"
+        assert gate_check_name(text) is None
