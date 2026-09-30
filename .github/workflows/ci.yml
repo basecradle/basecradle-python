@@ -139,13 +139,16 @@ jobs:
   # against a fixed shellcheck rather than whatever `ubuntu-latest` happens to carry
   # this week. Bumping means one digest, with the version comment beside it.
   #
-  # No arguments: actionlint then lints every workflow the repo has, so a new file --
-  # or a `.yaml` one -- is covered without this job being edited, which is the failure
-  # mode a `*.yml` glob invites. That includes the two stubs carried verbatim from the
-  # capital (needs-human-alert.yml, dependabot-auto-merge.yml). Worth knowing before it
-  # happens: a finding in one of those cannot be fixed here -- editing a shared
-  # artifact trips the NOC drift-guard -- so it is a capital handoff, and `-ignore` is
-  # the local hold in the meantime rather than leaving the gate red on every PR.
+  # Two passes, because two of this repo's workflows are not this repo's to fix (#233).
+  # `needs-human-alert.yml` and `dependabot-auto-merge.yml` are carried byte-identical
+  # from the capital and byte-diffed by the NOC drift-guard, so a finding in one of them
+  # has no in-repo remedy -- editing it would take the fleet's shared law out of sync.
+  # Blocking them would put every PR in the repo behind a file nobody here may touch.
+  #
+  # So: a blocking pass over the workflows this repo owns, and an advisory pass over the
+  # stubs that surfaces findings without gating them. The exclusion list names the SHARED
+  # files, never the owned ones, so a workflow added to this repo later is covered by the
+  # blocking pass without anybody editing this job.
   actionlint:
     name: actionlint
     runs-on: ubuntu-latest
@@ -153,6 +156,9 @@ jobs:
     env:
       # rhysd/actionlint 1.7.12
       ACTIONLINT_IMAGE: "rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667"
+      # Derived from CLAUDE.md below rather than trusted from here -- this is the value
+      # the cross-check asserts against, not a second source of truth.
+      SHARED_STUBS: "needs-human-alert.yml dependabot-auto-merge.yml"
     steps:
       - uses: actions/checkout@v7
       - name: Pull the linter
@@ -191,16 +197,122 @@ jobs:
           fi
 
           echo "actionlint has every delegated linter; no rule disabled."
-      - name: Lint every workflow
-        # -format so findings land as annotations on the PR's changed files, the way
-        # this repo's other guards report (the trailers job below, release.yml's two
-        # publish guards). Default output only reaches whoever opens the job log.
+      - name: SHARED_STUBS must still be what CLAUDE.md says is shared
+        # Single source of truth: which workflows are the capital's is CLAUDE.md's to
+        # state (-> Propagation). If a third shared workflow is propagated here and this
+        # list is not updated, it falls into the blocking pass below -- one finding in a
+        # file this repo may not edit, and every PR is red with no in-repo remedy, which
+        # is the outcome this job exists to prevent. Fail here instead. Same pattern, and
+        # the same reason, as the trailers job's CLAUDE.md check above.
         run: |
           set -euo pipefail
 
+          declared="$(grep -E '^Seven shared artifacts are carried verbatim' CLAUDE.md \
+            | grep -oE '\.github/workflows/[a-z-]+\.yml' | sed 's|.*/||' | sort -u)"
+          configured="$(printf '%s' "$SHARED_STUBS" | tr ' ' '\n' | sed '/^$/d' | sort -u)"
+
+          if [ "$declared" != "$configured" ]; then
+            echo "::error::SHARED_STUBS and CLAUDE.md -> Propagation disagree about which workflows are the capital's."
+            echo "::error::CLAUDE.md names: $(echo "$declared" | tr '\n' ' ')"
+            echo "::error::This job configures: $(echo "$configured" | tr '\n' ' ')"
+            echo "::error::Update SHARED_STUBS to match, or a shared stub is being gated (or an owned workflow is not)."
+            exit 1
+          fi
+
+          echo "SHARED_STUBS agrees with CLAUDE.md: $(echo "$configured" | tr '\n' ' ')"
+      - name: Lint the workflows this repo owns
+        # The blocking pass. -format so findings land as annotations on the PR's changed
+        # files, the way this repo's other guards report (the trailers job above,
+        # release.yml's two publish guards). Default output only reaches whoever opens
+        # the job log.
+        run: |
+          set -euo pipefail
+
+          owned=()
+          for workflow in .github/workflows/*.yml .github/workflows/*.yaml; do
+            [ -e "$workflow" ] || continue
+            # ${var##*/} rather than $(basename): a command substitution inside a `case`
+            # word is exempt from `set -e`, so a failing basename would collapse the
+            # pattern and silently sort a shared stub into `owned` (see the trailers
+            # job's note on the same trap).
+            case " $SHARED_STUBS " in *" ${workflow##*/} "*) continue ;; esac
+            owned+=("$workflow")
+          done
+
+          if [ ${#owned[@]} -eq 0 ]; then
+            echo "::error::No owned workflows to lint. Either the glob broke or SHARED_STUBS now covers everything."
+            exit 1
+          fi
+
+          printf 'linting (blocking): %s\n' "${owned[@]}"
+
           format=$'{{range $err := .}}::error file={{$err.Filepath}},line={{$err.Line}},col={{$err.Column}}::{{$err.Message}}\n{{end}}'
 
-          docker run --rm -v "$PWD:/repo" --workdir /repo "$ACTIONLINT_IMAGE" -format "$format"
+          docker run --rm -v "$PWD:/repo" --workdir /repo "$ACTIONLINT_IMAGE" \
+            -format "$format" "${owned[@]}"
+      - name: Lint the capital's shared stubs (advisory)
+        # Advisory, and advisory means the step SUCCEEDS on a finding -- it does not lean
+        # on `continue-on-error` to hide one. That distinction is the point: exit 1 from
+        # actionlint means findings, and exit 3 means it could not run at all (bad path,
+        # bad template, docker failure). Blanket-swallowing both would let this pass stop
+        # working permanently and invisibly, which is the failure the sibling
+        # disabled-linter check above exists to refuse.
+        #
+        # `continue-on-error` stays as the backstop #233 asked for, so a finding can
+        # never gate the repo even if this script is wrong.
+        #
+        # When a stub does draw a finding, the response is a `needs-capital` report on
+        # this repo naming the file and the rule -- NEVER an edit. It also goes to the
+        # run summary, because these files never appear in a PR diff, so an annotation
+        # alone would surface nowhere.
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+
+          stubs=()
+          missing=()
+          for stub in $SHARED_STUBS; do
+            if [ -e ".github/workflows/$stub" ]; then
+              stubs+=(".github/workflows/$stub")
+            else
+              missing+=("$stub")
+            fi
+          done
+
+          # CLAUDE.md -> Propagation: every builder repo carries all of them. A missing
+          # one is a dropped propagation, not a reason to report success.
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "::error::Shared stub(s) missing from this repo: ${missing[*]}. CLAUDE.md -> Propagation says every builder repo carries them; re-sync from the capital."
+            exit 1
+          fi
+
+          printf 'linting (advisory): %s\n' "${stubs[@]}"
+
+          format=$'{{range $err := .}}::warning file={{$err.Filepath}},line={{$err.Line}},col={{$err.Column}}::{{$err.Message}} -- shared artifact: report to the capital with needs-capital, never edit it here.\n{{end}}'
+
+          status=0
+          docker run --rm -v "$PWD:/repo" --workdir /repo "$ACTIONLINT_IMAGE" \
+            -format "$format" "${stubs[@]}" || status=$?
+
+          case "$status" in
+            0)
+              echo "No findings in the capital's stubs."
+              ;;
+            1)
+              {
+                echo "### actionlint findings in the capital's shared stubs"
+                echo
+                echo "These are **advisory** -- this repo carries these files verbatim and may not edit them."
+                echo "Report them to the capital with \`needs-capital\`, naming the file and the rule."
+                echo "See the annotations on this run for the specific lines."
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "Findings reported above as warnings; the gate is deliberately not blocked."
+              ;;
+            *)
+              echo "::error::actionlint exited $status on the shared stubs -- it could not run, which is not a finding. This advisory pass is broken, not clean."
+              exit "$status"
+              ;;
+          esac
 
   # py.typed is a promise to every downstream user that these annotations are real, and a
   # promise nothing checks is theater (CLAUDE.md -> Stack). Flags live in pyproject.toml,
