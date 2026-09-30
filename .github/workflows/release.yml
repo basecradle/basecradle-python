@@ -198,7 +198,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: publish-testpypi
     environment:
-      name: pypi
+      name: pypi-prod
       url: https://pypi.org/p/basecradle
     permissions:
       id-token: write
