@@ -27,6 +27,7 @@ from tests.conftest import (
 )
 
 ROTATED_INGEST_URL = "https://basecradle.com/webhooks/019e7750-66ee-7eb8-b8a8-e882e4d6e2a9"
+DELIVERY_ID = "019e7750-66ee-7d42-b8a5-4f1c9e3a7b60"  # a GitHub X-Github-Delivery value
 
 
 @pytest.fixture
@@ -326,11 +327,10 @@ class TestEventsResource:
         consumers to look them up case-insensitively — so the vendor spelling a caller reads
         out of GitHub's own documentation resolves, rather than raising.
         """
-        delivery_id = "019e7750-66ee-7d42-b8a5-4f1c9e3a7b60"
-        headers = self._delivered_headers(bc, api, {"X-Github-Delivery": delivery_id})
+        headers = self._delivered_headers(bc, api, {"X-Github-Delivery": DELIVERY_ID})
 
-        assert headers[spelling] == delivery_id
-        assert headers.get(spelling) == delivery_id
+        assert headers[spelling] == DELIVERY_ID
+        assert headers.get(spelling) == DELIVERY_ID
         assert spelling in headers
 
     def test_header_names_iterate_in_the_wires_own_spelling(self, bc, api):
@@ -340,7 +340,7 @@ class TestEventsResource:
         and ``==`` read the platform's canonical spelling, which is what a reader
         cross-referencing ``api.md`` sees.
         """
-        wire = {"X-Github-Delivery": "019e7750-66ee-7d42-b8a5-4f1c9e3a7b60", "Content-Length": "2"}
+        wire = {"X-Github-Delivery": DELIVERY_ID, "Content-Length": "2"}
         headers = self._delivered_headers(bc, api, wire)
 
         assert isinstance(headers, dict)
@@ -357,7 +357,7 @@ class TestEventsResource:
         ``ApiObject`` refuses a silent ``None`` for a field the API did not return; a header
         the sender did not send is refused the same way, and the error names what did arrive.
         """
-        headers = self._delivered_headers(bc, api, {"X-Github-Delivery": "019e7750-66ee-7d42"})
+        headers = self._delivered_headers(bc, api, {"X-Github-Delivery": DELIVERY_ID})
 
         with pytest.raises(KeyError, match="Stripe-Signature") as absent:
             headers["Stripe-Signature"]
@@ -386,7 +386,7 @@ class TestEventsResource:
         Folding case means calling ``lower()``; an unguarded one would turn ``headers[42]``
         into an ``AttributeError`` about ``int``, where a mapping owes a ``KeyError``.
         """
-        headers = self._delivered_headers(bc, api, {"X-Github-Delivery": "019e7750-66ee-7d42"})
+        headers = self._delivered_headers(bc, api, {"X-Github-Delivery": DELIVERY_ID})
 
         with pytest.raises(KeyError):
             headers[42]
