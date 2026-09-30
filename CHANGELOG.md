@@ -8,6 +8,56 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 ## [Unreleased]
 
+### Security
+
+- **`repr()` of a webhook delivery's headers no longer prints their values** (#246).
+  `WebhookEventHeaders` is a `dict` subclass, so it inherited `dict.__repr__` and rendered
+  every header in full — while every other model in the SDK prints field *names* and never
+  values. It now does the same:
+
+  ```python
+  repr(event.content.headers)
+  # before: {'Host': 'basecradle.com', 'Authorization': 'Bearer …', 'X-Api-Key': '…'}
+  # now:    <WebhookEventHeaders ['Authorization', 'Content-Type', 'Host', 'X-Api-Key']>
+  ```
+
+  **Whose secret was this?** Not yours — these are an inbound delivery's own request
+  headers, so this was never your `bc_uat_` token (that was #242, fixed in 0.13.0). It is
+  the *sender's*: anyone authenticating their POST to your ingest URL puts their
+  credential in those headers, and the platform stores and returns them verbatim. One
+  `log.debug("%r", event.content.headers)` while debugging a delivery put it wherever your
+  logs go.
+
+  **Do you need to do anything?** Only if you rendered a delivery's headers — `repr()`,
+  `str()`, an f-string, `pprint`, or `%r` logging — into somewhere you do not fully
+  control, *and* your senders authenticate to your ingest URL. If so, those senders'
+  credentials were exposed and they are the ones who have to rotate; nothing of yours was.
+  Reading a header you asked for by name was never a leak and still is not.
+
+  **Reads are untouched and stay wire-exact.** `headers["X-GitHub-Delivery"]`, `get()`,
+  `in`, iteration, `keys()`, `==` and `copy()` all behave exactly as before, case-folding
+  included.
+
+  **What this closes** is the accidental path through the object's own rendering:
+  `repr()`, `str()`, an f-string, `pprint`, and `%r`/`%s` logging.
+
+  **What it does not.** Everything that *asks* for the pairs still returns them in full,
+  deliberately — it is still a real `dict`, and a caller reaching for one of these is
+  asking for the headers:
+
+  ```python
+  headers["X-Api-Key"], headers.get(...), headers.items(), headers.values()
+  json.dumps(headers), dict(headers), {**headers}, headers | other, pickle.dumps(headers)
+  ```
+
+  One accidental path also stays open and is worth knowing about: **a failing `pytest`
+  assertion comparing headers prints the differing pairs in full**, because pytest's dict
+  comparison reads the mapping directly and never consults `__repr__`. If you assert on a
+  delivery's headers in CI, compare the names (`sorted(headers)`) or a single value, not
+  the whole mapping.
+
+  No denylist of "sensitive" header names is involved: every name is shown, no value is.
+
 ## [0.13.0] - 2026-09-30
 
 ### Security
@@ -70,6 +120,10 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
   `log.debug("%r", event.content.headers)` prints it. Redacting would break the SDK's
   wire-exactness rule ("reads match the wire"), so this is raised for a decision rather
   than settled here.
+
+  **Since decided** (#246): `repr()` elides the values and shows the header names, which
+  is not a read and so leaves wire-exactness intact. See the entry at the top of this
+  file. Everything in the paragraph above is still true of 0.13.0 itself.
 
   **What you may notice:**
 

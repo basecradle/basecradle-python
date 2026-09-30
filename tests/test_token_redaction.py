@@ -1,10 +1,17 @@
-"""Nothing generic may emit the bearer token (#242).
+"""Nothing generic may emit a credential (#242, #246).
 
-The class of bug: *a generic serializer or representation of an object holding the
-credential emits the credential.* The client holds a ``bc_uat_`` token; every resource and
-every model holds the client. So every surface that renders, walks, or serializes one of
-those three has to be measured, and what was measured has to stay measured — which is what
-this module is for.
+The class of bug: *a generic serializer or representation of an object holding a secret
+emits the secret.* The client holds a ``bc_uat_`` token; every resource and every model
+holds the client. So every surface that renders, walks, or serializes one of those three
+has to be measured, and what was measured has to stay measured — which is what this module
+is for.
+
+The credential is not always **ours**. ``WebhookEventHeaders`` holds no client and no
+``bc_uat_`` token, but an inbound delivery's headers carry whatever the *sender* put in
+them, and a sender authenticating to an ingest URL puts its own secret there (#246). The
+party harmed by printing those never agreed to our logging, which makes it the same bug
+and not a lesser one — so the charter here is any secret reachable through a generic
+surface, whoever it belongs to.
 
 Each test asserts on the **absence of the token string**, not on a redaction spelling, so
 a future refactor that reintroduces the credential by another route still fails here.
@@ -21,6 +28,7 @@ import pprint
 
 import pytest
 
+import basecradle
 from basecradle import (
     APIConnectionError,
     ApiObject,
@@ -31,6 +39,7 @@ from basecradle import (
     ItemsResource,
     Timeline,
     WebhookEndpoint,
+    WebhookEvent,
 )
 from tests.conftest import (
     BASE_URL,
@@ -39,7 +48,24 @@ from tests.conftest import (
     problem,
     timeline_payload,
     webhook_endpoint_payload,
+    webhook_event_payload,
 )
+
+#: A sender's own secrets, fabricated. Not this client's credential and never the bearer
+#: token: these are the headers an inbound delivery arrived with, so the party exposed by
+#: printing them is the **sender** -- who never agreed to our logging (#246).
+SENDER_SECRETS = {
+    "Authorization": "Bearer sender-secret-4tPq9wKzR2mXbN7v",
+    "X-Api-Key": "sk-sender-8jHdL3cQyW1nZuEa",
+}
+
+
+def delivery_with_sender_secrets(client):
+    """One webhook event whose delivery carried a sender's ``Authorization``/``X-Api-Key``."""
+    payload = webhook_event_payload()
+    payload["content"]["headers"] = {**payload["content"]["headers"], **SENDER_SECRETS}
+    return WebhookEvent(payload, client=client)
+
 
 # Every attribute on a client that is a resource, and every nested resource on a Timeline.
 CLIENT_RESOURCES = (
@@ -53,6 +79,40 @@ CLIENT_RESOURCES = (
     "users",
 )
 TIMELINE_RESOURCES = ("messages", "assets", "tasks", "webhook_endpoints", "webhook_events")
+
+
+@pytest.fixture
+def log_stream():
+    """A DEBUG logger writing into a ``StringIO``, and the floor that makes it mean something.
+
+    Every test here asserts that a secret is **absent** from the captured output, and an
+    absence assertion over an empty string passes while testing nothing. So the floor --
+    "the handler really ran" -- is asserted on teardown rather than left to each caller to
+    remember: the two hand-rolled copies elsewhere in this file carry it by hand, and the
+    version of this harness that dropped it is exactly how the gap gets in.
+
+    A logger is a process-global singleton, so the level and ``propagate`` are restored
+    and the handler removed: this fixture leaves nothing behind, and while it is running
+    nothing propagates the fabricated secrets to a handler it did not install.
+    """
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    log = logging.getLogger("basecradle.tests.capture")
+    level, propagate = log.level, log.propagate
+    log.setLevel(logging.DEBUG)
+    log.propagate = False
+    log.addHandler(handler)
+    try:
+        yield log, stream
+    finally:
+        log.removeHandler(handler)
+        log.setLevel(level)
+        log.propagate = propagate
+    assert stream.getvalue(), (
+        "nothing was logged, so every `secret not in ...` assertion in this test passed "
+        "over an empty string. The record stopped being emitted -- check the level, the "
+        "handler, and the logger name -- rather than the redaction starting to work."
+    )
 
 
 @pytest.fixture
@@ -459,6 +519,76 @@ class TestModels:
             assert INGEST_URL not in repr(endpoint.content)
             assert INGEST_URL in endpoint.content.ingest_url  # readable when asked for
 
+    def test_no_rendering_of_a_deliverys_headers_emits_a_sender_secret(self, clients):
+        """The one model that used to print values: ``WebhookEventHeaders`` is a ``dict``
+        subclass, so ``dict.__repr__`` rendered a sender's secrets in full (#246).
+
+        On the *absence* of the secret rather than on a redaction spelling, so a change
+        that reintroduces the values by some other route still fails here. One client:
+        these headers hold no client, so iterating both would assert the same thing twice.
+        """
+        headers = delivery_with_sender_secrets(clients[0]).content.headers
+        for rendering in (
+            repr(headers),
+            str(headers),
+            f"{headers}",
+            pprint.pformat(headers),
+            repr(delivery_with_sender_secrets(clients[0])),
+        ):
+            for secret in SENDER_SECRETS.values():
+                assert secret not in rendering
+
+    def test_the_headers_repr_names_every_header_it_elides(self, clients):
+        """The spelling, separately: elision is worthless if it also hides *which* headers
+        arrived, because then debugging a delivery needs the values again."""
+        headers = delivery_with_sender_secrets(clients[0]).content.headers
+        assert repr(headers) == f"<WebhookEventHeaders {sorted(headers)}>"
+        for name in SENDER_SECRETS:
+            assert name in repr(headers)
+
+    def test_a_webhook_header_read_is_still_wire_exact(self, clients):
+        """The elision is a repr, not a read. Every documented lookup still returns what
+        the wire carried, case-folded as #199 landed it — withholding the value from a
+        caller who asked for it by name would be a different change, and not this one.
+        """
+        headers = delivery_with_sender_secrets(clients[0]).content.headers
+        assert headers["Authorization"] == SENDER_SECRETS["Authorization"]
+        assert headers["x-api-key"] == SENDER_SECRETS["X-Api-Key"]
+        assert headers.get("AUTHORIZATION") == SENDER_SECRETS["Authorization"]
+        assert dict(headers)["X-Api-Key"] == SENDER_SECRETS["X-Api-Key"]
+
+    def test_the_paths_that_still_carry_the_values_are_the_documented_limit(self, clients):
+        """The limit of this hardening, pinned so it stays documented rather than assumed.
+
+        Every one of these is a caller *converting away from the class* or *asking for the
+        pairs*, which is the deliberate path #246 deliberately left alone. Redacting here
+        would change what a read returns, which is the thing the capital's decision
+        explicitly did not do. Named exhaustively, because "and `json.dumps` too" would
+        leave a reader guessing at the rest.
+        """
+        headers = delivery_with_sender_secrets(clients[0]).content.headers
+        secret = SENDER_SECRETS["Authorization"]
+        assert secret in json.dumps(headers)
+        assert secret in repr(dict(headers))
+        assert secret in repr({**headers})
+        assert secret in repr(headers | {})
+        assert secret in repr(list(headers.items()))
+        assert secret in repr(list(headers.values()))
+        # The pickle BYTES, not the round-trip: unpickling gives another of these,
+        # whose repr elides again. It is the serialized form that carries the value.
+        assert secret.encode() in pickle.dumps(headers)
+
+    def test_a_logged_webhook_delivery_emits_no_sender_secret(self, clients, log_stream):
+        """The accidental path the elision exists for: ``%r`` while debugging a delivery."""
+        log, stream = log_stream
+        event = delivery_with_sender_secrets(clients[0])
+        log.debug("event=%r content=%r headers=%r", event, event.content, event.content.headers)
+
+        captured = stream.getvalue()
+        assert captured  # the handler really ran; without this the loop below is vacuous
+        for secret in SENDER_SECRETS.values():
+            assert secret not in captured
+
     def test_a_model_offers_no_generic_serialization(self, clients):
         """No ``to_dict``, not iterable: ``_client`` is reachable by no documented route."""
         for client in clients:
@@ -479,6 +609,40 @@ class TestModels:
         assert one == two  # different clients, same record
         assert hash(one) == hash(two)
         assert FAKE_TOKEN not in repr((one, two))
+
+
+#: The built-ins whose ``__repr__`` prints the contents. Subclass one without overriding
+#: it and the subclass prints values -- which is how #246 happened. ``str`` and ``bytes``
+#: are in the list and are not hypothetical: ``ingest_url`` is a credential this SDK
+#: already handles, and a ``str`` subclass wrapping one would print it in full.
+VALUE_PRINTING_BUILTINS = (dict, list, tuple, set, frozenset, str, bytes, bytearray)
+
+
+def test_no_exported_class_inherits_a_value_printing_repr():
+    """By discovery, not by name — the check #246 existed because nobody had written.
+
+    ``WebhookEventHeaders`` was the SDK's only built-in subclass and nothing asked whether
+    it printed its contents, so for four releases it did. Naming it in a test would fix
+    that one class; sweeping ``__all__`` fixes the next one too, the way
+    ``TestEveryResourceIsCovered`` does for resources rather than trusting a hand list.
+
+    What it does **not** catch, stated rather than implied: a class that writes its own
+    value-printing ``__repr__`` (structure cannot tell that from a useful one), and a
+    container class that is never exported. Both are for review to catch; this closes the
+    one that is mechanical.
+    """
+    offenders = [
+        f"{name} subclasses {builtin.__name__} and inherits its __repr__"
+        for name in basecradle.__all__
+        if isinstance(exported := getattr(basecradle, name), type)
+        for builtin in VALUE_PRINTING_BUILTINS
+        if issubclass(exported, builtin) and exported.__repr__ is builtin.__repr__
+    ]
+    assert not offenders, (
+        f"{offenders} — a repr prints names, never values (#246). A built-in container's "
+        f"own __repr__ prints the contents, so subclassing one without overriding it "
+        f"exports a class that renders whatever it holds into any log that touches it."
+    )
 
 
 class TestLogging:
