@@ -310,28 +310,110 @@ class TestEventsResource:
         assert event.content.ingest_token_at_receipt == "019e7750-66ee-705a-803c-b25c5ee9b1f3"
         assert event.updated_at == "2026-01-02T00:00:00.000Z"
 
-    def test_header_names_come_back_in_the_wires_own_spelling(self, bc, api):
-        """The SDK never normalizes header names, so a sender's own spelling can miss.
+    @pytest.mark.parametrize(
+        "spelling",
+        [
+            "X-GitHub-Delivery",  # GitHub's own published spelling
+            "x-github-delivery",  # the lowercase form HTTP/2 senders emit
+            "X-Github-Delivery",  # what the wire actually carried
+            "X-GITHUB-DELIVERY",  # any other casing
+        ],
+    )
+    def test_header_lookup_folds_case(self, bc, api, spelling):
+        """Header names are case-insensitive by RFC, so every casing reads the same header.
 
-        The platform canonicalizes names to Title-Case per segment and this SDK passes the
-        hash through untouched — which is why ``WebhookEventContent`` tells you to match
-        case-insensitively rather than by the spelling a vendor publishes.
+        The platform rewrites names to canonical Title-Case per segment and its docs tell
+        consumers to look them up case-insensitively — so the vendor spelling a caller reads
+        out of GitHub's own documentation resolves, rather than raising.
         """
         delivery_id = "019e7750-66ee-7d42-b8a5-4f1c9e3a7b60"
+        headers = self._delivered_headers(bc, api, {"X-Github-Delivery": delivery_id})
+
+        assert headers[spelling] == delivery_id
+        assert headers.get(spelling) == delivery_id
+        assert spelling in headers
+
+    def test_header_names_iterate_in_the_wires_own_spelling(self, bc, api):
+        """Only *lookup* folds case: nothing is renamed, so reads still match the wire.
+
+        The object is a plain ``dict`` of the pairs the API returned — iteration, ``keys()``
+        and ``==`` read the platform's canonical spelling, which is what a reader
+        cross-referencing ``api.md`` sees.
+        """
+        wire = {"X-Github-Delivery": "019e7750-66ee-7d42-b8a5-4f1c9e3a7b60", "Content-Length": "2"}
+        headers = self._delivered_headers(bc, api, wire)
+
+        assert isinstance(headers, dict)
+        assert headers == wire
+        assert list(headers) == ["X-Github-Delivery", "Content-Length"]
+        assert sorted(headers.keys()) == ["Content-Length", "X-Github-Delivery"]
+
+        # A copy is another headers object, not a plain dict that lost the case folding.
+        assert headers.copy()["X-GitHub-Delivery"] == wire["X-Github-Delivery"]
+
+    def test_a_header_that_was_not_delivered_is_absent_rather_than_none(self, bc, api):
+        """No casing of it arrived, so it is missing — the SDK never invents a ``None``.
+
+        ``ApiObject`` refuses a silent ``None`` for a field the API did not return; a header
+        the sender did not send is refused the same way, and the error names what did arrive.
+        """
+        headers = self._delivered_headers(bc, api, {"X-Github-Delivery": "019e7750-66ee-7d42"})
+
+        with pytest.raises(KeyError, match="Stripe-Signature") as absent:
+            headers["Stripe-Signature"]
+        assert "X-Github-Delivery" in str(absent.value)  # names the headers that did arrive
+
+        assert "Stripe-Signature" not in headers
+        assert headers.get("Stripe-Signature") is None
+        assert headers.get("Stripe-Signature", "unsigned") == "unsigned"
+
+    def test_headers_the_api_omitted_raise_the_models_missing_field_error(self, bc, api):
+        """Presenting headers richer than their wire type must not lose the absence error."""
         event_payload = webhook_event_payload()
-        event_payload["content"]["headers"] = {"X-Github-Delivery": delivery_id}
+        del event_payload["content"]["headers"]
         api.get(f"/webhook_events/{WEBHOOK_EVENT_UUID}").respond(
             200, json={"webhook_event": event_payload}
         )
 
-        headers = bc.webhook_events.get(WEBHOOK_EVENT_UUID).content.headers
+        content = bc.webhook_events.get(WEBHOOK_EVENT_UUID).content
 
-        assert headers["X-Github-Delivery"] == delivery_id
+        with pytest.raises(AttributeError, match="did not return 'headers'"):
+            content.headers
+
+    def test_a_name_that_is_not_a_string_is_absent_rather_than_a_crash(self, bc, api):
+        """Nothing but a string can be a header name, so one reads as missing, not as a bug.
+
+        Folding case means calling ``lower()``; an unguarded one would turn ``headers[42]``
+        into an ``AttributeError`` about ``int``, where a mapping owes a ``KeyError``.
+        """
+        headers = self._delivered_headers(bc, api, {"X-Github-Delivery": "019e7750-66ee-7d42"})
+
         with pytest.raises(KeyError):
-            headers["X-GitHub-Delivery"]  # GitHub's own spelling — not what the wire carries
+            headers[42]
+        assert 42 not in headers
+        assert headers.get(None) is None
 
-        # The idiom the docstring recommends, using the SDK's one runtime dependency.
-        assert httpx.Headers(headers)["x-github-delivery"] == delivery_id
+    def test_headers_the_api_sends_as_null_come_back_as_the_wire_sent_them(self, bc, api):
+        """Not a shape ``/webhook_events`` returns — but the SDK never invents one either.
+
+        ``headers`` is required and non-nullable on an event, so this cannot happen today.
+        The API is additive-only and new response forms land without SDK changes, so the
+        richer presentation defers to the wire for anything that is not an object, exactly
+        as ``ApiObject`` does for a nested model.
+        """
+        headers = self._delivered_headers(bc, api, None)
+
+        assert headers is None
+
+    @staticmethod
+    def _delivered_headers(bc, api, wire_headers):
+        """The headers of one fetched event, with ``wire_headers`` as what the delivery sent."""
+        event_payload = webhook_event_payload()
+        event_payload["content"]["headers"] = wire_headers
+        api.get(f"/webhook_events/{WEBHOOK_EVENT_UUID}").respond(
+            200, json={"webhook_event": event_payload}
+        )
+        return bc.webhook_events.get(WEBHOOK_EVENT_UUID).content.headers
 
     @pytest.mark.parametrize("verified", [False, True])
     def test_verified_at_receipt_is_the_deliverys_own_historical_fact(self, bc, api, verified):

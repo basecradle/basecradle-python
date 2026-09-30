@@ -79,6 +79,7 @@ from basecradle._webhooks import (
     WebhookEndpointsResource,
     WebhookEvent,
     WebhookEventContent,
+    WebhookEventHeaders,
     WebhookEventsResource,
     WebhookVerification,
 )
@@ -116,6 +117,7 @@ __all__ = [
     "WebhookEndpointContent",
     "WebhookEvent",
     "WebhookEventContent",
+    "WebhookEventHeaders",
     "WebhookVerification",
     # Sync resources
     "AssetsResource",
