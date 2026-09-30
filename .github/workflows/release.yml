@@ -174,7 +174,7 @@ jobs:
   publish-testpypi:
     name: publish to TestPyPI (rehearsal)
     runs-on: ubuntu-latest
-    needs: buidl
+    needs: build
     environment:
       name: testpypi
       url: https://test.pypi.org/p/basecradle
