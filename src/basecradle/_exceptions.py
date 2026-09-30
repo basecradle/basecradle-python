@@ -268,7 +268,16 @@ def exception_from_response(response: httpx.Response) -> BaseCradleError:
         "problem": problem,
     }
 
-    error_class = _CODE_TO_ERROR.get(code, BaseCradleError)
+    # ``code`` is whatever the wire sent, and the registry is keyed by ``str``. An
+    # unhashable value -- a list, an object -- raises ``TypeError`` out of ``.get``, so a
+    # malformed problem document would crash the SDK rather than produce the
+    # ``BaseCradleError`` this function's contract promises. Narrow before the lookup
+    # instead of trusting the wire: anything that is not a string is simply not a code we
+    # know, which is the same answer as a code added after this release.
+    if isinstance(code, str):
+        error_class = _CODE_TO_ERROR.get(code, BaseCradleError)
+    else:
+        error_class: type[BaseCradleError] = BaseCradleError
 
     if issubclass(error_class, ValidationError):
         return error_class(message, errors=problem.get("errors"), **common)

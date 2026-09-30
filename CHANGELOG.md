@@ -8,7 +8,18 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **A malformed `problem+json` body no longer crashes the SDK.** `exception_from_response`
+  looked the wire's `code` up in its registry without checking it was a string, so a body
+  whose `code` was a list or an object raised `TypeError: unhashable type` out of the
+  lookup — and the caller got a bare `TypeError` with no status, no code and no problem
+  document, instead of the `BaseCradleError` this path promises ("a new error code must
+  never crash the SDK"). A non-string `code` is now simply not a code the SDK knows, which
+  is the same answer it already gave for a code added after this release. Everything that
+  worked before is unchanged, `{"code": null}` included: `detail` is still the message and
+  the problem document is still attached. Surfaced by `mypy --strict` (#229), which had
+  been reporting the unnarrowed lookup all along.
 
 ## [0.12.0] - 2026-09-30
 
