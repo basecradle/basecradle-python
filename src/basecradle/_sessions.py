@@ -34,7 +34,7 @@ class Session(ApiObject):
     kind: str  # "api" (Bearer token) | "web" (browser cookie session)
     current: bool  # True on exactly one row: the session making this request
 
-    def revoke(self):
+    def revoke(self) -> Any:
         """Revoke this credential. It stops working **instantly** — its next request is a 401.
 
         .. warning::

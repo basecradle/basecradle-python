@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterator
-from typing import Any
+from typing import Any, cast
 
 from basecradle._items import (
     AssetContent,
@@ -128,27 +128,40 @@ class Timeline(ApiObject):
     @property
     def messages(self) -> TimelineMessages | AsyncTimelineMessages:
         """This timeline's messages: ``.create(body=...)`` or iterate (newest first)."""
-        return self._nested(TimelineMessages, AsyncTimelineMessages)
+        return cast(
+            TimelineMessages | AsyncTimelineMessages,
+            self._nested(TimelineMessages, AsyncTimelineMessages),
+        )
 
     @property
     def assets(self) -> TimelineAssets | AsyncTimelineAssets:
         """This timeline's assets: ``.create(file=...)`` (multipart) or iterate."""
-        return self._nested(TimelineAssets, AsyncTimelineAssets)
+        return cast(
+            TimelineAssets | AsyncTimelineAssets, self._nested(TimelineAssets, AsyncTimelineAssets)
+        )
 
     @property
     def tasks(self) -> TimelineTasks | AsyncTimelineTasks:
         """This timeline's tasks: ``.create(instructions=..., activate_at=...)`` or iterate."""
-        return self._nested(TimelineTasks, AsyncTimelineTasks)
+        return cast(
+            TimelineTasks | AsyncTimelineTasks, self._nested(TimelineTasks, AsyncTimelineTasks)
+        )
 
     @property
     def webhook_endpoints(self) -> TimelineWebhookEndpoints | AsyncTimelineWebhookEndpoints:
         """This timeline's inbound webhook endpoints: ``.create(description=...)`` or iterate."""
-        return self._nested(TimelineWebhookEndpoints, AsyncTimelineWebhookEndpoints)
+        return cast(
+            TimelineWebhookEndpoints | AsyncTimelineWebhookEndpoints,
+            self._nested(TimelineWebhookEndpoints, AsyncTimelineWebhookEndpoints),
+        )
 
     @property
     def webhook_events(self) -> TimelineWebhookEvents | AsyncTimelineWebhookEvents:
         """This timeline's webhook events (read-only) — iterate, newest first."""
-        return self._nested(TimelineWebhookEvents, AsyncTimelineWebhookEvents)
+        return cast(
+            TimelineWebhookEvents | AsyncTimelineWebhookEvents,
+            self._nested(TimelineWebhookEvents, AsyncTimelineWebhookEvents),
+        )
 
     def _nested(self, sync_class: type, async_class: type) -> Any:
         client = self._require_client()
@@ -156,7 +169,7 @@ class Timeline(ApiObject):
 
     # -- verbs (await them with AsyncBaseCradle) --
 
-    def lock(self):
+    def lock(self) -> Any:
         """The emergency stop: freeze the timeline's content, permanently.
 
         Any viewer can lock; locking is idempotent and one-way (unlocking is an
@@ -167,7 +180,7 @@ class Timeline(ApiObject):
         """
         return self._verb("POST", f"/timelines/{self.uuid}/lock", self._apply_lock)
 
-    def delete(self):
+    def delete(self) -> Any:
         """Permanently delete this timeline and everything on it.
 
         Owner-only (admins may delete any timeline); a participant gets ``403``
@@ -181,7 +194,7 @@ class Timeline(ApiObject):
         """
         return self._verb("DELETE", f"/timelines/{self.uuid}", lambda _response: None)
 
-    def add_participant(self, user: User | str):
+    def add_participant(self, user: User | str) -> Any:
         """Add a peer to this timeline (owner or admin only; mutual trust required).
 
         Accepts a ``User`` or a uuid. Idempotent. The added user is appended to
@@ -196,7 +209,7 @@ class Timeline(ApiObject):
             json={"user_id": _uuid_of(user)},
         )
 
-    def remove_participant(self, user: User | str):
+    def remove_participant(self, user: User | str) -> Any:
         """Remove a participant from this timeline (owner or admin only). Idempotent.
 
         With ``AsyncBaseCradle``, await this: ``await timeline.remove_participant(user)``.

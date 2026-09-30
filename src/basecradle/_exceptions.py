@@ -274,10 +274,11 @@ def exception_from_response(response: httpx.Response) -> BaseCradleError:
     # ``BaseCradleError`` this function's contract promises. Narrow before the lookup
     # instead of trusting the wire: anything that is not a string is simply not a code we
     # know, which is the same answer as a code added after this release.
+    error_class: type[BaseCradleError]
     if isinstance(code, str):
         error_class = _CODE_TO_ERROR.get(code, BaseCradleError)
     else:
-        error_class: type[BaseCradleError] = BaseCradleError
+        error_class = BaseCradleError
 
     if issubclass(error_class, ValidationError):
         return error_class(message, errors=problem.get("errors"), **common)

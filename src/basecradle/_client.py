@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 import httpx
 
@@ -125,12 +125,12 @@ class _ClientCore:
             return False
         if method.upper() == "GET":
             return True
-        return bool(headers) and "Idempotency-Key" in headers
+        return headers is not None and "Idempotency-Key" in headers
 
     @staticmethod
     def _retry_backoff(attempt: int) -> float:
         """Seconds to wait before retry ``attempt`` (0-based): 0.5s, 1s, 2s, … capped at 8s."""
-        return min(0.5 * (2**attempt), 8.0)
+        return min(0.5 * (2.0**attempt), 8.0)
 
     @staticmethod
     def _rewind_files(files: dict[str, Any] | None) -> None:
@@ -275,8 +275,11 @@ class BaseCradle(_ClientCore):
         if response.status_code != 201:
             raise exception_from_response(response)
 
-        return cls._client_from_login(
-            response.json(), base_url=base_url, timeout=timeout, max_retries=max_retries
+        return cast(
+            BaseCradle,
+            cls._client_from_login(
+                response.json(), base_url=base_url, timeout=timeout, max_retries=max_retries
+            ),
         )
 
     @property
@@ -462,8 +465,11 @@ class AsyncBaseCradle(_ClientCore):
         if response.status_code != 201:
             raise exception_from_response(response)
 
-        return cls._client_from_login(
-            response.json(), base_url=base_url, timeout=timeout, max_retries=max_retries
+        return cast(
+            AsyncBaseCradle,
+            cls._client_from_login(
+                response.json(), base_url=base_url, timeout=timeout, max_retries=max_retries
+            ),
         )
 
     @property
