@@ -328,17 +328,6 @@ jobs:
       - name: Type-check
         run: uv run mypy
 
-  # TEMPORARY (#238 proof): a real job deliberately absent from the gate's `needs`.
-  # It passes on its own, so without the new test CI would be green while this job was
-  # outside the required check entirely.
-  docs:
-    name: docs
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - name: Nothing to see
-        run: echo "this job is not in the gate"
-
   # The gate: the single required status check in branch protection.
   # Adding or dropping Python versions never requires a ruleset change.
   ci:
