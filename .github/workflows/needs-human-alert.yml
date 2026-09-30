@@ -8,6 +8,7 @@ permissions: {}
 
 jobs:
   notify:
+    needs: [nonexistent-job]
     if: github.event.label.name == 'needs-human'
     uses: basecradle/.github/.github/workflows/needs-human-ntfy.yml@main
     secrets: inherit
