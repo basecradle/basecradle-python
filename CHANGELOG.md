@@ -15,7 +15,27 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 - **Nothing generic emits the bearer token any more.** A sweep of every way the SDK's
   objects can be rendered, walked, or serialized (#242) found the credential coming out of
   three of them. The client holds a `bc_uat_` token and every resource and model holds the
-  client, so all three object kinds were affected:
+  client, so all three object kinds were affected.
+
+  **Do you need to rotate your token?** Only if something in your code, your logs or your
+  crash reports did one of the things in the first column. The exposure is to wherever
+  *your* output went — nothing was ever sent to BaseCradle or to a third party by the SDK.
+
+  | This emitted the token before 0.13.0 | This never did |
+  |---|---|
+  | `vars(client)` / `client.__dict__`, and anything printing them | `repr(client)`, `str(client)`, `f"{client}"`, `format(client)`, `pprint(client)` |
+  | `json.dump`/`json.dumps` with `default=vars` — on a client, a resource **or** a record | `logging` with `%r`, `%s` or an f-string of a client, resource or record |
+  | `client.__reduce__()` / `__reduce_ex__()`, and `copy.copy(client)` | `repr()` of any model — `ApiObject` prints field *names*, never values |
+  | a crash reporter expanding frame locals through `__dict__` (Sentry, `rich`, `cgitb`, IPython's `%debug`) with a client in scope | a caught `BaseCradleError` — it holds only the problem document, never the request or response |
+  | | tracebacks (`traceback.format_exc()`), and `pickle.dumps(client)`, which failed before reaching the wire |
+
+  If you only ever read `client.token` yourself, or logged these objects with `%r`, nothing
+  leaked and there is nothing to rotate. If a `vars()`-based dump or a crash report with a
+  client in scope went anywhere you do not fully control, rotate:
+  `session.revoke()` for one credential, `bc.sessions.revoke_all()` for all of them.
+  Changing your password does **not** revoke anything.
+
+  The detail, surface by surface:
 
   - **`vars(client)` and `client.__dict__` carried the token**, because it was a plain
     instance attribute. Two consequences were worse than they look. `json.dump(obj, fp,

@@ -569,6 +569,48 @@ class TestTheTokenStaysReadable:
             with pytest.raises(AttributeError):
                 never_initialized.token
 
+    def test_a_subclass_inherits_the_slot_and_the_redaction(self):
+        """Requested on #242: the property must survive a subclass, not just both clients.
+
+        The slot is declared on ``_ClientCore`` while the concrete clients deliberately
+        declare none — that is what gives them an ordinary ``__dict__`` for their
+        resources. So a user subclass gets a ``__dict__`` too, and the question worth
+        pinning is whether the credential stays in the inherited slot rather than falling
+        into that dict. It does, including for a subclass that adds slots of its own.
+        """
+
+        class Plain(BaseCradle):
+            pass
+
+        class Slotted(AsyncBaseCradle):
+            __slots__ = ("label",)
+
+        class Overriding(BaseCradle):
+            def __init__(self, token):
+                super().__init__(token)
+                self.extra = "set after super().__init__"
+
+        for cls in (Plain, Slotted, Overriding):
+            client = cls(token=FAKE_TOKEN)
+
+            assert client.token == FAKE_TOKEN, cls.__name__
+            assert "token" not in vars(client), cls.__name__
+            assert "_token" not in vars(client), cls.__name__
+            assert FAKE_TOKEN not in repr(vars(client)), cls.__name__
+
+            assert repr(client) == (f"<{cls.__name__} base_url='{BASE_URL}' token=[REDACTED]>")
+
+            replacement = "bc_uat_9xQ2mPvKdN4sT7yR1wZcB6hJ0aLgEuFo"
+            client.token = replacement
+            assert client.token == replacement, cls.__name__
+            assert FAKE_TOKEN not in repr(vars(client)), cls.__name__
+
+            with pytest.raises(BaseCradleError):
+                pickle.dumps(client)
+
+            if not client._is_async:
+                client.close()
+
     def test_the_client_keeps_no_dict_entry_for_the_token(self, clients):
         """Nothing is left behind to clean up, and nothing outlives the client."""
         for client in clients:
