@@ -69,8 +69,6 @@ jobs:
           fi
 
           echo "Tag $GITHUB_REF_NAME is main's tip (${tagged:0:7})."
-          probe=$GITHUB_REF_NAME
-          echo $probe
       - uses: astral-sh/setup-uv@v10.2.0
       - name: Build the wheel and sdist
         run: uv build
@@ -146,7 +144,7 @@ jobs:
   publish-testpypi:
     name: publish to TestPyPI (rehearsal)
     runs-on: ubuntu-latest
-    needs: buidl
+    needs: build
     environment:
       name: testpypi
       url: https://test.pypi.org/p/basecradle
