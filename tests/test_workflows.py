@@ -1,5 +1,5 @@
 """Four workflow invariants: bounded artifact retention, a gate that covers every job, a
-gate that cannot fail open, and release.yml's contractual names.
+gate that cannot fail open, and a release pipeline that publishes what it says it does.
 
 ``constitution.md`` → How We Build: whatever a build leaves behind has a named owner, a
 fixed home, and a stated end, and nothing outlives 30 days without a written reason. A
@@ -53,6 +53,19 @@ names"), and neither was written anywhere this repo checks. Renaming either is a
 that 403s on a tag already pushed, under a version number PyPI never lets go of. The
 rehearsal ordering -- the real publish waiting on the TestPyPI one -- is pinned beside
 them: lose it and the rehearsal runs in parallel with the thing it exists to rehearse.
+
+#250 finished both lists. #243's enumeration of the gate's fail-open edits had one more
+member nobody had named: the step's ``run: exit 1``. Change it to ``exit 0`` and the
+condition still fires, the step still runs, and the gate reports success on every red
+dependency -- past all four of #243's checks, because none of them read the command. And
+three more contractual facts of ``release.yml`` had no pin: ``permissions: id-token:
+write``, without which no OIDC token is minted and Trusted Publishing cannot authenticate
+at all; the rehearsal's ``repository-url``, whose absence makes ``publish-testpypi``
+upload to **pypi.org** -- under the ``testpypi`` environment, which carries no protection
+rules, so the release ships before the ``pypi`` gate is ever actuated; and job-level
+``continue-on-error``, which would let a failed rehearsal satisfy the very ``needs`` edge
+#243 pinned. Each of those is one line, and each surfaces at the one moment nothing can
+be undone.
 """
 
 import re
@@ -475,7 +488,11 @@ class TestTheScannerItself:
 # #238: the gate must depend on every job
 # ---------------------------------------------------------------------------------------
 
+#: The two workflows with checks of their own below. Declared together and up here
+#: because the blind-spot scans run over both, and a parametrize over them is evaluated
+#: at import — before either section that owns them.
 CI_WORKFLOW = WORKFLOWS / "ci.yml"
+RELEASE_WORKFLOW = WORKFLOWS / "release.yml"
 
 #: The gate's job key, and the check name branch protection requires. Both matter: the
 #: key is what ``needs`` entries and this scan refer to, while the **name** is what GitHub
@@ -586,18 +603,27 @@ def job_bodies(text: str) -> dict[str, list[str]]:
     return bodies
 
 
-def job_key_value(body: list[str], key: str) -> str | None:
-    """A job's own ``key:`` value, comment stripped, or ``None`` when it has no such key.
+def level_key_value(lines: list[str], key: str, level: int) -> str | None:
+    """The value of ``key:`` written at exactly ``level``, comment stripped, or ``None``.
 
-    Job level means ``JOB_LEVEL`` exactly. Indentation is enough to be sure of that for
-    the reason ``_jobs_block`` gives: a ``run: |`` body inside a job is always deeper than
-    the six-space step key that owns it, so block-scalar content never reaches that column.
+    The column is exact, not a bound, which is what makes it safe: at ``JOB_LEVEL`` the
+    reason ``_jobs_block`` gives applies — a ``run: |`` body inside a job is always deeper
+    than the six-space step key owning it, so block-scalar content never reaches it — and
+    at column 0 the same holds for the whole file.
+
+    ``None`` when the key is absent; ``""`` when it is present with the value on the lines
+    beneath, which is a mapping, a sequence or a block scalar for someone else to read.
     """
-    for line in body:
+    for line in lines:
         match = KEY_LINE.match(line)
-        if match and match.group("key") == key and _key_indent(line) == JOB_LEVEL:
+        if match and match.group("key") == key and _key_indent(line) == level:
             return _strip_comment(match.group("value") or "")
     return None
+
+
+def job_key_value(body: list[str], key: str) -> str | None:
+    """A job's own ``key:`` value — the job-level reading of ``level_key_value``."""
+    return level_key_value(body, key, JOB_LEVEL)
 
 
 def _parse_needs_value(value: str) -> list[str] | None:
@@ -843,6 +869,12 @@ GATE_FAILING_RESULTS = ("failure", "cancelled", "skipped")
 #: to restyle casually.
 GATE_STEP_IF = " || ".join(f"contains(needs.*.result, '{r}')" for r in GATE_FAILING_RESULTS)
 
+#: What the gate's step runs when that condition fires. Another one-line edit of the
+#: same family, and the one #243's enumeration missed: ``exit 0`` leaves the condition
+#: firing, the step running, and the gate reporting success on every red dependency
+#: (#250). Nothing above reads the command, so nothing above notices.
+GATE_STEP_RUN = "exit 1"
+
 
 def _is_unread(value: str) -> bool:
     """Whether what this matcher extracted is not the value at all.
@@ -856,6 +888,18 @@ def _is_unread(value: str) -> bool:
     return not value or bool(BLOCK_SCALAR.match(value))
 
 
+def _normalize_scalar(value: str) -> str:
+    """A scalar with surrounding quotes dropped and internal whitespace collapsed.
+
+    Quotes are legal YAML around a scalar and say nothing about the value, and
+    ``exit  1`` is the same command as ``exit 1`` — so a check comparing one of these
+    exactly has to normalize first, or it reddens CI with a message untrue of the edit.
+    One copy, shared by the gate's condition and the gate's command, so the two cannot
+    come to disagree about what a quoted scalar is.
+    """
+    return " ".join(value.strip().strip("\"'").split())
+
+
 def _unwrap_expression(condition: str) -> str:
     """A workflow condition without its optional ``${{ … }}`` wrapper, whitespace normal.
 
@@ -864,25 +908,78 @@ def _unwrap_expression(condition: str) -> str:
     call the other a disabled gate — a red CI, with an error message that is simply untrue
     of the edit in front of it.
     """
-    stripped = condition.strip().strip("\"'").strip()
+    stripped = _normalize_scalar(condition)
     if stripped.startswith("${{") and stripped.endswith("}}"):
         stripped = stripped[3:-2]
     return " ".join(stripped.split())
 
 
-def step_conditions(body: list[str]) -> list[str]:
-    """Every step-level ``if:`` in a job body, in order, comment stripped.
+def block_scalar_line_numbers(lines: list[str]) -> set[int]:
+    """The lines of a job body that are YAML structure, not block-scalar content.
 
-    Deeper than four spaces, so the job's own ``if:`` is never among them. The two are
-    separate fail-open surfaces — ``always()`` decides whether the gate *runs*, the step's
-    condition decides whether it *fails* — and conflating them would let either one vouch
-    for the other.
+    A ``run: |`` body is arbitrary text at an arbitrary depth, and the readers below are
+    depth-*bounded* rather than column-exact — so a shell heredoc that emits
+    ``key: value`` lines is otherwise read as keys. ``_jobs_block`` can dismiss this at
+    the job level because job keys sit at a fixed column; nothing deeper can.
+
+    The scalar runs from its ``|``/``>`` header to the first structural line no deeper
+    than that header, which is YAML's own rule. Blank lines inside it are content, not a
+    dedent — treating one as a dedent would end the scalar early and put the rest of a
+    script back into the reading.
+
+    Returns **indices**, not lines, so a caller that reports file positions keeps them.
+    Both the readers below and the blind-spot guards use it, which is the point: a guard
+    that disagreed with its reader about what a shell script is would redden CI over an
+    ``echo`` that happens to mention the key.
+    """
+    inside: set[int] = set()
+    scalar_column: int | None = None
+
+    for index, line in enumerate(lines):
+        if scalar_column is not None:
+            if not _is_structural(line) or _key_indent(line) > scalar_column:
+                inside.add(index)
+                continue  # still inside the scalar
+            scalar_column = None
+
+        match = KEY_LINE.match(line)
+        if match and BLOCK_SCALAR.match(_strip_comment(match.group("value") or "")):
+            scalar_column = _key_indent(line)
+
+    return inside
+
+
+def outside_block_scalars(lines: list[str]) -> list[str]:
+    """``lines`` with every block-scalar body dropped — YAML structure only."""
+    inside = block_scalar_line_numbers(lines)
+    return [line for index, line in enumerate(lines) if index not in inside]
+
+
+def step_values(lines: list[str], key: str) -> list[str]:
+    """Every ``key:`` value below the job's own level, in order, comment stripped.
+
+    Takes a job's body or a single step's lines — ``publish_repository_url`` passes one
+    step, because attributing a ``with:`` input to the step that declares it is the whole
+    point there.
+
+    Deeper than ``JOB_LEVEL``, so a job's own key of the same name is never among them:
+    the gate's ``if: always()`` and its step's ``if: contains(…)`` are separate fail-open
+    surfaces — one decides whether the gate *runs*, the other whether it *fails* — and
+    conflating them would let either vouch for the other.
+
+    Deep enough to reach a ``with:`` input as well as a step's own key, which is what
+    ``repository-url`` is. Being a depth *bound* rather than an exact column, it would
+    also read straight into a ``run: |`` body — ``job_key_value``'s "block-scalar content
+    never reaches this column" argument does not transfer, because that one pins
+    ``JOB_LEVEL`` exactly and this cannot. Hence ``outside_block_scalars``: the scalars
+    are dropped before the match, so a shell heredoc emitting ``key: value`` lines is not
+    read as keys.
     """
     return [
         _strip_comment(match.group("value") or "")
-        for line in body
+        for line in outside_block_scalars(lines)
         if (match := KEY_LINE.match(line))
-        and match.group("key") == "if"
+        and match.group("key") == key
         and _key_indent(line) > JOB_LEVEL
     ]
 
@@ -906,7 +1003,7 @@ def continue_on_error(body: list[str]) -> list[tuple[int, str]]:
     """
     return [
         (_key_indent(line), value)
-        for line in body
+        for line in outside_block_scalars(body)
         if (match := KEY_LINE.match(line))
         and match.group("key") == "continue-on-error"
         and (value := _strip_comment(match.group("value") or ""))
@@ -930,32 +1027,52 @@ def _is_enabled(value: str) -> bool:
     return value.lower() != "false"
 
 
-def unreadable_continue_on_error_lines(workflow: Path = CI_WORKFLOW) -> list[str]:
-    """Every naming of ``continue-on-error`` outside a comment that the matcher can't read.
+def unreadable_key_lines(workflow: Path, *keys: str) -> list[str]:
+    """Every naming of these keys, outside a comment, that ``KEY_LINE`` cannot read.
 
-    The blind-spot guard of this pair, and the important half. A ``continue-on-error:``
-    whose value sits on the next line, or one written in flow style, is invisible to
-    ``continue_on_error`` — so the switch would be set, the checks below green, and
-    nothing would say so. Reported, never skipped.
+    This module's blind-spot idiom, written once rather than once per key: a matcher that
+    quietly stops matching leaves its check green while enforcing nothing, so a shape the
+    matcher misses is *reported*, never skipped.
+
+    The readability test is ``_strip_comment``, character for character the reading the
+    matchers themselves take. Tested on the raw value instead,
+    ``continue-on-error:  # while we debug`` looks readable here and reads as empty
+    there; stripped differently, a value made only of quotes does the same. Either way
+    the key escapes both halves of the pair at once, which is the one outcome this
+    exists to deny.
     """
+    assert keys, "a scan for no keys reports nothing and reads as a clean guard"
+
+    lines = workflow.read_text(encoding="utf-8").splitlines()
+    inside_a_script = block_scalar_line_numbers(lines)
+
     unreadable = []
-    for index, line in enumerate(workflow.read_text(encoding="utf-8").splitlines(), start=1):
-        if "continue-on-error" not in line.split("#", 1)[0]:
+    for index, line in enumerate(lines):
+        # A `run: |` body is shell, not YAML, and the readers skip it -- so a guard that
+        # did not would redden CI over an `echo` mentioning the key, with advice ("write
+        # it as a plain key") that is untrue of the line in front of it.
+        if index in inside_a_script:
+            continue
+        # `key:` rather than `key`, so a step named "never override repository-url here"
+        # is prose about the input and not an unreadable declaration of it. The shapes
+        # worth catching all still carry the colon: a flow mapping, and a key whose value
+        # is on the next line.
+        if not any(f"{key}:" in line.split("#", 1)[0] for key in keys):
             continue
         match = KEY_LINE.match(line)
-        # `_strip_comment` alone, character for character the reading
-        # `continue_on_error` takes. Tested raw, `continue-on-error:  # while we debug`
-        # looks readable here and reads as empty there; stripped differently, a value
-        # made only of quotes does the same. Either way the switch escapes both halves
-        # of the pair at once, which is the one outcome this guard exists to deny.
-        if (
-            match
-            and match.group("key") == "continue-on-error"
-            and _strip_comment(match.group("value") or "")
-        ):
+        if match and match.group("key") in keys and _strip_comment(match.group("value") or ""):
             continue
-        unreadable.append(f"{workflow.name}:{index}: {line.strip()}")
+        unreadable.append(f"{workflow.name}:{index + 1}: {line.strip()}")
     return unreadable
+
+
+def unreadable_continue_on_error_lines(workflow: Path) -> list[str]:
+    """Every ``continue-on-error`` in a workflow the matcher cannot read.
+
+    Its value on the next line, or flow style, is invisible to ``continue_on_error`` — so
+    the switch would be set, the checks below green, and nothing would say so.
+    """
+    return unreadable_key_lines(workflow, "continue-on-error")
 
 
 def check_the_gate_runs_whatever_its_dependencies_did(text: str) -> None:
@@ -978,7 +1095,7 @@ def check_the_gate_runs_whatever_its_dependencies_did(text: str) -> None:
 
 def check_the_gate_step_fails_on_every_bad_result(text: str) -> None:
     """Assert the gate's step fires on each ``needs.*.result`` that is not a success."""
-    conditions = step_conditions(gate_body(text))
+    conditions = step_values(gate_body(text), "if")
     assert len(conditions) == 1, (
         f"expected exactly one conditional step in the {GATE_JOB!r} job, found "
         f"{len(conditions)}: {conditions}. The gate is one step on purpose; a second "
@@ -989,7 +1106,7 @@ def check_the_gate_step_fails_on_every_bad_result(text: str) -> None:
         f"the {GATE_JOB!r} gate's step `if:` reads {conditions[0]!r} — a block scalar, or "
         f"a value carried on the lines beneath. This reader does not follow it there, so "
         f"the condition is unread, not wrong. Write it on one line, or teach "
-        f"step_conditions that shape."
+        f"step_values that shape."
     )
 
     condition = _unwrap_expression(conditions[0])
@@ -1009,6 +1126,38 @@ def check_the_gate_step_fails_on_every_bad_result(text: str) -> None:
         f"{GATE_STEP_IF}\nIt names every result, so the operators are what changed: `&&` "
         f"fires only when all three happened at once, and a leading `!` inverts the gate "
         f"outright. If this is a deliberate rewrite, change it here in the same PR."
+    )
+
+
+def check_the_gate_step_actually_fails(text: str) -> None:
+    """Assert the gate's step still exits non-zero when its condition fires.
+
+    Every other check in this section reads *whether* the step runs. None reads what it
+    then does — so ``run: exit 0``, or a ``run: echo ...``, passes all of them while the
+    gate reports success on every red dependency.
+    """
+    runs = step_values(gate_body(text), "run")
+    assert len(runs) == 1, (
+        f"expected exactly one step-level `run:` in the {GATE_JOB!r} job, found "
+        f"{len(runs)}: {runs}. The gate is one step on purpose; a second command means "
+        f"deciding which one fails the build, so make that decision here."
+    )
+    assert not _is_unread(runs[0]), (
+        f"the {GATE_JOB!r} gate's step `run:` reads {runs[0]!r} — a block scalar, or a "
+        f"value carried on the lines beneath. This reader does not follow it there, so "
+        f"the gate's command is unread, not wrong."
+    )
+    # Quotes are legal YAML around a scalar and say nothing about the value; every other
+    # reader here tolerates them, and reddening CI over `run: "exit 1"` would be an error
+    # message untrue of the edit in front of it.
+    assert _normalize_scalar(runs[0]) == GATE_STEP_RUN, (
+        f"the {GATE_JOB!r} gate's step runs {runs[0]!r}, not {GATE_STEP_RUN!r}. Pinned "
+        f"whole rather than as 'something that exits non-zero', because the gate's only "
+        f"output is its own failure and there is no reason for that command to be "
+        f"anything else. If this is a deliberate rewrite, change it here in the same PR "
+        f"— and note that `exit 0` would leave every other check in this section green: "
+        f"the condition fires, the step runs, and the required check passes on a red "
+        f"dependency."
     )
 
 
@@ -1061,9 +1210,14 @@ def test_the_fail_open_scanner_read_the_gate():
     )
 
 
-def test_no_continue_on_error_escapes_the_scanner():
-    """No ``continue-on-error`` in ``ci.yml`` is written in a shape the matcher misses."""
-    unreadable = unreadable_continue_on_error_lines()
+@pytest.mark.parametrize("workflow", [CI_WORKFLOW, RELEASE_WORKFLOW], ids=lambda w: w.name)
+def test_no_continue_on_error_escapes_the_scanner(workflow):
+    """No ``continue-on-error`` in either workflow is written in a shape the matcher misses.
+
+    Both files, one body: each has a check that reads only what ``KEY_LINE`` can read, so
+    an unreadable spelling has to fail by name here or the switch is simply unchecked.
+    """
+    unreadable = unreadable_continue_on_error_lines(workflow)
     assert unreadable == [], (
         f"these lines set continue-on-error in a shape KEY_LINE cannot read, so they are "
         f"unchecked — write them as a plain `continue-on-error: <value>` key, or widen "
@@ -1091,6 +1245,11 @@ def test_no_gate_dependency_continues_on_error():
     check_no_gate_dependency_continues_on_error(CI_WORKFLOW.read_text(encoding="utf-8"))
 
 
+def test_the_gate_step_actually_fails():
+    """`exit 1`, the command the whole gate reduces to."""
+    check_the_gate_step_actually_fails(CI_WORKFLOW.read_text(encoding="utf-8"))
+
+
 def _mutate(text: str, old: str, new: str) -> str:
     """``text`` with one occurrence of ``old`` replaced, asserting the edit applied.
 
@@ -1105,6 +1264,40 @@ def _mutate(text: str, old: str, new: str) -> str:
         f"surrounding lines. The guard under test is not what failed here."
     )
     return text.replace(old, new, 1)
+
+
+def _mutate_in_job(text: str, job: str, old: str, new: str) -> str:
+    """``text`` with one occurrence of ``old`` replaced **inside one job's block**.
+
+    Anchoring a probe on surrounding lines stops working the moment two jobs are written
+    alike, and ``release.yml``'s two publish jobs differ by about three words — a probe
+    that silently mutates the wrong one proves nothing about the job it names, and one
+    whose anchor matches both trips ``_mutate``'s uniqueness assert and blames the
+    workflow for it. Scoping to the block does not care how alike they are.
+    """
+    lines = text.splitlines(keepends=True)
+    # From `jobs:` onward, not the whole file: `on:` and `concurrency:` carry two-space
+    # keys too, so a probe named for a job could otherwise land on `  push:`.
+    jobs_at = next((index for index, line in enumerate(lines) if line.rstrip() == "jobs:"), None)
+    assert jobs_at is not None, "no top-level `jobs:` line — the workflow was restructured"
+    header = f"  {job}:\n"
+    starts = [index for index, line in enumerate(lines) if line == header and index > jobs_at]
+    assert len(starts) == 1, f"expected exactly one {job!r} job, found {len(starts)}"
+
+    start = starts[0] + 1
+    end = next(
+        (
+            index
+            for index in range(start, len(lines))
+            if JOB_KEY_SHAPED.match(lines[index]) and not lines[index].lstrip().startswith("#")
+        ),
+        len(lines),
+    )
+    # `_mutate` carries the assert-it-applied, so there is one such assertion to improve
+    # rather than two that drift — it is the only thing between a stale probe and a
+    # `pytest.raises` that reports the guard as broken.
+    block = _mutate("".join(lines[start:end]), old, new)
+    return "".join(lines[:start]) + block + "".join(lines[end:])
 
 
 class TestTheFailOpenScannerItself:
@@ -1139,10 +1332,10 @@ class TestTheFailOpenScannerItself:
         body = job_bodies(text)["ci"]
         assert job_key_value(body, "name") == "CI"
         assert job_key_value(body, "if") == "always()"
-        assert step_conditions(body) == ["failure()"]
+        assert step_values(body, "if") == ["failure()"]
 
-    def test_a_job_with_no_steps_has_no_step_conditions(self):
-        assert step_conditions(job_bodies("jobs:\n  ci:\n    if: always()\n")["ci"]) == []
+    def test_a_job_with_no_steps_has_no_step_values(self):
+        assert step_values(job_bodies("jobs:\n  ci:\n    if: always()\n")["ci"], "if") == []
 
     def test_continue_on_error_is_located_by_column(self):
         """Job level lies to ``needs``; step level is legitimate. Same key, same value."""
@@ -1196,6 +1389,47 @@ class TestTheFailOpenScannerItself:
         workflow = tmp_path / "fabricated.yml"
         workflow.write_text("jobs:\n  ci:\n    # never add continue-on-error here\n")
         assert unreadable_continue_on_error_lines(workflow) == []
+
+    def test_a_run_block_is_not_read_as_structure(self):
+        """A heredoc emitting ``key: value`` lines is script, not keys. ``step_values``
+        is depth-*bounded*, so without this it reads straight into one."""
+        text = (
+            "jobs:\n  build:\n    steps:\n      - run: |\n"
+            "          cat <<'YML' > out.yml\n"
+            "          continue-on-error: true\n"
+            "          repository-url: https://evil.invalid/\n"
+            "          YML\n"
+            "      - uses: actions/checkout@v7\n"
+        )
+        body = job_bodies(text)["build"]
+        assert continue_on_error(body) == []
+        assert step_values(body, "repository-url") == []
+        assert step_values(body, "uses") == ["actions/checkout@v7"]
+
+    def test_a_dedent_ends_the_block_scalar(self):
+        """And not before: a key back at the step's own column is structure again."""
+        text = (
+            "jobs:\n  build:\n    steps:\n      - run: |\n"
+            "          echo hi\n"
+            "        continue-on-error: true\n"
+        )
+        assert continue_on_error(job_bodies(text)["build"]) == [(8, "true")]
+
+    def test_a_blank_line_inside_a_scalar_does_not_end_it(self):
+        """Read as a dedent it would put the rest of the script back into the reading.
+
+        Only the blank line, deliberately: a *comment* shallower than the scalar's
+        content would end the scalar in YAML itself, which is the same fact
+        ``_jobs_block``'s docstring rests its own safety argument on — so a fixture
+        asserting otherwise would be enshrining a document that does not parse.
+        """
+        text = (
+            "jobs:\n  build:\n    steps:\n      - run: |\n"
+            "          echo one\n"
+            "\n"
+            "          continue-on-error: true\n"
+        )
+        assert continue_on_error(job_bodies(text)["build"]) == []
 
     def test_an_unreadable_continue_on_error_is_left_to_the_blind_spot_guard(self):
         """Reported as an empty value it would read as "not false", and the check would
@@ -1293,9 +1527,14 @@ class TestTheFailOpenScannerItself:
 
 
 class TestEachFailOpenEditIsCaught:
-    """The four one-line edits, applied to the real ``ci.yml``, each rejected by its own
-    check. Fabricated fragments prove where the scanner looks; these prove it is looking
-    at *this* workflow, so a rename or a reflow cannot quietly aim the checks at nothing.
+    """Every known one-line edit that fails the gate open, applied to the real ``ci.yml``
+    and each rejected by its own check — the three #243 enumerated plus the ``exit 0``
+    #250 added, and the false-alarm directions beside them.
+
+    Fabricated fragments prove where the scanner looks; these prove it is looking at
+    *this* workflow, so a rename or a reflow cannot quietly aim the checks at nothing.
+    Deliberately not a numbered count: the last two times this section claimed one, the
+    number was what went stale.
     """
 
     @pytest.fixture(scope="module")
@@ -1390,6 +1629,21 @@ class TestEachFailOpenEditIsCaught:
         with pytest.raises(AssertionError, match="operators are what changed"):
             check_the_gate_step_fails_on_every_bad_result(broken)
 
+    def test_neutering_the_gates_command_is_caught(self, ci):
+        """The edit #243's enumeration missed: the condition still fires, the step still
+        runs, and the gate reports success on every red dependency."""
+        broken = _mutate(ci, "        run: exit 1", "        run: exit 0")
+        with pytest.raises(AssertionError, match="runs 'exit 0'"):
+            check_the_gate_step_actually_fails(broken)
+
+        # All four of #243's gate checks pass on it, pinned so the enumeration in this
+        # module's docstring stays true rather than being asserted three-quarters of the
+        # way and read as complete.
+        check_the_gate_runs_whatever_its_dependencies_did(broken)
+        check_the_gate_step_fails_on_every_bad_result(broken)
+        check_the_gate_never_continues_on_error(broken)
+        check_no_gate_dependency_continues_on_error(broken)
+
     def test_the_wrapped_spelling_of_always_is_accepted(self, ci):
         """The false-alarm direction for the gate's own condition: ``${{ always() }}`` is
         the same gate, and the form GitHub's own documentation writes."""
@@ -1409,19 +1663,90 @@ class TestEachFailOpenEditIsCaught:
 # half of the contract, and the cost of breaking it is asymmetric: the mismatch surfaces
 # as a 403 at the publish step, on a tag that is already pushed, for a version number
 # PyPI will never release back. These pins are the registration, written down where a PR
-# reads it.
-
-RELEASE_WORKFLOW = WORKFLOWS / "release.yml"
+# reads it. (``RELEASE_WORKFLOW`` itself is declared beside ``CI_WORKFLOW`` at the top.)
 
 #: The TestPyPI rehearsal and the real publish. The rehearsal must finish before the
 #: real publish starts, or it is not a rehearsal.
 REHEARSAL_JOB = "publish-testpypi"
 PUBLISH_JOB = "publish-pypi"
 
+#: One list of the jobs that publish. Every check below iterates this rather than the
+#: environment map: a job that published under no environment would otherwise drop out
+#: of the OIDC and index checks with nothing failing.
+PUBLISH_JOBS = (REHEARSAL_JOB, PUBLISH_JOB)
+
+#: Trusted Publishing authenticates with a short-lived OIDC token, and Actions mints one
+#: only for a job that asks. Without this the publish 403s for want of a token at all —
+#: the same unrecoverable moment as a renamed environment, reached by deleting two lines
+#: that look like boilerplate (#250).
+OIDC_PERMISSION_KEY, OIDC_PERMISSION_VALUE = "id-token", "write"
+
+#: The index the rehearsal publishes to. Its **absence** on the real publish is what makes
+#: that one the real index, so both halves are pinned: delete this input and the rehearsal
+#: uploads to pypi.org under the `testpypi` environment, which carries no protection
+#: rules — the release ships before the capital ever actuates the `pypi` gate (#250).
+TESTPYPI_REPOSITORY_URL = "https://test.pypi.org/legacy/"
+
+#: Both spellings of that input. ``pypa/gh-action-pypi-publish`` still honours the
+#: underscored alias, so reading only the hyphen would let a ``repository_url:`` aim the
+#: real publish anywhere at all while the check that it names no index stayed green.
+REPOSITORY_URL_KEYS = ("repository-url", "repository_url")
+
 #: The environment each publish job is registered under. Per job, not as a set: swapping
 #: the two names would send the real release to the rehearsal index and rehearse against
 #: PyPI, which is the worse direction of the same edit.
-RELEASE_ENVIRONMENTS = {REHEARSAL_JOB: "testpypi", PUBLISH_JOB: "pypi"}
+RELEASE_ENVIRONMENTS = dict(zip(PUBLISH_JOBS, ("testpypi", "pypi")))
+
+
+def level_mapping(lines: list[str], key: str, level: int) -> dict[str, str] | None:
+    """A job-level key's nested one-level mapping, or ``None`` if absent or unreadable.
+
+    ``environment:`` and ``permissions:`` are both written this way, so one reader serves
+    both rather than two walks of the same shape drifting apart.
+
+    Two boundaries carry the correctness. The mapping ends where the lines dedent back to
+    the job's own keys. And its entries are taken at the **child column of its first
+    child**, read rather than assumed: bounded only by ``JOB_LEVEL``, a key nested under
+    one of the mapping's own *values* would be returned as if the mapping had declared
+    it, passing a check on a job that declared nothing.
+
+    A sequence under the key reads as ``None``: Actions takes a string or a mapping in
+    both of these places and rejects a list, so reading entries out of one would vouch
+    for a workflow that does not load at all. So does a scalar — that is the shorthand
+    spelling, and it is the caller's to interpret, not a mapping with no entries.
+    """
+    entries: dict[str, str] = {}
+    child_column: int | None = None
+    inside = False
+
+    for line in lines:
+        match = KEY_LINE.match(line)
+        if not inside:
+            if match and match.group("key") == key and _key_indent(line) == level:
+                if _strip_comment(match.group("value") or ""):
+                    return None
+                inside = True
+            continue
+
+        if not _is_structural(line):
+            continue
+        if _key_indent(line) <= level:
+            break  # dedented back out to the owning level's keys
+        if _dash_column(line) is not None:
+            return None  # a sequence where Actions takes a mapping
+        if child_column is None:
+            child_column = _key_indent(line)
+        if _key_indent(line) != child_column:
+            continue  # deeper: inside one of the mapping's own values
+        if match:
+            entries[match.group("key")] = _strip_comment(match.group("value") or "").strip("\"'")
+
+    return entries if inside else None
+
+
+def job_mapping(body: list[str], key: str) -> dict[str, str] | None:
+    """A job-level key's nested mapping — the job-level reading of ``level_mapping``."""
+    return level_mapping(body, key, JOB_LEVEL)
 
 
 def job_environment(body: list[str]) -> str | None:
@@ -1431,45 +1756,18 @@ def job_environment(body: list[str]) -> str | None:
     ``environment: pypi`` shorthand, and the mapping form with a nested ``name:`` that
     ``release.yml`` uses because it also carries a ``url:``.
     """
-    for index, line in enumerate(body):
-        match = KEY_LINE.match(line)
-        if not (match and match.group("key") == "environment" and _key_indent(line) == JOB_LEVEL):
-            continue
+    shorthand = job_key_value(body, "environment")
+    if shorthand:
+        # Flow style (`environment: {name: pypi}`) is legal YAML this reader does not
+        # parse, and handing the braces back as a name would accuse a correct release.yml
+        # of naming an environment PyPI never registered. Refused, the way
+        # _parse_needs_value refuses the same punctuation.
+        if _is_unread(shorthand) or any(character in shorthand for character in "[]{},"):
+            return None
+        return shorthand.strip("\"'")
 
-        shorthand = _strip_comment(match.group("value") or "")
-        if shorthand:
-            # Flow style (`environment: {name: pypi}`) is legal YAML this reader does not
-            # parse, and handing the braces back as a name would accuse a correct
-            # release.yml of naming an environment PyPI never registered. Refused, the
-            # way _parse_needs_value refuses the same punctuation.
-            if _is_unread(shorthand) or any(character in shorthand for character in "[]{},"):
-                return None
-            return shorthand.strip("\"'")
-
-        # The mapping's own child column, taken from its first child rather than assumed:
-        # bounded only by JOB_LEVEL, a `name:` nested under one of the mapping's *values*
-        # would be returned as the environment name, passing this check on a job that
-        # declares no environment at all.
-        child_column: int | None = None
-        for following in body[index + 1 :]:
-            if not _is_structural(following):
-                continue
-            if _key_indent(following) <= JOB_LEVEL:
-                break  # dedented back out to the job's own keys
-            if _dash_column(following) is not None:
-                # A sequence. Actions takes a string or a mapping here and rejects a
-                # list, so reading a `name:` out of one would vouch for a release.yml
-                # that does not load at all.
-                return None
-            if child_column is None:
-                child_column = _key_indent(following)
-            if _key_indent(following) != child_column:
-                continue  # deeper: inside one of the mapping's own values
-            nested = KEY_LINE.match(following)
-            if nested and nested.group("key") == "name":
-                return _strip_comment(nested.group("value") or "").strip("\"'")
-        return None
-    return None
+    mapping = job_mapping(body, "environment")
+    return None if mapping is None else mapping.get("name")
 
 
 def check_the_publish_jobs_declare_the_registered_environments(text: str) -> None:
@@ -1499,6 +1797,226 @@ def check_the_real_publish_waits_on_the_rehearsal(text: str) -> None:
         f"{PUBLISH_JOB!r} needs {needs}, not [{REHEARSAL_JOB!r}]. Without that edge the "
         f"two publishes race: the rehearsal stops being a rehearsal, and a package that "
         f"fails on TestPyPI is already on PyPI under a filename that cannot be replaced."
+    )
+
+
+#: A ``uses:`` pulling in the PyPI publish action, however it is referenced — the same
+#: loose matching ``UPLOAD_ACTION`` uses, for the same reason: a SHA pin or a fork is
+#: still the step that uploads.
+PUBLISH_ACTION = re.compile(
+    r"^\s*(?:-\s+)?uses:\s*[\"']?(?P<action>\S*gh-action-pypi-publish[^\s\"']*)"
+)
+
+
+def publish_steps(body: list[str]) -> list[list[str]]:
+    """Every ``gh-action-pypi-publish`` step in a job body, each as its own lines.
+
+    Attributing ``repository-url`` to the **step** rather than to the job is the whole
+    point, and it is the same trap ``_step_containing`` was written for on the retention
+    half: read job-wide, the input can sit on a neighbouring step — the artifact download,
+    say — and the check still passes while the publish step itself has none and uploads
+    to pypi.org.
+    """
+    # Script lines skipped, like every other reader here: a `run: |` body that greps
+    # for the action, or writes it into a file, is shell — counting it as a second
+    # publish step would redden CI over an echo.
+    inside_a_script = block_scalar_line_numbers(body)
+    return [
+        _step_containing(body, index)
+        for index, line in enumerate(body)
+        if index not in inside_a_script and PUBLISH_ACTION.match(line)
+    ]
+
+
+def publish_repository_url(steps: list[list[str]]) -> list[str]:
+    """The index inputs declared on these publish steps, either spelling, quotes stripped.
+
+    Takes the steps rather than the job, so the caller's "exactly one publish step" guard
+    and this reading are demonstrably about the same step rather than two independent
+    re-derivations of it.
+    """
+    return [
+        value.strip("\"'")
+        for step in steps
+        for key in REPOSITORY_URL_KEYS
+        for value in step_values(step, key)
+    ]
+
+
+def unreadable_repository_url_lines(workflow: Path) -> list[str]:
+    """Every naming of an index input, outside a comment, the matcher cannot read.
+
+    The blind-spot guard for the one *fail-open* direction in this section: the real
+    publish must name **no** index, and an empty read is indistinguishable from one
+    written in a shape ``KEY_LINE`` misses. Without this, flow style or a value on the
+    next line aims the real publish anywhere at all, green.
+    """
+    return unreadable_key_lines(workflow, *REPOSITORY_URL_KEYS)
+
+
+#: Actions' two ``permissions:`` shorthands. ``write-all`` grants everything, ``id-token``
+#: included, so a job written that way does mint a token — calling it a failure would be
+#: a red CI over a workflow that publishes perfectly well.
+PERMISSIONS_GRANTING_EVERYTHING = "write-all"
+PERMISSIONS_GRANTING_NOTHING = "read-all"
+
+
+def oidc_grant(lines: list[str], level: int) -> tuple[bool | None, str] | None:
+    """Whether the ``permissions:`` declared at ``level`` mints an OIDC token.
+
+    Three outcomes, kept apart because they are three different edits. The **outer**
+    ``None`` means nothing is declared at this level at all — the caller decides what
+    Actions would fall back to. Inside the tuple, a ``None`` means declared in a shape
+    this reader does not resolve, which is not the same as denied, and must never be
+    reported as one.
+    """
+    declared = level_key_value(lines, "permissions", level)
+    if declared is None:
+        return None
+
+    if declared:
+        value = declared.strip("\"'")
+        if value == PERMISSIONS_GRANTING_EVERYTHING:
+            return True, f"`permissions: {value}`, which grants everything"
+        if value == PERMISSIONS_GRANTING_NOTHING:
+            return False, f"`permissions: {value}`, which grants nothing writable"
+        return None, f"`permissions: {value}`, a shorthand this reader does not resolve"
+
+    mapping = level_mapping(lines, "permissions", level)
+    if mapping is None:
+        return None, "a `permissions:` written in a shape this reader does not resolve"
+
+    granted = mapping.get(OIDC_PERMISSION_KEY)
+    described = f"a `permissions:` mapping setting `{OIDC_PERMISSION_KEY}: {granted}`"
+    if granted is None:
+        return False, f"a `permissions:` mapping granting only {sorted(mapping)}"
+    if granted in (OIDC_PERMISSION_VALUE, "read", "none"):
+        return granted == OIDC_PERMISSION_VALUE, described
+    # An expression, or a value Actions does not define: unresolved, not denied -- the
+    # same reading the shorthand branch above takes of the same class of input.
+    return None, f"{described}, which this reader does not resolve"
+
+
+def check_the_publish_jobs_can_mint_an_oidc_token(text: str) -> None:
+    """Assert each publish job can still get the OIDC token Trusted Publishing needs.
+
+    Job level first, then the workflow's, because that is Actions' own rule: a job
+    declaring any ``permissions:`` of its own replaces the workflow's outright, and only
+    a job declaring none inherits. Reading the job alone would call a correct workflow
+    broken the day someone hoists the grant to the top — and "the publish fails for want
+    of a token" is not a sentence to be wrong about.
+    """
+    bodies = job_bodies(text)
+    # Read once: the workflow's grant is a single fact, and two reads of one fact are
+    # two things a later edit can make disagree.
+    inherited = oidc_grant(text.splitlines(), 0)
+
+    for job in PUBLISH_JOBS:
+        # An absent job and a job with no `permissions:` both read as None below, and
+        # only one of them is a workflow that publishes. Without this the check reports
+        # a renamed job as inheriting a grant it is not there to inherit.
+        assert job in bodies, (
+            f"no {job!r} job in the release workflow, so there is nothing here to ask "
+            f"about its OIDC token. If the job was renamed, PyPI's trusted publisher "
+            f"has to be updated with it before this check is."
+        )
+
+        grant = oidc_grant(bodies[job], JOB_LEVEL)
+        where = "the job's"
+        if grant is None:
+            grant = inherited
+            where = "the workflow's (the job declares none, so Actions falls back to it)"
+        if grant is None:
+            grant = (False, "no `permissions:` at all")
+            where = "neither the job nor the workflow declares"
+
+        granted, described = grant
+        assert granted is not None, (
+            f"cannot tell whether {job!r} can mint an OIDC token: {where} permissions are "
+            f"{described}. Unresolved is not the same as denied — teach this reader that "
+            f"shape rather than leaving the contract unchecked, or write the mapping."
+        )
+        assert granted, (
+            f"{job!r} cannot mint an OIDC token: {where} permissions are {described}, and "
+            f"Trusted Publishing has no other credential. Actions mints the token only "
+            f"for a job that asks, so the publish 403s on a tag already pushed, for a "
+            f"version PyPI never releases back."
+        )
+
+
+def check_the_rehearsal_publishes_to_the_rehearsal_index(text: str) -> None:
+    """Assert the TestPyPI rehearsal uploads to TestPyPI, and the real publish does not.
+
+    Both halves, because the second is what makes the first meaningful: the real publish
+    names no ``repository-url`` at all — its *absence* is what selects pypi.org — so a
+    rehearsal that also names none is not a rehearsal, it is a second real publish, run
+    under an environment with no protection rules and before the ``pypi`` gate.
+    """
+    bodies = job_bodies(text)
+    steps = {}
+    for job in PUBLISH_JOBS:
+        steps[job] = publish_steps(bodies.get(job, []))
+        assert len(steps[job]) == 1, (
+            f"expected exactly one gh-action-pypi-publish step in {job!r}, found "
+            f"{len(steps[job])}. The readings below are about that step; with none, or "
+            f"more than one, there is no single step for them to be about."
+        )
+
+    rehearsal = publish_repository_url(steps[REHEARSAL_JOB])
+    assert rehearsal == [TESTPYPI_REPOSITORY_URL], (
+        f"{REHEARSAL_JOB!r} names repository-url {rehearsal}, not "
+        f"[{TESTPYPI_REPOSITORY_URL!r}]. Unset, `pypa/gh-action-pypi-publish` uploads to "
+        f"**pypi.org** — so the rehearsal publishes the real release, under the "
+        f"{RELEASE_ENVIRONMENTS[REHEARSAL_JOB]!r} environment, which carries no "
+        f"protection rules, before the `pypi` gate is ever actuated."
+    )
+
+    real = publish_repository_url(steps[PUBLISH_JOB])
+    assert real == [], (
+        f"{PUBLISH_JOB!r} names repository-url {real}. The real publish names none — its "
+        f"absence is what selects pypi.org — so anything here is either a redundant "
+        f"restatement or a publish pointed somewhere nobody expects."
+    )
+
+
+def check_no_release_job_continues_on_error(text: str) -> None:
+    """Assert no job in the release pipeline can report a success it did not earn.
+
+    Every job here, not only the publishes: each ``needs`` edge in this workflow is load
+    bearing, and a job that continues on error reports ``success`` into the one naming
+    it. On ``publish-testpypi`` that turns the rehearsal edge into decoration — a package
+    TestPyPI rejected goes to PyPI anyway, which is the exact outcome the edge's own
+    check promises to prevent.
+
+    At **any** column, unlike the ci.yml check, and the difference is not an oversight:
+    there, ``actionlint``'s advisory pass over the capital's stubs is a legitimate
+    step-level use, so that check has to read the column. Here there is none — every step
+    in this pipeline either builds the artifact, guards the tag, or publishes, and a step
+    allowed to fail quietly neuters whichever of those it is. Same reasoning as
+    ``check_the_gate_never_continues_on_error``.
+    """
+    # A list, not a mapping: two offenders in one job at one column are two edits to
+    # make, and a dict keyed by job-and-column would report the second as the first.
+    bodies = job_bodies(text)
+    # "found no offenders" and "read no jobs" are the same empty answer, and only one of
+    # them is a clean workflow -- the positive-read guard every other scanner here has.
+    assert bodies, (
+        "read no jobs in the release workflow, so this check is asking nothing of it — "
+        "either the file was restructured or JOB_KEY stopped matching"
+    )
+
+    offenders = [
+        f"{job} (column {indent}): continue-on-error: {value}"
+        for job, body in bodies.items()
+        for indent, value in continue_on_error(body)
+        if _is_enabled(value)
+    ]
+    assert not offenders, (
+        f"these set `continue-on-error` in the release workflow: {offenders}. At "
+        f"column {JOB_LEVEL} the job reports `success` into every `needs` naming it, "
+        f"however it ran; deeper, the step it guards stops being able to stop the "
+        f"pipeline. Either way a failed build or a rejected rehearsal still reaches "
+        f"PyPI, under a filename that can never be replaced."
     )
 
 
@@ -1539,8 +2057,38 @@ def test_the_real_publish_waits_on_the_rehearsal():
     check_the_real_publish_waits_on_the_rehearsal(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
 
 
-class TestTheEnvironmentScannerItself:
-    """Where the environment reading fires and where it does not."""
+def test_the_publish_jobs_can_mint_an_oidc_token():
+    """`id-token: write` — the whole of Trusted Publishing's authentication."""
+    check_the_publish_jobs_can_mint_an_oidc_token(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+
+
+def test_the_rehearsal_publishes_to_the_rehearsal_index():
+    """The rehearsal goes to TestPyPI, and the real publish names no index at all."""
+    check_the_rehearsal_publishes_to_the_rehearsal_index(
+        RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    )
+
+
+def test_no_release_job_continues_on_error():
+    """No `needs` edge in the publish pipeline may be satisfied by a job that failed."""
+    check_no_release_job_continues_on_error(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+
+
+def test_no_repository_url_escapes_the_scanner():
+    """The fail-open direction needs its own guard: the real publish must name **no**
+    index, and "none" is what an unreadable spelling also looks like."""
+    unreadable = unreadable_repository_url_lines(RELEASE_WORKFLOW)
+    assert unreadable == [], (
+        f"these lines name repository-url in a shape KEY_LINE cannot read, so the check "
+        f"that the real publish declares none cannot tell them from absence — write them "
+        f"as a plain `repository-url: <value>` key, or widen the matcher: {unreadable}"
+    )
+
+
+class TestTheReleaseScannerItself:
+    """Where ``job_mapping``, ``job_environment`` and the publish-step reading fire, and
+    where they do not. ``environment:`` and ``permissions:`` are the same nested shape and
+    share one reader, so they share one class."""
 
     def test_reads_the_mapping_form_release_yml_uses(self):
         text = "jobs:\n  publish:\n    environment:\n      name: pypi\n      url: https://x\n"
@@ -1582,6 +2130,103 @@ class TestTheEnvironmentScannerItself:
         text = "jobs:\n  publish:\n    environment:\n      - name: pypi\n"
         assert job_environment(job_bodies(text)["publish"]) is None
 
+    def test_reads_a_permissions_mapping(self):
+        text = "jobs:\n  publish:\n    permissions:\n      id-token: write\n      contents: read\n"
+        assert job_mapping(job_bodies(text)["publish"], "permissions") == {
+            "id-token": "write",
+            "contents": "read",
+        }
+
+    def test_a_key_under_one_of_the_mappings_values_is_not_the_mappings_own(self):
+        """Bounded by the mapping's child column, not the job's: otherwise this job —
+        which grants nothing at its own level — would read as granting `id-token`."""
+        text = "jobs:\n  publish:\n    permissions:\n      contents:\n        id-token: write\n"
+        assert job_mapping(job_bodies(text)["publish"], "permissions") == {"contents": ""}
+
+    def test_a_mapping_stops_at_the_next_job_level_key(self):
+        text = "jobs:\n  publish:\n    permissions:\n      id-token: write\n    steps:\n"
+        assert job_mapping(job_bodies(text)["publish"], "permissions") == {"id-token": "write"}
+
+    def test_an_absent_mapping_reads_as_none_not_empty(self):
+        """ "grants nothing" and "grants an empty mapping" are different claims, and only
+        one of them is a job that never asked."""
+        assert job_mapping(job_bodies("jobs:\n  p:\n    steps:\n")["p"], "permissions") is None
+
+    def test_a_scalar_where_a_mapping_was_expected_reads_as_none(self):
+        """`permissions: read-all` is legal and grants no id-token; handing back an empty
+        mapping would say the same thing by accident rather than on purpose."""
+        text = "jobs:\n  p:\n    permissions: read-all\n"
+        assert job_mapping(job_bodies(text)["p"], "permissions") is None
+
+    def test_a_sequence_where_a_mapping_was_expected_reads_as_none(self):
+        text = "jobs:\n  p:\n    permissions:\n      - id-token: write\n"
+        assert job_mapping(job_bodies(text)["p"], "permissions") is None
+
+    def test_step_values_reaches_a_with_input(self):
+        """``repository-url`` is a ``with:`` input, a level deeper than a step's own keys
+        — one reader has to see both, or the release pins need a second one."""
+        text = (
+            "jobs:\n  publish:\n    steps:\n      - uses: pypa/gh-action-pypi-publish@v1\n"
+            "        with:\n          repository-url: https://test.pypi.org/legacy/\n"
+        )
+        body = job_bodies(text)["publish"]
+        assert step_values(body, "repository-url") == ["https://test.pypi.org/legacy/"]
+        assert step_values(body, "uses") == ["pypa/gh-action-pypi-publish@v1"]
+
+    def test_an_input_on_a_neighbouring_step_is_not_the_publish_steps(self):
+        """The attribution trap, and the worst false pass available here: read job-wide,
+        this reads as a rehearsal pointed at TestPyPI while the step that actually
+        publishes names no index and uploads to pypi.org."""
+        text = (
+            "jobs:\n  publish:\n    steps:\n      - uses: actions/download-artifact@v8\n"
+            "        with:\n          repository-url: https://test.pypi.org/legacy/\n"
+            "      - uses: pypa/gh-action-pypi-publish@release/v1\n"
+        )
+        body = job_bodies(text)["publish"]
+        assert step_values(body, "repository-url") == ["https://test.pypi.org/legacy/"]
+        assert publish_repository_url(publish_steps(body)) == []
+
+    @pytest.mark.parametrize(
+        "reference",
+        [
+            "pypa/gh-action-pypi-publish@release/v1",
+            '"pypa/gh-action-pypi-publish@release/v1"',
+            "pypa/gh-action-pypi-publish@d4f7e1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8",
+            "someorg/gh-action-pypi-publish-fork@v1",
+        ],
+        ids=["tagged", "quoted", "sha-pinned", "third-party-fork"],
+    )
+    def test_the_publish_step_is_found_however_the_action_is_referenced(self, reference):
+        """Loose on the reference, like ``UPLOAD_ACTION``: a fork or a SHA pin is still
+        the step that uploads."""
+        text = f"jobs:\n  publish:\n    steps:\n      - uses: {reference}\n"
+        assert len(publish_steps(job_bodies(text)["publish"])) == 1
+
+    def test_a_quoted_repository_url_is_the_same_index(self):
+        """Quotes are legal YAML around a scalar and say nothing about the value —
+        reddening CI over them would be an error message untrue of the edit."""
+        text = (
+            "jobs:\n  publish:\n    steps:\n      - uses: pypa/gh-action-pypi-publish@v1\n"
+            '        with:\n          repository-url: "https://test.pypi.org/legacy/"\n'
+        )
+        body = job_bodies(text)["publish"]
+        assert publish_repository_url(publish_steps(body)) == ["https://test.pypi.org/legacy/"]
+
+    @pytest.mark.parametrize(
+        "line",
+        ["        with: {repository-url: https://x/}", "          repository-url:"],
+        ids=["flow-style", "value-on-the-next-line"],
+    )
+    def test_reports_a_repository_url_it_cannot_read(self, tmp_path, line):
+        workflow = tmp_path / "fabricated.yml"
+        workflow.write_text(f"jobs:\n  publish:\n    steps:\n{line}\n")
+        assert len(unreadable_repository_url_lines(workflow)) == 1
+
+    def test_a_comment_naming_repository_url_is_not_reported(self, tmp_path):
+        workflow = tmp_path / "fabricated.yml"
+        workflow.write_text("jobs:\n  publish:\n    # never set repository-url here\n")
+        assert unreadable_repository_url_lines(workflow) == []
+
     def test_a_flow_style_environment_is_refused_not_read_as_a_name(self):
         """Legal YAML this reader does not parse. Handing back the braces would accuse a
         correct release.yml of naming an environment PyPI never registered."""
@@ -1606,8 +2251,12 @@ class TestTheEnvironmentScannerItself:
         assert job_environment(job_bodies(text)["publish"]) == "pypi"
 
 
-class TestEachContractualRenameIsCaught:
-    """Each contractual fact, broken in the real ``release.yml``, rejected by its check."""
+class TestEachReleaseEditIsCaught:
+    """Each fact this section pins, broken in the real ``release.yml`` and rejected by
+    its own check — and beside each, the spellings that mean the same thing and must
+    stay green. Both directions, because a check that reddens CI on a correct workflow
+    is the one that gets deleted.
+    """
 
     @pytest.fixture(scope="module")
     def release(self):
@@ -1647,3 +2296,152 @@ class TestEachContractualRenameIsCaught:
         broken = _mutate(release, "    needs: publish-testpypi\n", "    needs: build\n")
         with pytest.raises(AssertionError, match=r"needs \['build'\]"):
             check_the_real_publish_waits_on_the_rehearsal(broken)
+
+    PERMISSIONS_BLOCK = "    permissions:\n      id-token: write\n"
+
+    @pytest.mark.parametrize("job", [REHEARSAL_JOB, PUBLISH_JOB])
+    def test_narrowing_a_publish_jobs_permissions_is_caught(self, release, job):
+        """The likely shape of the edit: consolidating permissions and keeping a block
+        that grants something else. Nothing about it reads as deleting a credential."""
+        broken = _mutate_in_job(
+            release, job, self.PERMISSIONS_BLOCK, "    permissions:\n      contents: read\n"
+        )
+        with pytest.raises(AssertionError, match="cannot mint an OIDC token"):
+            check_the_publish_jobs_can_mint_an_oidc_token(broken)
+
+    @pytest.mark.parametrize("job", [REHEARSAL_JOB, PUBLISH_JOB])
+    def test_removing_a_publish_jobs_permissions_entirely_is_caught(self, release, job):
+        """It then inherits the workflow's, which grants `contents: read` and no token."""
+        broken = _mutate_in_job(release, job, self.PERMISSIONS_BLOCK, "")
+        with pytest.raises(AssertionError, match="the workflow's"):
+            check_the_publish_jobs_can_mint_an_oidc_token(broken)
+
+    @pytest.mark.parametrize("job", [REHEARSAL_JOB, PUBLISH_JOB])
+    def test_the_write_all_shorthand_is_accepted(self, release, job):
+        """The false-alarm direction. `write-all` grants everything, `id-token` included,
+        so calling it a failure would redden CI over a workflow that publishes fine."""
+        rewritten = _mutate_in_job(
+            release, job, self.PERMISSIONS_BLOCK, "    permissions: write-all\n"
+        )
+        check_the_publish_jobs_can_mint_an_oidc_token(rewritten)
+
+    @pytest.mark.parametrize("job", [REHEARSAL_JOB, PUBLISH_JOB])
+    def test_the_read_all_shorthand_is_caught(self, release, job):
+        broken = _mutate_in_job(release, job, self.PERMISSIONS_BLOCK, "    permissions: read-all\n")
+        with pytest.raises(AssertionError, match="grants nothing writable"):
+            check_the_publish_jobs_can_mint_an_oidc_token(broken)
+
+    @pytest.mark.parametrize(
+        "permissions",
+        [
+            "    permissions: ${{ inputs.perms }}\n",
+            "    permissions:\n      id-token: ${{ inputs.perms }}\n",
+        ],
+        ids=["shorthand", "mapping-value"],
+    )
+    @pytest.mark.parametrize("job", PUBLISH_JOBS)
+    def test_something_it_cannot_resolve_says_so_rather_than_denying(
+        self, release, job, permissions
+    ):
+        """ "Unresolved" and "denied" are different edits, and only one of them is a
+        workflow that cannot publish. Both branches of the reader take that reading —
+        pinning only the shorthand would leave the mapping free to assert a denial it
+        never established.
+        """
+        broken = _mutate_in_job(release, job, self.PERMISSIONS_BLOCK, permissions)
+        with pytest.raises(AssertionError, match="cannot tell whether"):
+            check_the_publish_jobs_can_mint_an_oidc_token(broken)
+
+    def test_hoisting_the_grant_to_the_workflow_is_accepted(self, release):
+        """Actions falls back to the workflow's `permissions:` for a job declaring none,
+        so this publishes exactly as before — and reading only the job would call it
+        broken."""
+        rewritten = release
+        for job in (REHEARSAL_JOB, PUBLISH_JOB):
+            rewritten = _mutate_in_job(rewritten, job, self.PERMISSIONS_BLOCK, "")
+        rewritten = _mutate(
+            rewritten,
+            "permissions:\n  contents: read\n",
+            "permissions:\n  contents: read\n  id-token: write\n",
+        )
+        check_the_publish_jobs_can_mint_an_oidc_token(rewritten)
+
+    def test_dropping_the_rehearsals_repository_url_is_caught(self, release):
+        """The worst of the four: the rehearsal then publishes to real PyPI, under an
+        environment with no protection rules, before the `pypi` gate is actuated."""
+        broken = _mutate_in_job(
+            release,
+            REHEARSAL_JOB,
+            f"        with:\n          repository-url: {TESTPYPI_REPOSITORY_URL}\n",
+            "",
+        )
+        with pytest.raises(AssertionError, match="uploads to"):
+            check_the_rehearsal_publishes_to_the_rehearsal_index(broken)
+
+        # Every other release check passes on it — all of them, not a sample, so this
+        # stays an enumeration rather than an illustration.
+        check_the_publish_jobs_declare_the_registered_environments(broken)
+        check_the_real_publish_waits_on_the_rehearsal(broken)
+        check_the_publish_jobs_can_mint_an_oidc_token(broken)
+        check_no_release_job_continues_on_error(broken)
+
+    def test_pointing_the_real_publish_at_an_index_of_its_own_is_caught(self, release):
+        """Its *absence* is what selects pypi.org, so anything here aims the real publish
+        somewhere nobody reading the job would expect."""
+        broken = _mutate_in_job(
+            release,
+            PUBLISH_JOB,
+            "      - uses: pypa/gh-action-pypi-publish@release/v1\n",
+            "      - uses: pypa/gh-action-pypi-publish@release/v1\n"
+            "        with:\n          repository-url: https://example.invalid/legacy/\n",
+        )
+        with pytest.raises(AssertionError, match="names repository-url"):
+            check_the_rehearsal_publishes_to_the_rehearsal_index(broken)
+
+    @pytest.mark.parametrize("job", ["build", REHEARSAL_JOB, PUBLISH_JOB])
+    def test_a_release_job_that_continues_on_error_is_caught(self, release, job):
+        broken = _mutate_in_job(
+            release,
+            job,
+            "    runs-on: ubuntu-latest\n",
+            "    runs-on: ubuntu-latest\n    continue-on-error: true\n",
+        )
+        with pytest.raises(AssertionError, match=f"{job} \\(column {JOB_LEVEL}\\)"):
+            check_no_release_job_continues_on_error(broken)
+        # The rehearsal edge is still declared, and now worth nothing.
+        check_the_real_publish_waits_on_the_rehearsal(broken)
+
+    def test_aiming_the_real_publish_with_the_underscored_alias_is_caught(self, release):
+        """``pypa/gh-action-pypi-publish`` honours ``repository_url`` too, so reading
+        only the hyphen would leave the real publish aimable at anything, green."""
+        broken = _mutate_in_job(
+            release,
+            PUBLISH_JOB,
+            "      - uses: pypa/gh-action-pypi-publish@release/v1\n",
+            "      - uses: pypa/gh-action-pypi-publish@release/v1\n"
+            "        with:\n          repository_url: https://example.invalid/legacy/\n",
+        )
+        with pytest.raises(AssertionError, match="names repository-url"):
+            check_the_rehearsal_publishes_to_the_rehearsal_index(broken)
+
+    @pytest.mark.parametrize("job", [REHEARSAL_JOB, PUBLISH_JOB])
+    def test_renaming_a_publish_job_is_caught_by_the_oidc_check_too(self, release, job):
+        """An absent job and a job with no ``permissions:`` are the same empty read, and
+        only one of them is a workflow that publishes."""
+        broken = _mutate(release, f"  {job}:\n", f"  {job}-renamed:\n")
+        with pytest.raises(AssertionError, match=f"no '{job}' job"):
+            check_the_publish_jobs_can_mint_an_oidc_token(broken)
+
+    @pytest.mark.parametrize("job", ["build", REHEARSAL_JOB, PUBLISH_JOB])
+    def test_a_release_step_that_continues_on_error_is_caught(self, release, job):
+        """The column-blind half, and release.yml is where it belongs: a step allowed to
+        fail quietly neuters whichever guard, build or publish it was wrapping. ci.yml
+        cannot take this reading — its advisory actionlint pass is a legitimate use."""
+        broken = _mutate_in_job(
+            release,
+            job,
+            "    steps:\n",
+            "    steps:\n      - continue-on-error: true\n        run: echo probe\n",
+        )
+        with pytest.raises(AssertionError, match=f"{job} \\(column 8\\)"):
+            check_no_release_job_continues_on_error(broken)
