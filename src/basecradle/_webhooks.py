@@ -200,11 +200,10 @@ class WebhookEventContent(ApiObject):
     and ``headers["x-github-delivery"]`` both read the header the wire spells
     ``X-Github-Delivery``. See ``WebhookEventHeaders``.
 
-    Reached instead through a ``webhook_event`` row of ``timeline.items``, ``content`` is
-    the generic wire-exact object — a timeline item's content is a union of four record
-    types, so it is not a ``WebhookEventContent`` — and ``item.content.headers`` is the
-    plain dict the API returned. ``bc.webhook_events`` and ``timeline.webhook_events`` give
-    the case-folding one.
+    Every read path gives this same class: ``bc.webhook_events``,
+    ``timeline.webhook_events``, and a ``webhook_event`` row of ``timeline.items`` alike, so
+    ``item.content.headers`` folds case exactly as ``event.content.headers`` does. One
+    record has one shape.
     """
 
     uuid: str

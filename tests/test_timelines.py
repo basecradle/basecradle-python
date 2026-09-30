@@ -1,28 +1,43 @@
 """Timelines: auto-paginating list, create, get, lock, participants."""
 
 import json
+import typing
 
 import httpx
 import pytest
 
 from basecradle import (
+    ApiObject,
+    Asset,
+    AssetContent,
     ForbiddenError,
+    Message,
+    MessageContent,
     NotFoundError,
     NotTimelineOwnerError,
+    Task,
+    TaskContent,
     Timeline,
     TimelineItem,
     User,
     ValidationError,
     WebhookEndpoint,
+    WebhookEvent,
+    WebhookEventContent,
+    WebhookEventHeaders,
 )
+from basecradle._timelines import _CONTENT_CLASSES
 from tests.conftest import (
     NOVA,
     TIMELINE_UUID,
     WEBHOOK_ENDPOINT_UUID,
+    WEBHOOK_EVENT_UUID,
+    asset_payload,
     lock_response,
     message_payload,
     participation_response,
     problem,
+    task_payload,
     timeline_payload,
     webhook_event_payload,
 )
@@ -188,6 +203,131 @@ class TestGet:
 
         with pytest.raises(NotFoundError):
             bc.timelines.get(TIMELINE_UUID)
+
+
+class TestItemContentIsTyped:
+    """One record has one shape: a ``timeline.items`` row gives the record's own content class.
+
+    Before this, ``item.content`` was the generic ``ApiObject`` on every path, so the same
+    wire field answered differently depending on how you reached it — the case-folding
+    ``headers`` landed for ``bc.webhook_events`` and not for ``timeline.items``. These pin
+    the promise that there is one answer.
+    """
+
+    def test_content_is_typed_by_the_items_own_type(self, bc, api):
+        api.get(f"/timelines/{TIMELINE_UUID}").respond(
+            200,
+            json={
+                "timeline": timeline_payload(),
+                "items": [
+                    message_payload(),
+                    asset_payload(),
+                    webhook_event_payload(),
+                    task_payload(),
+                ],
+            },
+        )
+
+        message, asset, event, task = bc.timelines.get(TIMELINE_UUID).items
+
+        assert isinstance(message.content, MessageContent)
+        assert isinstance(asset.content, AssetContent)
+        assert isinstance(event.content, WebhookEventContent)
+        assert isinstance(task.content, TaskContent)
+        # Still wire-exact underneath — typing the content changed nothing about the read.
+        assert message.content.body == "Hello from a peer."
+        assert asset.content.file.filename == "report.pdf"
+        assert task.content.status == "pending"
+        assert event.content.payload == '{"status":"ok"}'
+
+    def test_webhook_event_item_headers_fold_case(self, bc, api):
+        """The divergence that motivated this: ``headers`` now folds case on both paths."""
+        api.get(f"/timelines/{TIMELINE_UUID}").respond(
+            200,
+            json={"timeline": timeline_payload(), "items": [webhook_event_payload()]},
+        )
+
+        (item,) = bc.timelines.get(TIMELINE_UUID).items
+
+        assert isinstance(item.content.headers, WebhookEventHeaders)
+        assert item.content.headers["X-Example-Event"] == "ping"  # the wire's own spelling
+        assert item.content.headers["x-example-event"] == "ping"  # any other casing
+        assert "X-EXAMPLE-EVENT" in item.content.headers
+        assert item.content.headers.get("x-example-event") == "ping"
+
+    def test_item_content_equals_the_same_record_fetched_directly(self, bc, api):
+        """``ApiObject.__eq__`` compares types, so this only holds once the item is typed."""
+        event = webhook_event_payload()
+        api.get(f"/timelines/{TIMELINE_UUID}").respond(
+            200, json={"timeline": timeline_payload(), "items": [event]}
+        )
+        api.get(f"/webhook_events/{WEBHOOK_EVENT_UUID}").respond(200, json={"webhook_event": event})
+
+        (item,) = bc.timelines.get(TIMELINE_UUID).items
+        directly = bc.webhook_events.get(WEBHOOK_EVENT_UUID)
+
+        assert item.content == directly.content
+        assert type(item.content) is type(directly.content)
+
+    @pytest.mark.parametrize(
+        ("item_type", "model"),
+        [("message", Message), ("asset", Asset), ("webhook_event", WebhookEvent), ("task", Task)],
+    )
+    def test_the_table_agrees_with_the_records_own_annotation(self, item_type, model):
+        """The item path and the record path must not be able to drift apart again.
+
+        ``_CONTENT_CLASSES`` is a second declaration of a fact the leaf models already
+        state as ``content: SomeContent``. Retype one of those and the two paths would
+        silently diverge for the new field \u2014 which is exactly the bug this change closed,
+        and every other test here would still pass, because they check the item path
+        against the table's own answer. So assert the two declarations *are* the same class.
+        """
+        assert _CONTENT_CLASSES[item_type] is typing.get_type_hints(model)["content"]
+
+    def test_the_table_covers_every_item_type_and_nothing_else(self):
+        """The four the API defines \u2014 spec-checked (``items[].content`` is their union)."""
+        assert set(_CONTENT_CLASSES) == {"message", "asset", "webhook_event", "task"}
+
+    def test_unknown_item_type_reads_as_the_generic_object(self, bc, api):
+        """The API is additive-only: an item type added after this release must keep reading.
+
+        No raise, no empty content — the generic wire-exact object, whose fields are
+        readable immediately. That is the same guarantee ``ApiObject`` makes everywhere.
+        """
+        future_item = {
+            "type": "poll",
+            "created_at": "2026-01-02T00:00:00.000Z",
+            "updated_at": "2026-01-02T00:00:00.000Z",
+            "user": NOVA,
+            "timeline": {"uuid": TIMELINE_UUID},
+            "content": {"uuid": "019e7750-66ee-7c0d-9a1f-4f0d2b9a7e51", "question": "Ship it?"},
+        }
+        api.get(f"/timelines/{TIMELINE_UUID}").respond(
+            200, json={"timeline": timeline_payload(), "items": [future_item]}
+        )
+
+        (item,) = bc.timelines.get(TIMELINE_UUID).items
+
+        assert item.type == "poll"
+        assert type(item.content) is ApiObject
+        assert item.content.question == "Ship it?"
+
+    def test_an_item_with_no_type_still_reads_its_content(self, bc, api):
+        """A row missing ``type`` is malformed, but ``content`` owes no exception for it."""
+        item_without_type = {
+            "created_at": "2026-01-02T00:00:00.000Z",
+            "updated_at": "2026-01-02T00:00:00.000Z",
+            "timeline": {"uuid": TIMELINE_UUID},
+            "content": {"uuid": "019e7750-66ee-7c0d-9a1f-4f0d2b9a7e51"},
+        }
+        api.get(f"/timelines/{TIMELINE_UUID}").respond(
+            200, json={"timeline": timeline_payload(), "items": [item_without_type]}
+        )
+
+        (item,) = bc.timelines.get(TIMELINE_UUID).items
+
+        assert type(item.content) is ApiObject
+        assert item.content.uuid == "019e7750-66ee-7c0d-9a1f-4f0d2b9a7e51"
 
 
 class TestLock:

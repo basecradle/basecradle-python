@@ -6,9 +6,12 @@ from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 from basecradle._items import (
+    AssetContent,
     AsyncTimelineAssets,
     AsyncTimelineMessages,
     AsyncTimelineTasks,
+    MessageContent,
+    TaskContent,
     TimelineAssets,
     TimelineMessages,
     TimelineTasks,
@@ -23,9 +26,22 @@ from basecradle._webhooks import (
     TimelineWebhookEndpoints,
     TimelineWebhookEvents,
     WebhookEndpoint,
+    WebhookEventContent,
 )
 
 __all__ = ["AsyncTimelinesResource", "Timeline", "TimelineItem", "TimelinesResource"]
+
+
+#: Which content class a timeline item's ``content`` is, by the item's own ``type``.
+#: One mapping, one place — a leaf content class is reached through ``timeline.items``
+#: exactly as it is through its own resource. An item ``type`` this release does not know
+#: is absent here on purpose; see ``TimelineItem._wrap``.
+_CONTENT_CLASSES: dict[str, type[ApiObject]] = {
+    "message": MessageContent,
+    "asset": AssetContent,
+    "webhook_event": WebhookEventContent,
+    "task": TaskContent,
+}
 
 
 class TimelineItem(ApiObject):
@@ -36,6 +52,23 @@ class TimelineItem(ApiObject):
     record's own form, with one difference: ``created_at`` is the **item's** — when the
     record landed on the timeline (for a task, when it activated) — while ``updated_at``
     is the record's own.
+
+    **One record, one content shape.** ``content`` is typed by the item's ``type`` — a
+    ``MessageContent``, ``AssetContent``, ``WebhookEventContent`` or ``TaskContent``, the
+    same class the record's own resource hands back — so a field presented richer than its
+    wire value is presented that way here too. ``item.content.headers`` on a
+    ``webhook_event`` row folds case exactly as ``bc.webhook_events.get(...).content.headers``
+    does, and ``item.content`` compares equal to that record's own ``content``. The
+    annotation stays ``ApiObject`` because across the four types it genuinely is a union;
+    the object you get is the leaf class.
+
+    The **item** is still a ``TimelineItem``, not a ``Message``/``Asset``/``Task``: it is
+    this container's row, so it carries no record verbs (no ``item.cancel()``) and does not
+    compare equal to the record itself — only its ``content`` does.
+
+    An item ``type`` this SDK release does not know reads as the generic wire-exact
+    ``ApiObject`` rather than raising — the API is additive-only, so a type added after
+    this release must keep reading.
 
     **A ``webhook_event`` item has no author**, so it carries no ``user`` — an inbound
     delivery came from an external sender, not a peer. Branch on ``type`` before reading
@@ -51,7 +84,24 @@ class TimelineItem(ApiObject):
     user: User  # absent on webhook_event items — a delivery has no author
     timeline: ApiObject  # reference form — this item's own container
     webhook_endpoint: WebhookEndpoint  # webhook_event items only, embedded in full
-    content: ApiObject
+    content: ApiObject  # a union across the four types; _wrap gives the leaf class
+
+    def _wrap(self, name: str, value: Any) -> Any:
+        """As ``ApiObject``, plus ``content`` typed by this item's own ``type``.
+
+        Read ``type`` off the wire data rather than through the attribute: an item missing
+        it is a malformed row, not a reason to raise from ``content``. The ``isinstance``
+        is the same tolerance ``WebhookEventHeaders._wire_name`` takes — anything but a
+        string is simply not an item type, so it reads as unknown rather than blowing up
+        in a dict lookup. An unknown type falls through to ``super()``, which wraps it in
+        the annotated ``ApiObject``.
+        """
+        if name == "content" and isinstance(value, dict):
+            item_type = self._data.get("type")
+            content_class = _CONTENT_CLASSES.get(item_type) if isinstance(item_type, str) else None
+            if content_class is not None:
+                return content_class(value, client=self._client)
+        return super()._wrap(name, value)
 
 
 class Timeline(ApiObject):
