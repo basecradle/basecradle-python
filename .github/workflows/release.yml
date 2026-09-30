@@ -19,6 +19,56 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # #214 asserts the tag names the version the tree builds, and #216 derives the
+      # tag from that tree -- which between them removed the tag's only independent
+      # cross-check. A derived tag on a checkout one commit behind main is the RIGHT
+      # version on the WRONG commit: built == tagged by construction, so #214's guard
+      # is green, the gate is approved, and PyPI publishes a tree missing the last
+      # merge, under a filename that can only ever be superseded. Assert the tag is
+      # main's tip, and the pipeline can notice (#218).
+      #
+      # First step in the job, before setup-uv and `uv build`: it reads one sha and
+      # needs no toolchain or artifact, so a bad tag fails at the cheapest point.
+      # On a tag push actions/checkout leaves HEAD detached at the TAG's commit (not
+      # a synthesized merge, as it would for a pull_request event), so HEAD is the
+      # thing to compare. `git ls-remote` rather than `git fetch --depth=1`: it
+      # answers with the sha alone, transferring no objects and writing no refs into
+      # the tree `uv build` is about to package, and it does not care that the
+      # checkout is shallow. The explicit refs/heads/main avoids matching a tag of
+      # the same name.
+      #
+      # Two limits, both accepted deliberately, neither silent:
+      #  - This is exact-tip equality, so main advancing between the tag push and
+      #    this job is a false positive -- including on a "Re-run all jobs" after the
+      #    pypi gate (which GitHub holds for up to 30 days, see upload-artifact
+      #    below), by which point main has almost certainly moved. Recovery is the
+      #    same delete-and-retag as #214's. Accepting any ancestor of main instead
+      #    would readmit the one-commit-behind case this step exists to catch.
+      #  - It makes "tag main's tip" the only legal release, so the tag has to be cut
+      #    BEFORE the next cycle's post-release bump lands -- otherwise the skill's
+      #    .dev0 refusal and this guard exclude each other and nothing is taggable.
+      #    release-to-pypi's tag step carries that ordering (#218).
+      - name: The tag must sit on main's tip
+        run: |
+          set -euo pipefail
+
+          tip="$(git ls-remote origin refs/heads/main | cut -f1)"
+          if [ -z "$tip" ]; then
+            echo "::error::Could not read origin's refs/heads/main. Refusing to publish without confirming the tag is main's tip -- re-run the job if this was a network failure."
+            exit 1
+          fi
+
+          tagged="$(git rev-parse HEAD)"
+
+          if [ "$tagged" != "$tip" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME is at ${tagged:0:7}, but origin/main's tip is ${tip:0:7}. Refusing to publish a tag that is not main's tip."
+            echo "::error::A tag behind main is the right version on the wrong commit -- the version guard below cannot see it, because the tree it builds agrees with the tag."
+            echo "::error::Recover: git tag -d $GITHUB_REF_NAME ; git push origin :refs/tags/$GITHUB_REF_NAME -- two commands, because a failed local delete must not skip the remote."
+            echo "::error::Then re-cut the tag per release-to-pypi's tag step. If main has moved past the release commit, land a fresh release commit at main's tip: this guard cannot accept a tag on history."
+            exit 1
+          fi
+
+          echo "Tag $GITHUB_REF_NAME is main's tip (${tagged:0:7})."
       - uses: astral-sh/setup-uv@v10.2.0
       - name: Build the wheel and sdist
         run: uv build

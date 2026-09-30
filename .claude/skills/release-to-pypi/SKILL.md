@@ -15,7 +15,7 @@ The pipeline (`.github/workflows/release.yml`): pushing a `v*` tag → build →
 
 1. **Release PR** (the captain's part): bump `src/basecradle/_version.py` from `X.Y.Z.dev0` to `X.Y.Z` and add the `CHANGELOG.md` entry (Keep a Changelog format). Merge on green CI. Do **not** put a closing keyword (`Closes #N`) on release PRs — see step 6.
 1b. **Hand off to the capital — the step that ends the captain's turn.** The merge wakes nobody, and steps 2–6 are not yours, so a release turn that ends at the merge leaves the publish with no owner (`CLAUDE.md` → Conventions, "arm auto-merge — never end a turn parked on CI"). Post a comment on the release issue naming the version, the merge commit, and that `_version.py` now reads `X.Y.Z`, and apply **`needs-capital`** — the capital's inbox is the org-wide `needs-capital` query, and the label is what puts the ball in its court. Leave the issue **open**: step 6 is the capital's close. That comment is the last thing the captain owes a release.
-2. **Tag**: on main after the merge — **never type the tag. Derive it from the version the tree builds, so the tag cannot name a version other than the one that gets published** (#214, #216). Run it from the repo root, as one block:
+2. **Tag**: on main after the merge — **never type the tag. Derive it from the version the tree builds, so the tag cannot name a version other than the one that gets published** (#214, #216). **Cut it before anything else merges:** since #218 the tag must sit on main's tip, and step 7's `.dev0` bump moves the tip past the release commit — after which the shape check below and #218's guard exclude each other and nothing is taggable until a fresh release commit lands. Tag first, bump after. Run it from the repo root, as one block:
 
    ```bash
    (
@@ -32,8 +32,9 @@ The pipeline (`.github/workflows/release.yml`): pushing a `v*` tag → build →
 
      if [[ ! $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
        echo "this tree builds '$version', not a plain X.Y.Z release — refusing to tag." >&2
-       echo "a .dev0 means main is not on the release commit: step 1 has not merged," >&2
-       echo "or step 7 already bumped past it. Tag that commit, not main's tip." >&2
+       echo "a .dev0 means main's tip is not the release commit: either step 1 has not" >&2
+       echo "merged yet, or step 7 already bumped past it. Since #218 the tag must BE" >&2
+       echo "main's tip, so land a fresh release commit rather than tagging history." >&2
        exit 1
      fi
 
@@ -49,13 +50,19 @@ The pipeline (`.github/workflows/release.yml`): pushing a `v*` tag → build →
    - **`set -euo pipefail`, and one command per line.** The `&&` chains this step used to carry *defeat* `set -e`: a failure in a `&&` list is exempt unless it is the last command, so `git switch main && git pull --ff-only` continued past a failed switch and tagged whatever `HEAD` was, and `git tag … && git push …` exited **0** when the tag already existed — pushing nothing and reporting success. Split, both halt.
    - **A `( … )` subshell, not a `bash <<'EOF'` heredoc.** The block is indented inside this list, and a heredoc terminator only closes at column 0 — pasted with its indentation it does not terminate, and bash runs the delimiter as a command and swallows the rest of the block. A subshell is indentation-proof, keeps `set -e` and the `trap` out of the caller's shell, and makes the refusals' `exit 1` exit the block rather than the operator's session. It is bash, for `[[ … =~ … ]]` and `pipefail`.
    - **`git status --porcelain`, not `git diff --quiet`.** `git diff` does not see *untracked* files, and hatchling packages untracked-but-unignored files under `src/basecradle/` — so the wheel built here would not be the wheel CI builds from the tag, which is the whole point of building it. (`dist/` is gitignored, so this does not trip on ordinary build output.)
-   - **`uv build --wheel --out-dir "$(mktemp -d)"`.** Building into a fresh directory makes exactly one wheel matchable, so the glob cannot pick up a stale or foreign one — `basename` given two operands treats the second as a *suffix* rather than erroring, so a second wheel in a shared `dist/` would be silently accepted. It also touches nothing the clone's owner put there (`CLAUDE.md` → "Clean only what you created"), removes only its own directory, and skips the sdist nothing here reads.
+   - **`out="$(mktemp -d)"` + `trap` + `uv build --wheel --out-dir "$out"`.** The directory is captured in a variable rather than substituted inline, because the `trap` and the glob on the next line both need the path. Building into a fresh directory makes exactly one wheel matchable, so the glob cannot pick up a stale or foreign one — `basename` given two operands treats the second as a *suffix* rather than erroring, so a second wheel in a shared `dist/` would be silently accepted. It also touches nothing the clone's owner put there (`CLAUDE.md` → "Clean only what you created"), removes only its own directory, and skips the sdist nothing here reads.
    - **An anchored `^[0-9]+\.[0-9]+\.[0-9]+$`.** A character-class test (`*[!0-9.]*`) accepts `1.2.3.4`, `0.12`, `0`, and `...`; anchoring refuses them. What it most matters for is main's steady state *between* releases, `X.Y.Z.dev0`: that is the one mismatch #214's guard **cannot** catch — tag and build agree — so it would sail through and put a dev build on PyPI under a filename that can never be replaced. This procedure tags plain releases only; this repo has never shipped a pre-release, and adding one is a capital call, not a local edit.
 
-   Pushing the tag triggers the release workflow. Should a mismatched tag be pushed anyway, `release.yml`'s tag/version guard fails the `build` job **before** either publish job runs, so nothing reaches TestPyPI or PyPI and no version number is burned (#214). Recover by deleting the tag and retagging — remember the remote half, which is the non-obvious one:
+   Pushing the tag triggers the release workflow. Two guards in its `build` job stand between a bad tag and PyPI, and both fail **before** either publish job runs, so nothing is burned — the cost is a deleted tag:
+
+   - **The tag must sit on main's tip** (#218) — catches the right version on the wrong commit, which the version guard cannot see, because such a tag *agrees* with the tree it builds.
+   - **The tag must name the version being built** (#214) — catches a tag that disagrees with both built artifacts, the sdist included.
+
+   Recover by deleting the tag, then re-cutting it with the block above. Both halves matter, and they are **two commands, not a `&&` chain** — a failed local delete must not skip the remote, which is the half people forget:
 
    ```bash
-   git tag -d "vX.Y.Z" && git push origin ":refs/tags/vX.Y.Z"
+   git tag -d "vX.Y.Z"
+   git push origin ":refs/tags/vX.Y.Z"
    ```
 3. **Verify the rehearsal**: the TestPyPI publish is automatic. Build the clean venv as a throwaway in your own `~/scratch`, and delete it the moment the check passes (see "Verification venvs" below):
    `uv venv --seed --clear ~/scratch/verify-basecradle && source ~/scratch/verify-basecradle/bin/activate`
@@ -65,7 +72,7 @@ The pipeline (`.github/workflows/release.yml`): pushing a `v*` tag → build →
 4. **The publish gate**: the workflow waits on the `pypi` environment. The capital approves it via its operator credential; the founder is out of the publish loop.
 5. **Verify the release**: a fresh throwaway venv in the same slot, built the same way, `pip install basecradle==X.Y.Z`, check import + `__version__` + both clients construct, and that https://pypi.org/project/basecradle/ renders. (The PyPI JSON API caches — pip resolving the new version is the real test.)
 6. **Close the release issue manually** with the verification record. Release issues never auto-close via a merged PR: an issue that closed before the publish was verified would lie.
-7. **Post-release version bump** (the captain, next cycle): the first PR of the next cycle bumps `_version.py` to the next minor `.dev0` (after `0.2.0` ships, main becomes `0.3.0.dev0`) so dev builds are always distinguishable from releases. If the next cycle opens with no other work queued, the bump *is* that PR — don't wait for a feature to carry it, which is how it gets skipped.
+7. **Post-release version bump** (the captain, next cycle): **not before the tag is cut** — it moves main's tip off the release commit, and #218's guard requires the tag to be main's tip. The first PR of the next cycle bumps `_version.py` to the next minor `.dev0` (after `0.2.0` ships, main becomes `0.3.0.dev0`) so dev builds are always distinguishable from releases. If the next cycle opens with no other work queued, the bump *is* that PR — don't wait for a feature to carry it, which is how it gets skipped.
 
 ## Verification venvs
 
