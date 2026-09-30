@@ -6,6 +6,44 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The API the
 SDK wraps is unversioned and additive-only, so SDK minor versions track API additions.
 
+## [Unreleased]
+
+### Changed
+
+- **A `timeline.items` row now hands back the record's own content class.** `item.content`
+  is a `MessageContent`, `AssetContent`, `WebhookEventContent` or `TaskContent` by
+  `item.type`, where it was the generic `ApiObject` on that path before. One record has one
+  shape: the same webhook event read through `bc.webhook_events` and through
+  `timeline.items` now answers the same way for the same field, so 0.11.0's case-folding
+  `headers` reaches both — `item.content.headers["X-GitHub-Delivery"]` folds case exactly
+  as `event.content.headers` does, where it previously raised `KeyError`. Every future
+  enrichment of a content class reaches both paths for the same reason. Reads still match
+  the wire; nothing is renamed or hidden. Both SDKs changed in lockstep
+  (python#210, ruby#189).
+
+  Three observable consequences of the same change, called out rather than left to be
+  discovered:
+
+  - **`repr(item.content)`** changes from `<ApiObject [...]>` to `<MessageContent [...]>`
+    (and the other three) — it now names the class you actually have.
+  - **Equality now holds across the two read paths.** `ApiObject.__eq__` requires the same
+    type, so `item.content` and the same record's own `content` fetched directly compared
+    *unequal* before and compare **equal** now. Code relying on that inequality to tell the
+    paths apart should branch on `item.type` instead. (The *item* is still a `TimelineItem`
+    and still does not equal the record itself — only the contents match.)
+  - **On a `webhook_event` row, `item.content.headers` is now a `WebhookEventHeaders`
+    copy rather than the wire dict itself.** Previously that path handed back the very dict
+    inside the item's data, so `item.content.headers is item._data["content"]["headers"]`
+    held and writing to it mutated the item. It is now the same detached, case-folding
+    object the `bc.webhook_events` path has returned since 0.11.0 — a fresh one per access.
+    `==` against a plain dict is unaffected; identity comparisons and in-place writes on
+    that path are. Neither was ever supported (models are read-only views), but the
+    behavior did change.
+
+  An item `type` this release does not know still reads as the generic wire-exact
+  `ApiObject` rather than raising: the API is additive-only, so an item type added after
+  this release keeps reading.
+
 ## [0.11.0] - 2026-09-30
 
 ### Added

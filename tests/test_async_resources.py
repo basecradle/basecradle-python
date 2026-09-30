@@ -11,6 +11,7 @@ from basecradle import (
     Asset,
     CurrentPasswordIncorrectError,
     Message,
+    MessageContent,
     Session,
     Task,
     Timeline,
@@ -18,6 +19,7 @@ from basecradle import (
     User,
     WebhookEndpoint,
     WebhookEvent,
+    WebhookEventContent,
 )
 from tests.conftest import (
     JOHN,
@@ -105,6 +107,27 @@ class TestAsyncTimelines:
     async def test_get_merges_envelope(self, abc, api, timeline):
         assert timeline.name == "Incident response"
         assert timeline.items == []
+
+    async def test_item_content_is_typed_here_too(self, abc, api):
+        """Models are the same classes in both worlds — so is the content dispatch.
+
+        ``TimelineItem._wrap`` is model-side, not client-side, so nothing about it is
+        sync-only. Pinned rather than assumed: the case-folding ``headers`` is the read
+        that diverged before, and it must not diverge again by client.
+        """
+        api.get(f"/timelines/{TIMELINE_UUID}").respond(
+            200,
+            json={
+                "timeline": timeline_payload(),
+                "items": [message_payload(), webhook_event_payload()],
+            },
+        )
+
+        message, event = (await abc.timelines.get(TIMELINE_UUID)).items
+
+        assert isinstance(message.content, MessageContent)
+        assert isinstance(event.content, WebhookEventContent)
+        assert event.content.headers["x-example-event"] == "ping"
 
     async def test_lock_is_awaited_and_updates_live_object(self, abc, api, timeline):
         api.post(f"/timelines/{TIMELINE_UUID}/lock").respond(200, json=lock_response())
