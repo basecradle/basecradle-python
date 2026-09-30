@@ -115,6 +115,28 @@ jobs:
             exit 1
           fi
 
+          # Both guards in this job compare two things that AGREE with each other --
+          # the tag against the artifacts here, the tag's commit against main's tip
+          # above -- so neither can ask whether the agreed-upon version is one we ever
+          # meant to publish. main's steady state BETWEEN releases is X.Y.Z.dev0, and
+          # the tag is now derived from the tree (#216), so a run at the wrong moment
+          # produces a .dev0 tag that matches its own artifacts perfectly, sails through
+          # both guards, and lands a dev build on a PyPI filename that can never be
+          # replaced. Refuse anything that is not a final release (#220).
+          #
+          # Anchored, because a character class accepts 1.2.3.4, 0.12, 0 and "...".
+          # This SDK has never published a prerelease; the day one is planned, widen
+          # this deliberately in the same PR that plans it.
+          #
+          # Checking the TAG is sufficient: the loop below refuses any artifact whose
+          # version differs from it, so constraining the tag constrains what ships.
+          if [[ ! $tagged =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME names version '$tagged', which is not a final X.Y.Z release. Refusing to publish it -- a PyPI filename can never be replaced."
+            echo "::error::A .dev0 means the tag was cut while main was between releases: the release PR had not merged, or the post-release bump already moved past it. Neither guard in this job can catch that on its own, because such a tag agrees with the tree it builds."
+            echo "::error::Recover: git tag -d $GITHUB_REF_NAME ; git push origin :refs/tags/$GITHUB_REF_NAME -- then re-cut it on a release commit per the release-to-pypi skill."
+            exit 1
+          fi
+
           mismatched=0
           for artifact in "${wheels[@]}" "${sdists[@]}"; do
             file="$(basename "$artifact")"
