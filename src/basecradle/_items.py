@@ -18,7 +18,7 @@ import os
 from collections.abc import AsyncIterator, Iterator
 from datetime import datetime
 from pathlib import Path
-from typing import IO, Any, cast
+from typing import IO, Any, Generic, TypeVar, cast
 
 from basecradle._models import ApiObject
 from basecradle._pagination import apaginate, paginate
@@ -150,19 +150,43 @@ class Task(Item):
 # --- the shared resource core -------------------------------------------------------------
 
 
-class _ItemsResourceCore:
+#: The record type a resource yields. Parameterizing the core on it makes the *element
+#: type* of `__iter__` / `__aiter__` / `get` a checked claim rather than `Any`: wire
+#: `AsyncTimelineMessages.__aiter__` to the assets resource and it is now a type error,
+#: where before it type-checked clean (#237).
+#:
+#: It says nothing about the envelope keys beside it -- `_plural` and `_singular` are
+#: plain strings, so a binding that pairs the right model with the wrong `_singular`
+#: still fails at runtime (a `KeyError` from `_wrap_subject`) and not here. Tying those
+#: to the binding too is the next step, not this one.
+_M = TypeVar("_M", bound=ApiObject)
+
+#: For `filter`, which returns *the same* resource narrowed. `typing.Self` would say this
+#: directly but is 3.11+, and this SDK supports 3.10 without adding `typing_extensions`
+#: (httpx is the only runtime dependency) -- so the pre-`Self` idiom: bind the TypeVar to
+#: `self`, and every subclass gets its own type back.
+#:
+#: One TypeVar per declaring class, deliberately, rather than one shared `_ItemsResourceCore`
+#: bound for all three `filter` overrides: a shared bound would make every resource an
+#: acceptable `self` for every `filter`, so `_TasksBinding.filter(bc.messages, status=...)`
+#: would type-check and post a `status` filter at `/messages`, which the API rejects.
+_R = TypeVar("_R", bound="_ItemsResourceCore[Any]")
+_RTasks = TypeVar("_RTasks", bound="_TasksBinding")
+
+
+class _ItemsResourceCore(Generic[_M]):
     """What sync and async resources share: bindings, construction, filter logic."""
 
     _path: str
     _plural: str
     _singular: str
-    _model: type[ApiObject]
+    _model: type[_M]
 
     def __init__(self, client: Any, filters: dict[str, str] | None = None) -> None:
         self._client = client
         self._filters = filters or {}
 
-    def filter(self, *, timeline: Any | None = None) -> Any:
+    def filter(self: _R, *, timeline: Any | None = None) -> _R:
         """A new lazy resource narrowed to one timeline (a ``Timeline`` or a uuid)."""
         return type(self)(self._client, filters=self._merge_filters(timeline=timeline))
 
@@ -173,14 +197,14 @@ class _ItemsResourceCore:
                 merged[key] = _uuid_of(value)
         return merged
 
-    def _wrap_subject(self, response: dict[str, Any]) -> Any:
+    def _wrap_subject(self, response: dict[str, Any]) -> _M:
         return self._model(response[self._singular], client=self._client)
 
 
-class ItemsResource(_ItemsResourceCore):
+class ItemsResource(_ItemsResourceCore[_M]):
     """The sync cross-timeline list + get pattern."""
 
-    def __iter__(self) -> Iterator[Any]:
+    def __iter__(self) -> Iterator[_M]:
         return paginate(
             self._client,
             self._path,
@@ -189,15 +213,15 @@ class ItemsResource(_ItemsResourceCore):
             params=self._filters,
         )
 
-    def get(self, uuid: str) -> Any:
+    def get(self, uuid: str) -> _M:
         """Fetch one item by its own uuid (you must be a viewer of its timeline)."""
         return self._wrap_subject(self._client.request("GET", f"{self._path}/{uuid}"))
 
 
-class AsyncItemsResource(_ItemsResourceCore):
+class AsyncItemsResource(_ItemsResourceCore[_M]):
     """The async cross-timeline list + get pattern: ``async for`` / ``await .get()``."""
 
-    def __aiter__(self) -> AsyncIterator[Any]:
+    def __aiter__(self) -> AsyncIterator[_M]:
         return apaginate(
             self._client,
             self._path,
@@ -206,7 +230,7 @@ class AsyncItemsResource(_ItemsResourceCore):
             params=self._filters,
         )
 
-    async def get(self, uuid: str) -> Any:
+    async def get(self, uuid: str) -> _M:
         """Fetch one item by its own uuid (you must be a viewer of its timeline)."""
         return self._wrap_subject(await self._client.request("GET", f"{self._path}/{uuid}"))
 
@@ -214,63 +238,60 @@ class AsyncItemsResource(_ItemsResourceCore):
 # --- per-resource bindings (declared once, used by both sync and async) --------------------
 
 
-class _MessagesBinding:
+class _MessagesBinding(_ItemsResourceCore[Message]):
     """Messages from every timeline you can view, newest first."""
 
     _path = "/messages"
     _plural = "messages"
     _singular = "message"
-    _model: type[ApiObject] = Message
+    _model = Message
 
 
-class _AssetsBinding:
+class _AssetsBinding(_ItemsResourceCore[Asset]):
     """Assets from every timeline you can view, newest first."""
 
     _path = "/assets"
     _plural = "assets"
     _singular = "asset"
-    _model: type[ApiObject] = Asset
+    _model = Asset
 
 
-class _TasksBinding:
+class _TasksBinding(_ItemsResourceCore[Task]):
     """Tasks from every timeline you can view, newest first."""
 
     _path = "/tasks"
     _plural = "tasks"
     _singular = "task"
-    _model: type[ApiObject] = Task
+    _model = Task
 
-    def filter(self, *, timeline: Any | None = None, status: str | None = None) -> Any:
+    def filter(self: _RTasks, *, timeline: Any | None = None, status: str | None = None) -> _RTasks:
         """A new lazy resource narrowed by timeline and/or status.
 
         ``status`` is one of ``pending``, ``activated``, ``blocked_timeline_locked``,
         ``cancelled``.
         """
-        filters = self._merge_filters(timeline=timeline)  # type: ignore[attr-defined]
+        filters = self._merge_filters(timeline=timeline)
         if status is not None:
             filters["status"] = status
-        # mypy baseline: `_TasksBinding` is a mixin -- its `__init__` comes from the
-        # `ItemsResource` it is combined with, which mypy cannot see from the mixin alone.
-        # No annotation expresses that; typing it needs the two to become one class.
-        return type(self)(self._client, filters=filters)  # type: ignore[attr-defined, call-arg]
+        return type(self)(self._client, filters=filters)
 
 
-class MessagesResource(_MessagesBinding, ItemsResource): ...
+class MessagesResource(_MessagesBinding, ItemsResource[Message]): ...
 
 
-class AsyncMessagesResource(_MessagesBinding, AsyncItemsResource): ...
+class AsyncMessagesResource(_MessagesBinding, AsyncItemsResource[Message]): ...
 
 
-class AssetsResource(_AssetsBinding, ItemsResource): ...
+class AssetsResource(_AssetsBinding, ItemsResource[Asset]): ...
 
 
-class AsyncAssetsResource(_AssetsBinding, AsyncItemsResource): ...
+class AsyncAssetsResource(_AssetsBinding, AsyncItemsResource[Asset]): ...
 
 
-class TasksResource(_TasksBinding, ItemsResource): ...
+class TasksResource(_TasksBinding, ItemsResource[Task]): ...
 
 
-class AsyncTasksResource(_TasksBinding, AsyncItemsResource): ...
+class AsyncTasksResource(_TasksBinding, AsyncItemsResource[Task]): ...
 
 
 # --- nested creators: timeline.messages / .assets / .tasks --------------------------------
@@ -364,10 +385,7 @@ class AsyncTimelineMessages(_NestedCreatorCore):
         return _message_from(response, self._client)
 
     def __aiter__(self) -> AsyncIterator[Message]:
-        return cast(
-            AsyncIterator[Message],
-            AsyncMessagesResource(self._client).filter(timeline=self._timeline_uuid).__aiter__(),
-        )
+        return AsyncMessagesResource(self._client).filter(timeline=self._timeline_uuid).__aiter__()
 
 
 class TimelineAssets(_NestedCreatorCore):
@@ -422,10 +440,7 @@ class AsyncTimelineAssets(_NestedCreatorCore):
         return _asset_from(response, self._client)
 
     def __aiter__(self) -> AsyncIterator[Asset]:
-        return cast(
-            AsyncIterator[Asset],
-            AsyncAssetsResource(self._client).filter(timeline=self._timeline_uuid).__aiter__(),
-        )
+        return AsyncAssetsResource(self._client).filter(timeline=self._timeline_uuid).__aiter__()
 
 
 class TimelineTasks(_NestedCreatorCore):
@@ -476,10 +491,7 @@ class AsyncTimelineTasks(_NestedCreatorCore):
         return _task_from(response, self._client)
 
     def __aiter__(self) -> AsyncIterator[Task]:
-        return cast(
-            AsyncIterator[Task],
-            AsyncTasksResource(self._client).filter(timeline=self._timeline_uuid).__aiter__(),
-        )
+        return AsyncTasksResource(self._client).filter(timeline=self._timeline_uuid).__aiter__()
 
 
 # --- helpers ------------------------------------------------------------------------------
