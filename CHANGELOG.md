@@ -8,6 +8,12 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 ## [Unreleased]
 
+### Added
+
+- **`WebhookEventHeaders`** — the type `WebhookEventContent.headers` returns, exported from
+  the package root like every other model. A `dict` of exactly the pairs the wire carried
+  whose lookup folds case; see *Changed* below for the behavior.
+
 ### Changed
 
 - **`WebhookEventContent.headers` now looks header names up case-insensitively.** Header
@@ -20,9 +26,8 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
   wire:** the value is a `dict` of exactly the pairs the API returned, so iterating,
   `keys()` and `==` read the platform's spelling and nothing is renamed. A header that was
   genuinely not delivered stays *absent* rather than becoming `None` — subscripting raises
-  `KeyError` naming the headers that did arrive, and `.get()` returns its default. The type
-  is exported as `WebhookEventHeaders`. Both SDKs changed in lockstep (python#199,
-  ruby#173).
+  `KeyError` naming the headers that did arrive, and `.get()` returns its default. Both
+  SDKs changed in lockstep (python#199, ruby#173).
 
 ## [0.10.0] - 2026-09-23
 

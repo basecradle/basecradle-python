@@ -13,7 +13,7 @@ as raw paths. With ``AsyncBaseCradle``, await the verbs.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterator
-from typing import Any
+from typing import Any, TypeVar, overload
 
 from basecradle._items import (
     AsyncItemsResource,
@@ -23,6 +23,8 @@ from basecradle._items import (
 )
 from basecradle._models import ApiObject
 from basecradle._users import User
+
+_Default = TypeVar("_Default")
 
 __all__ = [
     "AsyncTimelineWebhookEndpoints",
@@ -145,8 +147,19 @@ class WebhookEventHeaders(dict[str, str]):
             )
         return super().__getitem__(wire_name)
 
+    @overload
+    def get(self, name: str) -> str | None: ...
+
+    @overload
+    def get(self, name: str, default: _Default) -> str | _Default: ...
+
     def get(self, name: str, default: Any = None) -> Any:
-        """The header's value, matched case-insensitively, or ``default`` if not delivered."""
+        """The header's value, matched case-insensitively, or ``default`` if not delivered.
+
+        Overloaded rather than left at ``Any``: ``dict.get`` declares ``str | None`` with no
+        default and ``str | _Default`` with one, and a ``py.typed`` SDK must not widen that
+        — ``int(headers.get("Content-Length"))`` has to stay the type error it is.
+        """
         wire_name = self._wire_name(name)
         return default if wire_name is None else super().__getitem__(wire_name)
 
