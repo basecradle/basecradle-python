@@ -83,17 +83,22 @@ TIMELINE_RESOURCES = ("messages", "assets", "tasks", "webhook_endpoints", "webho
 
 @pytest.fixture
 def log_stream():
-    """A DEBUG logger writing into a ``StringIO``, and the floor that makes it mean something.
+    """A DEBUG logger writing into a ``StringIO``, restored to exactly how it was found.
 
-    Every test here asserts that a secret is **absent** from the captured output, and an
-    absence assertion over an empty string passes while testing nothing. So the floor --
-    "the handler really ran" -- is asserted on teardown rather than left to each caller to
-    remember: the two hand-rolled copies elsewhere in this file carry it by hand, and the
-    version of this harness that dropped it is exactly how the gap gets in.
+    One harness for the three tests here that capture log output: there were two
+    hand-rolled copies of it, and #246's test was about to be a third. A logger is a
+    process-global singleton, so the level and ``propagate`` are put back, the handler is
+    removed *and closed*, and while the fixture is live nothing propagates the fabricated
+    secrets to a handler it did not install.
 
-    A logger is a process-global singleton, so the level and ``propagate`` are restored
-    and the handler removed: this fixture leaves nothing behind, and while it is running
-    nothing propagates the fabricated secrets to a handler it did not install.
+    The "the handler really ran" floor stays in the **test bodies**, deliberately. An
+    absence assertion over an empty string passes while testing nothing, and that is a
+    failure *of that test, at the line that went vacuous*. Asserted on teardown instead it
+    would fire on every skip and every unrelated failure in a test using this fixture, add
+    a second and misdirecting error beside the real one, and report the vacuous test
+    itself as **passed** with an error attached — which is worse than the duplication it
+    would save. A test whose assertion is *positive* needs no floor at all: an empty
+    stream already fails it.
     """
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)
@@ -106,13 +111,9 @@ def log_stream():
         yield log, stream
     finally:
         log.removeHandler(handler)
+        handler.close()
         log.setLevel(level)
         log.propagate = propagate
-    assert stream.getvalue(), (
-        "nothing was logged, so every `secret not in ...` assertion in this test passed "
-        "over an empty string. The record stopped being emitted -- check the level, the "
-        "handler, and the logger name -- rather than the redaction starting to work."
-    )
 
 
 @pytest.fixture
@@ -323,17 +324,14 @@ class TestResourceRepresentation:
             assert rendered == f"<{type(resource).__name__} filters={{}}>"
             assert FAKE_TOKEN not in rendered
 
-    def test_logging_an_unbound_resource_keeps_the_log_record(self, clients):
-        """The failure mode above, asserted end to end: the record must still be written."""
-        stream = io.StringIO()
-        handler = logging.StreamHandler(stream)
-        log = logging.getLogger("basecradle.tests.unbound")
-        log.setLevel(logging.DEBUG)
-        log.addHandler(handler)
-        try:
-            log.debug("resource=%r", ItemsResource(clients[0]))
-        finally:
-            log.removeHandler(handler)
+    def test_logging_an_unbound_resource_keeps_the_log_record(self, clients, log_stream):
+        """The failure mode above, asserted end to end: the record must still be written.
+
+        No "the handler ran" floor here, and none is owed: this assertion is positive, so
+        an empty stream fails it already.
+        """
+        log, stream = log_stream
+        log.debug("resource=%r", ItemsResource(clients[0]))
         assert "resource=<ItemsResource filters={}>" in stream.getvalue()
 
     def test_no_resource_repr_carries_a_memory_address(self, clients):
@@ -646,24 +644,17 @@ def test_no_exported_class_inherits_a_value_printing_repr():
 
 
 class TestLogging:
-    def test_logging_a_client_resource_or_model_emits_no_credential(self, clients):
-        stream = io.StringIO()
-        handler = logging.StreamHandler(stream)
-        log = logging.getLogger("basecradle.tests.redaction")
-        log.setLevel(logging.DEBUG)
-        log.addHandler(handler)
-        try:
-            for client in clients:
-                model = ApiObject(timeline_payload(), client=client)
-                log.debug("client=%r resource=%r model=%r", client, client.messages, model)
-                log.debug("client=%s", client)
-                log.debug("interpolated=%s", f"{client} {client.messages} {model}")
-                log.debug("instance-dict=%r", vars(client))
-        finally:
-            log.removeHandler(handler)
+    def test_logging_a_client_resource_or_model_emits_no_credential(self, clients, log_stream):
+        log, stream = log_stream
+        for client in clients:
+            model = ApiObject(timeline_payload(), client=client)
+            log.debug("client=%r resource=%r model=%r", client, client.messages, model)
+            log.debug("client=%s", client)
+            log.debug("interpolated=%s", f"{client} {client.messages} {model}")
+            log.debug("instance-dict=%r", vars(client))
 
         captured = stream.getvalue()
-        assert captured  # the handler really ran
+        assert captured  # the handler really ran; without this the assert below is vacuous
         assert FAKE_TOKEN not in captured
 
 
