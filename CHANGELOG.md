@@ -8,6 +8,26 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 ## [Unreleased]
 
+### Changed
+
+- **Iteration and `get()` are now typed by the record they yield, not `Any`.** The
+  resource core is generic over its model, so a type checker reads
+  `for message in bc.messages` as `Message`, `bc.tasks.filter(status="pending")` as
+  `Task`, and `bc.assets.get(uuid)` as `Asset` — all of which were `Any`. `py.typed`
+  promises these annotations are real; now they are specific enough to be worth having.
+  Two consequences for anyone running a type checker against the SDK:
+
+  - **Mistakes that used to pass now fail**, which is the point:
+    `message: Message = bc.assets.get(uuid)` is an error rather than silently accepted.
+    If such an assignment exists in your code, it was always wrong about the runtime
+    object.
+  - **`ItemsResource` and `AsyncItemsResource` are generic**, so a bare annotation of
+    either (`def count(r: ItemsResource) -> int`) is now reported under
+    `mypy --strict`'s `disallow_any_generics`. Write `ItemsResource[Message]`, or
+    `ItemsResource[Any]` if the resource genuinely is not known.
+
+  No runtime behaviour changes — the same objects come back from the same calls.
+
 ### Fixed
 
 - **A malformed `problem+json` body no longer crashes the SDK.** `exception_from_response`

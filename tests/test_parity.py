@@ -6,9 +6,12 @@ the other, or if the two ever stop sharing model classes.
 """
 
 import inspect
+import typing
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
 
+import basecradle
 from basecradle import (
     AsyncBaseCradle,
     BaseCradle,
@@ -17,7 +20,7 @@ from basecradle import (
     User,
     WebhookEndpoint,
 )
-from basecradle._items import AsyncItemsResource, ItemsResource
+from basecradle._items import _M, AsyncItemsResource, ItemsResource
 from tests.conftest import FAKE_TOKEN
 
 RESOURCE_NAMES = (
@@ -237,3 +240,98 @@ class TestSharedCore:
 
         assert BaseCradle._check_response is _ClientCore._check_response
         assert AsyncBaseCradle._check_response is _ClientCore._check_response
+
+
+class TestResourceModelWiring:
+    """Each resource's record type, pinned in the three places it is written.
+
+    #237 made the element type of iteration and ``get`` a checked claim by parameterizing
+    the resource core on it. That claim rests on three declarations agreeing: the
+    binding's ``_ItemsResourceCore[X]`` base, its ``_model``, and the concrete class's
+    ``ItemsResource[X]`` base. mypy does **not** cross-check the two bases -- today a
+    mismatch is caught only because each resource happens to have one call site that pins
+    it, which is luck, not a guarantee.
+
+    The second test is the one that matters most: the whole of #237 can be reverted to
+    ``Any`` with ``mypy --strict`` and all 482 tests still green, because ``Any`` is
+    assignable in every direction. Nothing else in the repo would notice.
+    """
+
+    #: Every concrete resource, with the record type it must yield.
+    WIRING = [
+        ("MessagesResource", "Message"),
+        ("AsyncMessagesResource", "Message"),
+        ("AssetsResource", "Asset"),
+        ("AsyncAssetsResource", "Asset"),
+        ("TasksResource", "Task"),
+        ("AsyncTasksResource", "Task"),
+        ("WebhookEndpointsResource", "WebhookEndpoint"),
+        ("AsyncWebhookEndpointsResource", "WebhookEndpoint"),
+        ("WebhookEventsResource", "WebhookEvent"),
+        ("AsyncWebhookEventsResource", "WebhookEvent"),
+    ]
+
+    @staticmethod
+    def _generic_arg(owner, base_name):
+        """The type argument ``owner`` passes to the named generic base, if any."""
+        for base in getattr(owner, "__orig_bases__", ()):
+            origin = typing.get_origin(base)
+            if origin is not None and origin.__name__ == base_name:
+                (arg,) = typing.get_args(base)
+                return arg
+        return None
+
+    @pytest.mark.parametrize(("resource_name", "model_name"), WIRING)
+    def test_every_declaration_of_the_record_type_agrees(self, resource_name, model_name):
+        resource = getattr(basecradle, resource_name)
+        model = getattr(basecradle, model_name)
+
+        assert resource._model is model, (
+            f"{resource_name}._model is {resource._model.__name__}, not {model_name}"
+        )
+
+        listed = "AsyncItemsResource" if "Async" in resource_name else "ItemsResource"
+        assert self._generic_arg(resource, listed) is model, (
+            f"{resource_name} lists {listed}[...] with "
+            f"{self._generic_arg(resource, listed)}, but its _model is {model_name}. mypy "
+            f"does not cross-check these, so `get()` would be annotated as one record "
+            f"type while returning another."
+        )
+
+        (binding,) = [b for b in resource.__bases__ if b.__name__.endswith("Binding")]
+        assert self._generic_arg(binding, "_ItemsResourceCore") is model, (
+            f"{binding.__name__} parameterizes the core with "
+            f"{self._generic_arg(binding, '_ItemsResourceCore')}, not {model_name}"
+        )
+
+    @pytest.mark.parametrize(
+        ("resource", "method", "container"),
+        [
+            (ItemsResource, "__iter__", Iterator),
+            (ItemsResource, "get", None),
+            (AsyncItemsResource, "__aiter__", AsyncIterator),
+            (AsyncItemsResource, "get", None),
+        ],
+    )
+    def test_the_core_still_yields_its_model_type_and_not_any(self, resource, method, container):
+        """A silent revert to ``Any`` would pass mypy and every other test here.
+
+        So read the annotation itself: it has to be the model TypeVar, wrapped in the
+        right container for the iterators. ``Any`` is not that.
+
+        Resolved with ``get_type_hints`` rather than read off ``__annotations__``:
+        ``_items`` uses ``from __future__ import annotations``, so the raw values are
+        strings and ``"Any"`` would compare equal to nothing useful.
+        """
+        annotation = typing.get_type_hints(resource.__dict__[method])["return"]
+        if container is None:
+            assert annotation is _M, (
+                f"{resource.__name__}.{method} returns {annotation!r}, not the record "
+                f"TypeVar -- widening it to Any would silently undo #237"
+            )
+        else:
+            assert typing.get_origin(annotation) is container
+            assert typing.get_args(annotation) == (_M,), (
+                f"{resource.__name__}.{method} yields {typing.get_args(annotation)}, not "
+                f"the record TypeVar -- widening it to Any would silently undo #237"
+            )
