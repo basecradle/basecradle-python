@@ -351,6 +351,34 @@ class TestEventsResource:
         # A copy is another headers object, not a plain dict that lost the case folding.
         assert headers.copy()["X-GitHub-Delivery"] == wire["X-Github-Delivery"]
 
+    def test_a_non_string_key_breaks_none_of_the_readers(self, bc, api):
+        """The wire cannot deliver one — JSON keys are strings — but the ``dict`` mutators
+        are deliberately left open, so a caller can put one here.
+
+        Three readers walk the keys, and a bare ``sorted`` or ``.lower()`` over them turns
+        each into the wrong exception: ``__repr__`` into a ``TypeError`` that makes
+        ``logging`` discard the whole record (the very thing a redacting repr must never
+        do), ``__getitem__``'s "headers present" message into that same ``TypeError``
+        instead of the ``KeyError`` it owes, and every later lookup into an
+        ``AttributeError`` where ``_wire_name`` promises a plain "absent".
+        """
+        headers = self._delivered_headers(bc, api, {"X-Github-Delivery": DELIVERY_ID})
+        headers[42] = "not a header name"
+
+        # The repr shows everything the object holds -- hiding a key would be a lie.
+        assert repr(headers) == "<WebhookEventHeaders [42, 'X-Github-Delivery']>"
+        assert headers["x-github-delivery"] == DELIVERY_ID
+        assert headers.get("X-Nothing") is None
+        with pytest.raises(KeyError, match="No 'X-Nothing' header"):
+            headers["X-Nothing"]
+
+        # Lookup reports it absent, because it is not a header name -- consistently, and
+        # with a message that does not then list it among the headers that arrived.
+        assert 42 not in headers
+        assert headers.get(42) is None
+        with pytest.raises(KeyError, match=r"Headers present: \['X-Github-Delivery'\]"):
+            headers[42]
+
     def test_a_header_that_was_not_delivered_is_absent_rather_than_none(self, bc, api):
         """No casing of it arrived, so it is missing — the SDK never invents a ``None``.
 
