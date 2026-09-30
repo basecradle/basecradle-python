@@ -10,7 +10,7 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 Nothing yet.
 
-## [0.12.0] - 2026-09-30
+## [0.12.1] - 2026-09-30
 
 ### Changed
 
