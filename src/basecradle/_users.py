@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 from basecradle._models import ApiObject
+from basecradle._resources import Resource
 
 __all__ = ["AsyncUsersResource", "Trust", "User", "UsersResource"]
 
@@ -123,7 +124,7 @@ def _user_from(response: dict[str, Any], client: Any) -> User:
     return User(response["user"], client=client)
 
 
-class _UsersResourceCore:
+class _UsersResourceCore(Resource):
     def __init__(self, client: Any) -> None:
         self._client = client
 

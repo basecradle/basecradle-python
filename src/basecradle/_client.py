@@ -11,12 +11,16 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, NoReturn, cast
 
 import httpx
 
 from basecradle._dashboard import Dashboard
-from basecradle._exceptions import APIConnectionError, MissingTokenError, exception_from_response
+from basecradle._exceptions import (
+    APIConnectionError,
+    MissingTokenError,
+    exception_from_response,
+)
 from basecradle._items import (
     AssetsResource,
     AsyncAssetsResource,
@@ -25,6 +29,7 @@ from basecradle._items import (
     MessagesResource,
     TasksResource,
 )
+from basecradle._resources import refuse_serialization
 from basecradle._sessions import AsyncSessionsResource, Session, SessionsResource
 from basecradle._timelines import AsyncTimelinesResource, TimelinesResource
 from basecradle._users import AsyncUsersResource, UsersResource
@@ -63,6 +68,20 @@ def _default_headers(token: str) -> dict[str, str]:
 class _ClientCore:
     """Everything both clients share that isn't I/O."""
 
+    #: Every attribute this base assigns, so the bearer token lands in a **slot** rather
+    #: than in the instance ``__dict__`` (#242). ``vars(client)`` and ``client.__dict__``
+    #: are exactly what a generic serializer walks, and the walk is not hypothetical:
+    #: ``json.dump(client, fp, default=vars)`` writes the instance dict to the stream
+    #: *before* the circular reference stops it, and any crash reporter that expands frame
+    #: locals one level (Sentry, ``rich``, ``cgitb``, IPython's ``%debug``) renders it into
+    #: the report. A slot is absent from ``__dict__``, so neither can reach it.
+    #:
+    #: All six and not just the token, because ``mypy`` rejects assigning a name a class's
+    #: ``__slots__`` does not declare — and a per-attribute exemption would be the
+    #: config-level allowance ``CLAUDE.md`` rules out. The concrete clients declare no
+    #: ``__slots__``, so they keep an ordinary ``__dict__`` for their resources.
+    __slots__ = ("_max_retries", "_timeout", "_token", "base_url", "session", "start_here")
+
     _is_async: ClassVar[bool]
 
     #: Transport failures a keyed create (or any GET) is safe to re-send after — the request
@@ -98,8 +117,59 @@ class _ClientCore:
         #: token: find that one in ``bc.sessions``, where ``current`` is ``True``.
         self.session: Session | None = None
 
+    @property
+    def token(self) -> str:
+        """The bearer token this client authenticates with.
+
+        A plain read, as it has always been — ``login()`` documents this as the place the
+        credential it minted lives, and a token is retrievable nowhere else. What changed
+        in #242 is where it is *kept*: in a slot rather than the instance ``__dict__``,
+        so no serializer or crash reporter that walks an object's attributes reaches it.
+        See ``__slots__`` above.
+        """
+        return self._token
+
+    @token.setter
+    def token(self, value: str) -> None:
+        """Store the token. Assigning does **not** re-authenticate an existing client.
+
+        Unchanged from when this was an ordinary attribute: the transport's
+        ``Authorization`` header is built once, at construction, so a later assignment
+        changes what ``client.token`` reads and nothing that goes on the wire. To use a
+        different credential, build a client on it.
+        """
+        self._token = value
+
     def __repr__(self) -> str:
-        return f"<{type(self).__name__} base_url={self.base_url!r}>"
+        """The client, with the credential named but withheld.
+
+        ``token=[REDACTED]`` rather than silence: a reader who sees nothing cannot tell
+        whether this client holds a credential or whether the repr simply does not mention
+        it, and the difference matters when you are reading a log for a leak.
+        """
+        return f"<{type(self).__name__} base_url={self.base_url!r} token=[REDACTED]>"
+
+    def __reduce__(self) -> NoReturn:
+        """Refuse the serializers that go through the pickle protocol, and say why.
+
+        The default implementation returns this object's whole state, and pickling a client
+        only fails today by accident — ``httpx`` happens to hold a ``_thread.RLock`` —
+        *after* ``__reduce__`` has already handed that state out, which is why
+        ``copy.copy(client)`` used to return a second live client on the same credential.
+
+        The message speaks to being reached indirectly as well as directly: ``deepcopy`` of
+        a resource or of an attached record recurses into the client and lands here, so a
+        caller who copied a ``Timeline`` must not be told only about clients.
+        """
+        refuse_serialization(
+            f"A {type(self).__name__} cannot be serialized: it authenticates with your "
+            f"bearer token, and any serializer that walks it writes that credential "
+            f"wherever the output goes. Nothing holding a client can be serialized "
+            f"either, so copying a resource or a record reaches this too — copy the "
+            f"record's data instead. Where you need a client, build one: "
+            f"{type(self).__name__}(token=...), moving the token only through whatever "
+            f"you already trust with secrets."
+        )
 
     @staticmethod
     def _check_response(response: httpx.Response) -> Any:

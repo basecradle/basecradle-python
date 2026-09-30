@@ -13,6 +13,7 @@ from typing import Any
 
 from basecradle._models import ApiObject
 from basecradle._pagination import apaginate, paginate
+from basecradle._resources import Resource
 
 __all__ = ["AsyncSessionsResource", "Session", "SessionsResource"]
 
@@ -49,7 +50,7 @@ class Session(ApiObject):
         return self._verb("DELETE", f"/users/sessions/{self.uuid}", lambda _response: None)
 
 
-class _SessionsResourceCore:
+class _SessionsResourceCore(Resource):
     def __init__(self, client: Any) -> None:
         self._client = client
 
