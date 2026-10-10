@@ -46,6 +46,14 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
   comes back as its model when present and `None` when not. `ContactMessage.user` is the
   first such field.
 
+### Fixed
+
+- **`BinaryPayloadError`** (`binary_payload`, HTTP 415, #264). The platform documents this
+  webhook-ingest code beside `payload_too_large`, but it had no typed class, so it fell
+  back to a bare `BaseCradleError`. As of this release, all 20 documented codes map to
+  their own classes. A code the platform documents later still reads as a bare
+  `BaseCradleError` until the SDK maps it.
+
 ### Security
 
 - **`repr()` of a webhook delivery's headers no longer prints their values** (#246).
