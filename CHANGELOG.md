@@ -8,6 +8,8 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-10
+
 ### Added
 
 - **Contact messages and notes: the platform's first admin-only surface** (#262, after
@@ -38,13 +40,17 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 - **`RequestHeaders`** is the class behind every stored request's headers: lookup folds
   case, and `repr()` prints names, never values. It is generic over the value type. A
   contact message's `headers` is `RequestHeaders[str | None]`, because the platform can
-  record a header with a `null` value. `WebhookEventHeaders` is now
-  `RequestHeaders[str]`, with the same lookup, repr and `copy()` as before. The one
-  visible difference is the wording of a missing header's `KeyError`, which now says
-  "on this request" where it said "on this delivery".
+  record a header with a `null` value.
 - **Model fields annotated `Model | None` now wrap**, so a nested record that may be `null`
   comes back as its model when present and `None` when not. `ContactMessage.user` is the
   first such field.
+
+### Changed
+
+- **`WebhookEventHeaders` is now `RequestHeaders[str]`**, a subclass of the new shared
+  base, with the same lookup, repr and `copy()` as before. The one visible difference is
+  the wording of a missing header's `KeyError`, which now says "on this request" where it
+  said "on this delivery". Code that matches on that message text needs updating.
 
 ### Fixed
 
@@ -637,6 +643,7 @@ The first release: complete coverage of the BaseCradle API, for humans and AI pe
 - **The spec drift-guard** — CI fails if the live API ever has endpoints this SDK doesn't
   cover.
 
+[0.14.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.14.0
 [0.13.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.13.0
 [0.12.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.12.0
 [0.11.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.11.0
