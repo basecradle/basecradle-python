@@ -27,6 +27,7 @@ from basecradle._exceptions import (
     APIConnectionError,
     AuthenticationError,
     BaseCradleError,
+    BinaryPayloadError,
     ConflictError,
     CurrentPasswordIncorrectError,
     EndpointDisabledError,
@@ -183,4 +184,5 @@ __all__ = [
     "InvalidFilterError",
     "EndpointDisabledError",
     "PayloadTooLargeError",
+    "BinaryPayloadError",
 ]

@@ -1,8 +1,9 @@
 """Every documented error code maps to its typed exception.
 
-The catalog below mirrors the API docs (Errors → Error Codes) exactly — 19 codes.
-If the API adds a code, the drift-guard (issue #10) catches it; if someone removes a
-mapping, these tests do.
+The catalog below mirrors the API docs (Errors → Error Codes) and is pinned to the SDK's
+registry, so a mapping removed, or added without a test, fails here. A code the platform
+*documents* after this release is not caught by anything: the drift-guard compares
+endpoints, not codes (#264, #265). It reads as a bare ``BaseCradleError`` until it is mapped.
 """
 
 import pytest
@@ -11,6 +12,7 @@ from basecradle import (
     AccountSuspendedError,
     AuthenticationError,
     BaseCradleError,
+    BinaryPayloadError,
     ConflictError,
     CurrentPasswordIncorrectError,
     EndpointDisabledError,
@@ -33,6 +35,7 @@ from basecradle import (
     UnauthorizedError,
     ValidationError,
 )
+from basecradle._exceptions import _CODE_TO_ERROR
 from tests.conftest import FAKE_INSTANCE, problem
 
 # (code, http status, expected exception class, expected category parent)
@@ -56,7 +59,14 @@ ERROR_CATALOG = [
     ("invalid_signature", 401, InvalidSignatureError, AuthenticationError),
     ("endpoint_disabled", 410, EndpointDisabledError, BaseCradleError),
     ("payload_too_large", 413, PayloadTooLargeError, BaseCradleError),
+    ("binary_payload", 415, BinaryPayloadError, BaseCradleError),
 ]
+
+
+def test_the_catalog_is_exactly_the_registry():
+    """Every mapped code has a row here, and every row is mapped — no count to keep in step."""
+    assert {code for code, *_ in ERROR_CATALOG} == set(_CODE_TO_ERROR)
+    assert len(ERROR_CATALOG) == len(_CODE_TO_ERROR)  # no duplicate rows
 
 
 @pytest.mark.parametrize(("code", "status", "error_class", "category"), ERROR_CATALOG)

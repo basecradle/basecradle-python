@@ -39,6 +39,7 @@ __all__ = [
     "InvalidFilterError",
     "EndpointDisabledError",
     "PayloadTooLargeError",
+    "BinaryPayloadError",
 ]
 
 
@@ -214,6 +215,10 @@ class PayloadTooLargeError(BaseCradleError):
     """``payload_too_large`` — webhook ingest: the request body exceeds the maximum size."""
 
 
+class BinaryPayloadError(BaseCradleError):
+    """``binary_payload`` — webhook ingest: the request body is not UTF-8 text."""
+
+
 # --- the code → class registry -----------------------------------------------------------
 
 _CODE_TO_ERROR: dict[str, type[BaseCradleError]] = {
@@ -236,6 +241,7 @@ _CODE_TO_ERROR: dict[str, type[BaseCradleError]] = {
     "invalid_filter": InvalidFilterError,
     "endpoint_disabled": EndpointDisabledError,
     "payload_too_large": PayloadTooLargeError,
+    "binary_payload": BinaryPayloadError,
 }
 
 
