@@ -2,8 +2,9 @@
 
 The catalog below mirrors the API docs (Errors → Error Codes) and is pinned to the SDK's
 registry, so a mapping removed, or added without a test, fails here. A code the platform
-*documents* after this release is not caught by anything: the drift-guard compares
-endpoints, not codes (#264, #265). It reads as a bare ``BaseCradleError`` until it is mapped.
+*documents* after this release is the live drift-guard's to catch: it holds the docs' Error
+Codes table to the same registry (``tests/test_drift_guard.py``, #265). Until the code is
+mapped, it reads as a bare ``BaseCradleError``.
 """
 
 import pytest

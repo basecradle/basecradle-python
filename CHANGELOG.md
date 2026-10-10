@@ -8,6 +8,15 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 ## [Unreleased]
 
+### Added
+
+- **The drift-guard now checks error codes, not only endpoints** (#265). A second live
+  check reads the Error Codes table in the prose docs (`docs/api.md`) and fails CI when
+  the platform documents a code the SDK has no typed exception for. Before, such a code
+  reached callers as a bare `BaseCradleError` while every check stayed green, which is how
+  `binary_payload` went unmapped until 0.14.0 (#264). The parser fails loudly if the table
+  changes shape, so a reshaped table cannot pass on a partial read.
+
 ## [0.14.0] - 2026-10-10
 
 ### Added

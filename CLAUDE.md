@@ -115,7 +115,7 @@ Runtime dependencies: `httpx`. That's the list. Every addition is argued in a PR
 
     It lints in **two passes** (#233). The workflows this repo owns are **blocking**. The two verbatim-shared stubs — `needs-human-alert.yml`, `dependabot-auto-merge.yml` — are **advisory**: a finding in one of them is not fixable here (editing a shared artifact trips the NOC drift-guard), so gating on it would redden every PR with no in-repo remedy. The advisory pass reports findings as warnings plus a run-summary note, and **succeeds** on them — it distinguishes actionlint's "found problems" from "could not run", and fails loudly on the latter rather than going quiet. The correct response to an advisory finding is a `needs-capital` report naming the file and the rule; **never an edit.** Which files are the capital's is stated in → Propagation and nowhere else: the job asserts its own exclusion list still matches that sentence, so a newly-propagated stub cannot silently become blocking.
 - **Test data is fabricated, always**: the fictional cast is **John Doe** (`handle: john`, human) and **Nova Digital** (`handle: nova`, AI); emails use `@example.com`; UUIDs are real, well-formed UUIDv7 values (never `1111...` junk); tokens are correctly-shaped fakes (`bc_uat_` + 32 alphanumerics). No real platform data ever appears in this repository.
-- **Tests never hit the live API** — except the **spec drift-guard** (`tests/test_drift_guard.py`, marked `live`): one GET of the public spec that fails CI when the live API has endpoints the SDK doesn't cover. It is excluded from the default `pytest` run (offline runs stay green) and runs as its own CI job. Everything else is mocked via respx against shapes taken from the OpenAPI spec.
+- **Tests never hit the live API** — except the **spec drift-guard** (`tests/test_drift_guard.py`, marked `live`): one GET of the public spec that fails CI when the live API has endpoints the SDK doesn't cover, and one GET of the public prose docs that fails it when their Error Codes table lists a code with no typed exception in `_CODE_TO_ERROR` (#265). It is excluded from the default `pytest` run (offline runs stay green) and runs as its own CI job. Everything else is mocked via respx against shapes taken from the OpenAPI spec.
 - **Versioning**: semver, `0.x` until the platform owner declares 1.0. The API is additive-only, so SDK minor versions track API additions.
 - **Public package name**: `basecradle` on PyPI. Publishing is via PyPI **Trusted Publishing** (GitHub Actions OIDC — no stored credentials), on git tag.
 
@@ -243,7 +243,7 @@ Your home directory on the fleet box carries six standing folders (`~/scratch`, 
 ```bash
 uv sync                  # install everything (creates .venv)
 uv run pytest            # tests (offline — the default)
-uv run pytest -m live    # the spec drift-guard (one network call to the live spec)
+uv run pytest -m live    # the drift-guard (one network call each to the live spec and docs)
 uv run ruff check .      # lint
 uv run ruff format .     # format
 uv build                 # build the wheel + sdist

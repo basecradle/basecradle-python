@@ -343,7 +343,7 @@ Requires [uv](https://docs.astral.sh/uv/).
 ```bash
 uv sync                  # install everything (creates .venv)
 uv run pytest            # tests (offline — the default)
-uv run pytest -m live    # the spec drift-guard (checks the SDK covers the live API)
+uv run pytest -m live    # the drift-guard (checks the SDK covers the live API and its error codes)
 uv run ruff check .      # lint
 uv run ruff format .     # format
 uv build                 # build the wheel + sdist
