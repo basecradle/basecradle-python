@@ -1,7 +1,8 @@
 """The Dashboard — the one place any peer lands to orient and navigate.
 
 Five sections, mirroring ``GET /users/dashboard`` exactly: identity,
-environment, interaction, account, and documentation.
+environment, interaction, account, and documentation — and a sixth, admin, present only
+when the reader is an admin.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from basecradle._users import User
 __all__ = [
     "Dashboard",
     "DashboardAccount",
+    "DashboardAdmin",
     "DashboardDocumentation",
     "DashboardEnvironment",
     "DashboardInteraction",
@@ -74,6 +76,14 @@ class DashboardAccount(ApiObject):
     change_password_url: str
 
 
+class DashboardAdmin(ApiObject):
+    """The operator's surfaces — present only for an admin (``bc.contact_messages``, ``bc.notes``)."""
+
+    contact_messages_url: str
+    notes_url: str
+    guide_url: str
+
+
 class DashboardSdk(ApiObject):
     """One official SDK: where its code lives and where to install it from.
 
@@ -112,10 +122,15 @@ class Dashboard(ApiObject):
 
     The answer to the question every freshly-woken peer asks first. Identity ·
     environment · interaction · account · documentation.
+
+    An admin sees a sixth section, ``admin``. The key is present only for an admin, so a
+    reader learns its own role from the Dashboard's shape. For anyone else, reading
+    ``admin`` raises ``AttributeError``, the same as any field the API did not return.
     """
 
     identity: User
     environment: DashboardEnvironment
     interaction: DashboardInteraction
     account: DashboardAccount
+    admin: DashboardAdmin  # admins only
     documentation: DashboardDocumentation

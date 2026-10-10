@@ -50,7 +50,7 @@ another; the old one works until you revoke it (see [Managing your own credentia
 
 ## Who am I?
 
-The platform explains itself to whoever asks — that is its defining feature, and the SDK's front door. `bc.me` is the Dashboard: identity, environment, interaction, account, documentation.
+The platform explains itself to whoever asks — that is its defining feature, and the SDK's front door. `bc.me` is the Dashboard: identity, environment, interaction, account, documentation — plus `admin`, for an admin only.
 
 ```python
 from basecradle import BaseCradle
@@ -278,6 +278,34 @@ print(me.is_admin)   # "admin" in me.roles
 ```
 
 `integration_url`, `integration_enabled` and `integration_failure_count` are the read-only status of your **integration**: the outbound connection the platform sends **Event Delivery** through, POSTing every event on every timeline you can view to your URL. They belong to the self/admin cluster — your own profile (`bc.me.identity`), or an admin's view of another user, and nowhere else. The SDK reads that status and nothing more; an integration is provisioned by an admin, so configuring one is not an SDK surface. It is the outbound counterpart to the inbound [Webhooks](#webhooks) above, which the SDK *does* model.
+
+## Contact messages & notes (admin-only)
+
+**Admin-only.** Everything in this section answers `403` to anyone who is not an admin, raised as `NotAnAdminError` (a `ForbiddenError`). It is the same SDK and the same objects for everyone. The platform decides who gets an answer.
+
+A **contact message** is what someone sent through the public contact page, stored with everything the request said about itself and what the risk-assessment vendors made of it. Nothing is rejected on a score. The admin decides, by setting its `status` and writing **notes** on it.
+
+```python
+from basecradle import BaseCradle
+
+bc = BaseCradle()
+
+for message in bc.contact_messages.filter(status="received"):  # newest first
+    print(message.name, message.email_address, message.body)
+    print(message.user)  # the sender if they were signed in, else None
+    print(message.headers["user-agent"])  # lookup folds case, like a webhook delivery's
+    print(message.data["proxycheck"]["vendor"])  # one self-describing slot per vendor
+
+    note = message.add_note(body="Looks genuine. Replied by email.")
+    message.set_status("closed")  # "received" | "closed" | "spam", in any direction
+
+for note in bc.notes:  # every note, across every subject, newest first
+    print(note.user.handle, note.notable.type, note.notable.uuid, note.body)
+```
+
+A contact message is a top-level record, so it is **flat**: no `type`/`content` envelope. Its `notes` are embedded in full. `message.set_status(...)` adopts the whole record the API returns. `message.add_note(body=...)` returns the new `Note` and appends it to `message.notes`. A note **never changes** once written: there is no update and no delete, for anyone. `notable` says what a note is about, by `type` and `uuid`. Today that is always a contact message.
+
+`data` is handed back as the plain `dict` the wire sent. Each vendor slot carries `vendor`, `api`, `docs`, `fetched_at` and `attempts`, then exactly one of `answer`, `skipped` or `error`. The vendors and their payloads are the platform's to change, so the SDK doesn't model them. Google's score runs the opposite way from the IP vendors' (see the API docs). `headers` reads through `RequestHeaders`, the same class behind a webhook delivery's headers: lookup folds case, and printing it shows names, never values.
 
 ## Async
 

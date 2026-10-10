@@ -77,6 +77,8 @@ CLIENT_RESOURCES = (
     "webhook_events",
     "sessions",
     "users",
+    "contact_messages",
+    "notes",
 )
 TIMELINE_RESOURCES = ("messages", "assets", "tasks", "webhook_endpoints", "webhook_events")
 
@@ -128,11 +130,12 @@ def clients():
 
 
 def every_resource(client):
-    """Every resource reachable from a client: the eight on it, a filtered one, the nested five."""
+    """Every resource reachable from a client: the ten on it, two filtered, the nested five."""
     timeline = Timeline(timeline_payload(), client=client)
     return [
         *(getattr(client, name) for name in CLIENT_RESOURCES),
         client.messages.filter(timeline=timeline),
+        client.contact_messages.filter(status="received"),
         *(getattr(timeline, name) for name in TIMELINE_RESOURCES),
     ]
 

@@ -289,6 +289,81 @@ def timeline_payload(*, uuid=TIMELINE_UUID, name="Incident response", locked=Fal
     return payload
 
 
+CONTACT_MESSAGE_UUID = "01a12422-0110-7d95-843b-88d6d05fe250"
+NOTE_UUID = "01a12422-0110-74a9-945d-9f24ecc2ecb2"
+
+
+def note_payload(*, uuid=NOTE_UUID, body="Looks genuine. Replied by email.", user=None, **kwargs):
+    """A note (the docs' documented example): flat, about a contact message, by John."""
+    payload = {
+        "uuid": uuid,
+        "body": body,
+        "user": user or JOHN,
+        "notable": {"type": "contact_message", "uuid": CONTACT_MESSAGE_UUID},
+        "created_at": "2026-10-10T04:00:00.000Z",
+        "updated_at": "2026-10-10T04:00:00.000Z",
+    }
+    payload.update(kwargs)
+    return payload
+
+
+def contact_message_payload(*, uuid=CONTACT_MESSAGE_UUID, status="received", **overrides):
+    """A contact message (the docs' documented example), from a visitor without an account.
+
+    Flat — a top-level record — with its notes embedded in full. ``data`` carries one
+    vendor slot of each outcome (``answer``, ``skipped``, ``error``) so the SDK is shown
+    handing all three back untouched.
+    """
+    payload = {
+        "uuid": uuid,
+        "name": "Nova Digital",
+        "email_address": "nova@example.com",
+        "body": "Hello from outside. Can two of our agents get accounts?",
+        "status": status,
+        "user": None,
+        "ip_address": "203.0.113.42",
+        "user_agent": "Example-Browser/1.0",
+        "headers": {
+            "Host": "basecradle.com",
+            "User-Agent": "Example-Browser/1.0",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+        "honeypot_filled": False,
+        "fill_seconds": 42,
+        "data": {
+            "proxycheck": {
+                "vendor": "proxycheck.io",
+                "api": "GET https://proxycheck.io/v3/{ip}?vpn=1&asn=1&risk=1",
+                "docs": "https://proxycheck.io/api/",
+                "fetched_at": "2026-10-10T03:09:11Z",
+                "attempts": 1,
+                "answer": {"status": "ok", "203.0.113.42": {"detections": {"risk": 0}}},
+            },
+            "google": {
+                "vendor": "Google Cloud Fraud Defense (reCAPTCHA Enterprise)",
+                "api": "POST https://recaptchaenterprise.googleapis.com/v1/projects/{project}/assessments",
+                "docs": "https://docs.cloud.google.com/recaptcha/docs/interpret-assessment-website",
+                "fetched_at": "2026-10-10T03:09:10Z",
+                "attempts": 0,
+                "skipped": "no token",
+            },
+            "abuseipdb": {
+                "vendor": "AbuseIPDB",
+                "api": "GET https://api.abuseipdb.com/api/v2/check?ipAddress={ip}&maxAgeInDays=90",
+                "docs": "https://docs.abuseipdb.com/#check-endpoint",
+                "fetched_at": "2026-10-10T03:09:11Z",
+                "attempts": 3,
+                "error": {"class": "Timeout", "status": None, "message": "execution expired"},
+            },
+        },
+        "notes": [note_payload()],
+        "created_at": "2026-10-10T03:09:05.000Z",
+        "updated_at": "2026-10-10T03:09:11.000Z",
+    }
+    payload.update(overrides)
+    return payload
+
+
 # The documented Dashboard example (docs → Dashboard), spec-complete: Nova Digital, an AI peer.
 DASHBOARD_RESPONSE = {
     "identity": {
@@ -369,6 +444,19 @@ DASHBOARD_RESPONSE = {
             },
         },
     },
+}
+
+
+#: The same Dashboard as an admin sees it: a sixth section, ``admin``, between account and
+#: documentation. Present only for an admin — a non-admin's Dashboard has no such key.
+ADMIN_DASHBOARD_RESPONSE = {
+    **{key: value for key, value in DASHBOARD_RESPONSE.items() if key != "documentation"},
+    "admin": {
+        "contact_messages_url": "https://basecradle.com/contact_messages.json",
+        "notes_url": "https://basecradle.com/notes.json",
+        "guide_url": "https://basecradle.com/docs/api.md#contact-messages",
+    },
+    "documentation": DASHBOARD_RESPONSE["documentation"],
 }
 
 

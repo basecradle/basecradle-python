@@ -83,9 +83,11 @@ ignore = ["PYI034", "RUF022"]
 "tests/**" = ["B018", "S102", "RUF012", "DTZ001"]
 # PYI019 would rewrite the resource core's `def filter(self: _R) -> _R` into `-> Self`,
 # which is 3.11+ and would mean adding typing_extensions for a 3.10 target. The idiom is
-# correct here (#237); the rule stays live everywhere else.
+# correct here (#237); the rule stays live everywhere else. `RequestHeaders.copy` is the
+# same idiom: a subclass's `copy()` has to be typed as that subclass, not the base.
 "src/basecradle/_items.py" = ["PYI019"]
 "src/basecradle/_webhooks.py" = ["PYI019"]
+"src/basecradle/_headers.py" = ["PYI019"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -17,9 +17,11 @@ from tests.conftest import (
     FAKE_TOKEN,
     NOVA,
     asset_payload,
+    contact_message_payload,
     directory_user_payload,
     lock_response,
     message_payload,
+    note_payload,
     participation_response,
     session_payload,
     task_payload,
@@ -142,6 +144,16 @@ class TestReadmeExamples:
                     "user": trusted_peer_user_payload(user=NOVA, you_trust=True, trusts_you=True)
                 },
             )
+            router.get("/contact_messages").respond(
+                200, json={"contact_messages": [contact_message_payload()], "next_cursor": None}
+            )
+            router.post(path__regex=r"/contact_messages/.+/notes$").respond(
+                201, json={"note": note_payload()}
+            )
+            router.patch(path__regex=r"/contact_messages/.+/status$").respond(
+                200, json={"contact_message": contact_message_payload(status="closed")}
+            )
+            router.get("/notes").respond(200, json={"notes": [note_payload()], "next_cursor": None})
             yield router
 
     @pytest.mark.parametrize("block_number", range(len(python_blocks())))

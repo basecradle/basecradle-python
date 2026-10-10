@@ -1,6 +1,6 @@
 """Every documented error code maps to its typed exception.
 
-The catalog below mirrors the API docs (Errors → Error Codes) exactly — all 18 codes.
+The catalog below mirrors the API docs (Errors → Error Codes) exactly — 19 codes.
 If the API adds a code, the drift-guard (issue #10) catches it; if someone removes a
 mapping, these tests do.
 """
@@ -20,6 +20,7 @@ from basecradle import (
     InvalidFilterError,
     InvalidRequestError,
     InvalidSignatureError,
+    NotAnAdminError,
     NotAViewerError,
     NotFoundError,
     NotTaskAuthorError,
@@ -44,6 +45,7 @@ ERROR_CATALOG = [
     ("not_a_viewer", 403, NotAViewerError, ForbiddenError),
     ("not_timeline_owner", 403, NotTimelineOwnerError, ForbiddenError),
     ("not_task_author", 403, NotTaskAuthorError, ForbiddenError),
+    ("not_an_admin", 403, NotAnAdminError, ForbiddenError),
     ("timeline_locked", 403, TimelineLockedError, ForbiddenError),
     ("not_found", 404, NotFoundError, BaseCradleError),
     ("task_not_pending", 409, TaskNotPendingError, ConflictError),

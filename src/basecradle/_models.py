@@ -17,6 +17,7 @@ Models built by the client carry a reference to it, so resource verbs
 from __future__ import annotations
 
 import functools
+import types
 import typing
 from collections.abc import Callable
 from typing import Any
@@ -108,11 +109,16 @@ class ApiObject:
 def _nested_classes(cls: type) -> dict[str, type[ApiObject]]:
     """Which annotated fields of ``cls`` are models (or lists of models) to auto-wrap.
 
-    Resolved from the class's type annotations, once per class. Recognizes both
-    ``field: Model`` and ``field: list[Model]``.
+    Resolved from the class's type annotations, once per class. Recognizes
+    ``field: Model``, ``field: Model | None`` and ``field: list[Model]``. A ``None`` on the
+    wire stays ``None`` — only a dict is wrapped (see ``ApiObject._wrap``).
     """
     nested: dict[str, type[ApiObject]] = {}
     for name, annotation in typing.get_type_hints(cls).items():
+        if typing.get_origin(annotation) in (typing.Union, types.UnionType):
+            members = [arg for arg in typing.get_args(annotation) if arg is not type(None)]
+            if len(members) == 1:
+                annotation = members[0]
         if isinstance(annotation, type) and issubclass(annotation, ApiObject):
             nested[name] = annotation
         elif typing.get_origin(annotation) is list:
