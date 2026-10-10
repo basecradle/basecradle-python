@@ -5,19 +5,27 @@ gives the SDK the reverse guarantee: the live spec's every endpoint must appear 
 coverage map below, or CI fails. When the platform adds an endpoint, this check fails →
 an issue gets filed → the SDK adds coverage. That is the intended workflow.
 
-The live check is the ONE test in this suite that touches the network (a single GET of a
-public document). It is marked ``live`` and excluded from the default test run; CI runs it
-as a dedicated job.
+Endpoints are half of the surface. The other half is the error codes: a code the platform
+documents with no typed class here reaches callers as a bare ``BaseCradleError``, and no
+endpoint check notices (``binary_payload`` did exactly that, #264). So the docs' Error
+Codes table is held to the SDK's registry the same way (#265).
+
+The live checks are the ONLY tests in this suite that touch the network (one GET each of
+two public documents). They are marked ``live`` and excluded from the default test run; CI
+runs them as a dedicated job.
 """
 
 import re
+from collections.abc import Mapping
 
 import httpx
 import pytest
 
 from basecradle import BaseCradle, ContactMessage, Session, Task, Timeline, User, WebhookEndpoint
+from basecradle._exceptions import _CODE_TO_ERROR
 
 LIVE_SPEC_URL = "https://basecradle.com/docs/api.yaml"
+LIVE_DOCS_URL = "https://basecradle.com/docs/api.md"
 
 # ---------------------------------------------------------------------------------------
 # The coverage map: every endpoint the live API exposes → the SDK feature that covers it.
@@ -131,8 +139,100 @@ def uncovered(live_pairs: set[tuple[str, str]], coverage: dict[tuple[str, str], 
     return live_pairs - set(coverage)
 
 
+_ERROR_CODES_HEADING = "### Error Codes"
+_ERROR_CODES_HEADER_ROW = "| Code | Status | When |"
+_ERROR_CODES_SEPARATOR = re.compile(r"^\|(?: *:?-+:? *\|){3}$")
+# A row: the code in backticks, optionally followed by its `{:#error-…}` anchor, then a
+# three-digit status and a non-empty description. The description may hold an escaped
+# `\|` but no bare pipe, so a row that grows a column fails rather than parsing.
+_ERROR_CODE_ROW = re.compile(
+    r"^\| `([a-z0-9_]+)`(?:\{:#[^}]*\})? \| [0-9]{3} \| (?:[^|\\\s]|\\.)(?:[^|\\]|\\.)* \|$"
+)
+# The section ends at the next heading of the same or a higher level, outside a code fence.
+_SECTION_END = re.compile(r"^#{1,3} ")
+_FENCE = re.compile(r"^ {0,3}(```|~~~)")
+
+
+def documented_error_codes(docs_text: str) -> set[str]:
+    """Every code in the prose docs' ``### Error Codes`` table.
+
+    The prose docs, not the spec: the table is the platform's one complete list, while
+    the spec's problem+json examples can only carry codes some contract test exercises.
+
+    A constrained parser for the table's current shape. Unlike the spec, the table is
+    hand-written, so the guards are stricter than ``endpoint_pairs``'s: every table line
+    in the section must parse, or the whole read fails. A row reshaped so it no longer
+    matches would otherwise drop out silently, and its code would never be checked.
+    """
+    lines = [line.rstrip() for line in docs_text.splitlines()]
+    starts = [i for i, line in enumerate(lines) if line == _ERROR_CODES_HEADING]
+    if len(starts) != 1:
+        raise AssertionError(
+            f"Found {len(starts)} '{_ERROR_CODES_HEADING}' headings in the docs, expected "
+            f"exactly 1 — the docs format has likely changed and this parser needs "
+            f"updating. Never ignore this."
+        )
+
+    # Every line in the section, outside a code fence, that holds a pipe — indented, or
+    # missing GFM's optional leading pipe. The row regex below is anchored at a leading
+    # `|`, so such a row fails loudly instead of being skipped. Collecting too much is the
+    # safe direction: an extra line can only fail the read, never pass it.
+    table_lines: list[str] = []
+    in_fence = False
+    for line in lines[starts[0] + 1 :]:
+        if _FENCE.match(line):
+            in_fence = not in_fence
+        elif in_fence:
+            continue
+        elif _SECTION_END.match(line):
+            break
+        elif "|" in line:
+            table_lines.append(line)
+
+    # Format-drift guards: if the table changes shape, fail loudly here rather than
+    # letting the comparison pass vacuously or on a partial read.
+    if len(table_lines) < 2 or table_lines[0] != _ERROR_CODES_HEADER_ROW:
+        raise AssertionError(
+            f"The Error Codes table does not start with {_ERROR_CODES_HEADER_ROW!r} — the "
+            f"docs format has likely changed and this parser needs updating. Never ignore "
+            f"this."
+        )
+    if not _ERROR_CODES_SEPARATOR.match(table_lines[1]):
+        raise AssertionError(
+            f"The Error Codes table's second line is {table_lines[1]!r}, not a separator "
+            f"row — the docs format has likely changed and this parser needs updating. "
+            f"Never ignore this."
+        )
+    codes: set[str] = set()
+    for line in table_lines[2:]:
+        row_match = _ERROR_CODE_ROW.match(line)
+        if not row_match:
+            raise AssertionError(
+                f"Unparseable Error Codes row {line!r} — the docs format has likely "
+                f"changed and this parser needs updating. Never ignore this."
+            )
+        codes.add(row_match.group(1))
+
+    if len(codes) < 15:
+        raise AssertionError(
+            f"Parsed only {len(codes)} error codes from the docs — the docs format has "
+            f"likely changed and this parser needs updating. Never ignore this."
+        )
+    if "not_found" not in codes:
+        raise AssertionError(
+            "not_found is missing from the parsed error codes — the docs format has "
+            "likely changed and this parser needs updating. Never ignore this."
+        )
+    return codes
+
+
+def untyped(documented: set[str], registry: Mapping[str, object]) -> set[str]:
+    """The error codes the docs list that the SDK has no typed exception for."""
+    return documented - set(registry)
+
+
 # ---------------------------------------------------------------------------------------
-# The live check — the one networked test, run as its own CI job
+# The live checks — the only networked tests, run as their own CI job
 # ---------------------------------------------------------------------------------------
 
 
@@ -148,6 +248,20 @@ class TestDriftGuard:
             f"The live API has {len(missing)} endpoint(s) the SDK does not cover: "
             f"{sorted(missing)}. This is the drift-guard working as intended — "
             f"file an issue for each, add SDK coverage, and extend COVERAGE in this file."
+        )
+
+    def test_every_documented_error_code_is_typed(self):
+        response = httpx.get(LIVE_DOCS_URL, follow_redirects=True)
+        response.raise_for_status()
+
+        missing = untyped(documented_error_codes(response.text), _CODE_TO_ERROR)
+
+        assert not missing, (
+            f"The live docs list {len(missing)} error code(s) the SDK has no typed "
+            f"exception for: {sorted(missing)}. Callers get a bare BaseCradleError for "
+            f"each. This is the drift-guard working as intended — file an issue for each, "
+            f"add the class, map it in _CODE_TO_ERROR, and add its ERROR_CATALOG row in "
+            f"tests/test_errors.py."
         )
 
 
@@ -226,6 +340,160 @@ class TestCoverageComparison:
         # Coverage can be a superset of the live API (e.g. during platform rollbacks).
         live = set(COVERAGE) - {("GET", "/users")}
         assert uncovered(live, COVERAGE) == set()
+
+
+def error_codes_docs(codes, *, before="", after="## Rate Limiting\n") -> str:
+    """A docs fixture shaped like the live Error Codes section, one row per code."""
+    rows = "".join(
+        f"| `{code}`{{:#error-{code}}} | 400 | Something went wrong. |\n" for code in codes
+    )
+    return (
+        f"{before}## Errors\n\nThe envelope.\n\n### Error Codes\n\n"
+        f"The `code` is the stable contract.\n\n"
+        f"| Code | Status | When |\n|---|---|---|\n{rows}\n"
+        f"The per-endpoint tables below.\n\n{after}"
+    )
+
+
+class TestErrorCodesParser:
+    def test_extracts_every_documented_code(self):
+        assert documented_error_codes(error_codes_docs(_CODE_TO_ERROR)) == set(_CODE_TO_ERROR)
+
+    def test_reads_only_the_error_codes_section(self):
+        # Tables before the heading and after the section ends are not error codes.
+        stray = "| Code | Status | When |\n|---|---|---|\n| `elsewhere` | 400 | Not ours. |\n"
+        docs = error_codes_docs(_CODE_TO_ERROR, before=stray, after=f"## Rate Limiting\n{stray}")
+
+        assert "elsewhere" not in documented_error_codes(docs)
+
+    def test_a_row_without_an_anchor_still_counts(self):
+        docs = error_codes_docs(_CODE_TO_ERROR).replace(
+            "| `not_a_viewer`{:#error-not_a_viewer} |", "| `not_a_viewer` |"
+        )
+        assert "| `not_a_viewer` |" in docs  # the fixture really changed
+
+        assert "not_a_viewer" in documented_error_codes(docs)
+
+    def test_an_escaped_pipe_in_the_description_is_not_a_column(self):
+        docs = error_codes_docs(_CODE_TO_ERROR).replace(
+            "| `not_found`{:#error-not_found} | 400 | Something went wrong. |",
+            "| `not_found`{:#error-not_found} | 404 | Missing \\| hidden. |",
+        )
+        assert "Missing \\| hidden." in docs  # the fixture really changed
+
+        assert "not_found" in documented_error_codes(docs)
+
+    def test_trailing_whitespace_and_crlf_are_tolerated(self):
+        docs = error_codes_docs(_CODE_TO_ERROR).replace("\n", "  \r\n")
+        assert "|  \r\n" in docs  # the fixture really changed
+
+        assert documented_error_codes(docs) == set(_CODE_TO_ERROR)
+
+    def test_missing_heading_fails_loudly(self):
+        docs = error_codes_docs(_CODE_TO_ERROR).replace("### Error Codes", "### Codes")
+        with pytest.raises(AssertionError, match="format has likely changed"):
+            documented_error_codes(docs)
+
+    def test_duplicate_heading_fails_loudly(self):
+        # Two complete, valid sections: either alone would parse, so only the heading
+        # count can refuse to pick one.
+        docs = error_codes_docs(_CODE_TO_ERROR) * 2
+        with pytest.raises(AssertionError, match="Found 2 '### Error Codes' headings"):
+            documented_error_codes(docs)
+
+    def test_reshaped_header_row_fails_loudly(self):
+        docs = error_codes_docs(_CODE_TO_ERROR).replace(
+            "| Code | Status | When |", "| Status | Code | When |"
+        )
+        with pytest.raises(AssertionError, match="format has likely changed"):
+            documented_error_codes(docs)
+
+    def test_missing_separator_row_fails_loudly(self):
+        docs = error_codes_docs(_CODE_TO_ERROR).replace("|---|---|---|\n", "")
+        with pytest.raises(AssertionError, match="format has likely changed"):
+            documented_error_codes(docs)
+
+    @pytest.mark.parametrize(
+        "reshaped",
+        [
+            "| not_found | 404 | No backticks. |",
+            "| `not_found` | Not Found | A status that is not three digits. |",
+            "| `not_found` | 404 |",
+            "| `not_found` | 404 | An extra column. | x |",
+            "| `Not-Found` | 404 | A code outside the snake_case alphabet. |",
+            "| `not_found` | 404 |  |",
+            "`not_found` | 404 | GFM's optional leading pipe, omitted. |",
+        ],
+    )
+    def test_one_unparseable_row_fails_the_whole_read(self, reshaped):
+        """The reason the guard is stricter than the spec's: a row must not drop silently."""
+        docs = error_codes_docs(_CODE_TO_ERROR).replace(
+            "| `invalid_cursor`{:#error-invalid_cursor} | 400 | Something went wrong. |",
+            reshaped,
+        )
+        assert reshaped in docs  # the fixture really changed
+        with pytest.raises(AssertionError, match="Unparseable Error Codes row"):
+            documented_error_codes(docs)
+
+    def test_an_indented_row_fails_the_whole_read(self):
+        row = "| `invalid_cursor`{:#error-invalid_cursor} | 400 | Something went wrong. |"
+        docs = error_codes_docs(_CODE_TO_ERROR).replace(row, "  " + row)
+        with pytest.raises(AssertionError, match="Unparseable Error Codes row"):
+            documented_error_codes(docs)
+
+    def test_a_heading_inside_a_code_fence_does_not_end_the_section(self):
+        # A `# comment` in an example would otherwise stop the read before the rows below it.
+        docs = error_codes_docs(_CODE_TO_ERROR).replace(
+            "The per-endpoint tables below.",
+            "```sh\n# a shell comment\n```\n\n| `after_the_fence` | 400 | Still read. |",
+        )
+
+        assert "after_the_fence" in documented_error_codes(docs)
+
+    def test_a_pipe_inside_a_code_fence_is_not_a_row(self):
+        docs = error_codes_docs(_CODE_TO_ERROR).replace(
+            "The per-endpoint tables below.", "```\n| a | b |\n```"
+        )
+        assert "| a | b |" in docs  # the fixture really changed
+
+        assert documented_error_codes(docs) == set(_CODE_TO_ERROR)
+
+    def test_an_aligned_separator_row_is_accepted(self):
+        docs = error_codes_docs(_CODE_TO_ERROR).replace("|---|---|---|", "| :--- | :---: | --- |")
+        assert "| :--- |" in docs  # the fixture really changed
+
+        assert documented_error_codes(docs) == set(_CODE_TO_ERROR)
+
+    def test_too_few_codes_fails_loudly(self):
+        docs = error_codes_docs(["not_found", "unauthorized", "rate_limited"])
+        with pytest.raises(AssertionError, match="Parsed only 3 error codes"):
+            documented_error_codes(docs)
+
+    def test_missing_sentinel_fails_loudly(self):
+        docs = error_codes_docs(code for code in _CODE_TO_ERROR if code != "not_found")
+        with pytest.raises(AssertionError, match="not_found is missing"):
+            documented_error_codes(docs)
+
+
+class TestErrorCodeComparison:
+    def test_a_missing_registry_entry_is_reported(self):
+        """Acceptance criterion: dropping any mapped code makes the check fail."""
+        for code in _CODE_TO_ERROR:
+            broken_registry = {k: v for k, v in _CODE_TO_ERROR.items() if k != code}
+
+            assert untyped(set(_CODE_TO_ERROR), broken_registry) == {code}
+
+    def test_a_newly_documented_code_is_reported(self):
+        documented = set(_CODE_TO_ERROR) | {"brand_new_code"}
+
+        assert untyped(documented, _CODE_TO_ERROR) == {"brand_new_code"}
+
+    def test_full_registry_reports_nothing(self):
+        assert untyped(set(_CODE_TO_ERROR), _CODE_TO_ERROR) == set()
+
+    def test_a_code_the_docs_do_not_list_is_not_required(self):
+        # The registry can be a superset of the docs, like COVERAGE of the spec.
+        assert untyped(set(_CODE_TO_ERROR) - {"not_found"}, _CODE_TO_ERROR) == set()
 
 
 class TestCoverageMapHonesty:

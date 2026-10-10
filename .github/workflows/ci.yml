@@ -43,8 +43,10 @@ jobs:
       - name: Test
         run: uv run pytest
 
-  # The spec drift-guard: fails when the live API has endpoints the SDK doesn't cover.
-  # The only job that reaches the live platform (a single GET of the public spec);
+  # The drift-guard: fails when the live API has endpoints the SDK doesn't cover, or the
+  # live docs list error codes the SDK has no typed exception for (#265).
+  # The only job that reaches the live platform (one GET each of the public spec and
+  # the public prose docs);
   # actionlint below also leaves the runner, but only to a pinned linter image.
   drift:
     name: drift-guard
@@ -54,7 +56,7 @@ jobs:
       - uses: astral-sh/setup-uv@v10.2.0
       - name: Install dependencies
         run: uv sync --locked
-      - name: Check the SDK covers the live API
+      - name: Check the SDK covers the live API and its error codes
         run: uv run pytest -m live
 
   # Fleet Bot Identity: a commit authored by this repo's bot carries no
