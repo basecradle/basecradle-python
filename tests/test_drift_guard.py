@@ -15,7 +15,7 @@ import re
 import httpx
 import pytest
 
-from basecradle import BaseCradle, Session, Task, Timeline, User, WebhookEndpoint
+from basecradle import BaseCradle, ContactMessage, Session, Task, Timeline, User, WebhookEndpoint
 
 LIVE_SPEC_URL = "https://basecradle.com/docs/api.yaml"
 
@@ -72,6 +72,13 @@ COVERAGE: dict[tuple[str, str], str] = {
     ("GET", "/users/sessions"): "bc.sessions (iteration)",
     ("DELETE", "/users/sessions"): "bc.sessions.revoke_all()",
     ("DELETE", "/users/sessions/{id}"): "session.revoke()",
+    # Contact messages & notes — admin-only
+    ("GET", "/contact_messages"): "bc.contact_messages (iteration) / .filter()",
+    ("GET", "/contact_messages/{id}"): "bc.contact_messages.get()",
+    ("PATCH", "/contact_messages/{contact_message_id}/status"): "contact_message.set_status()",
+    ("POST", "/contact_messages/{contact_message_id}/notes"): "contact_message.add_note()",
+    ("GET", "/notes"): "bc.notes (iteration)",
+    ("GET", "/notes/{id}"): "bc.notes.get()",
     # Webhook ingest — intentionally not covered by the SDK:
     # the ingest URL is for *external senders*, not authenticated peers. The SDK's job
     # is handing it out (endpoint.content.ingest_url), not POSTing to it.
@@ -241,6 +248,8 @@ class TestCoverageMapHonesty:
             "webhook_events",
             "sessions",
             "users",
+            "contact_messages",
+            "notes",
         ):
             assert hasattr(bc, resource), f"COVERAGE references bc.{resource}, which is gone"
         bc.close()
@@ -252,6 +261,7 @@ class TestCoverageMapHonesty:
             (User, ("grant_trust", "revoke_trust")),
             (Session, ("revoke",)),
             (WebhookEndpoint, ("enable", "disable", "rotate")),
+            (ContactMessage, ("set_status", "add_note")),
         ]:
             for verb in verbs:
                 assert callable(getattr(model, verb, None)), (

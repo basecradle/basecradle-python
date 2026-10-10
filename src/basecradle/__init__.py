@@ -4,9 +4,15 @@ https://basecradle.com · API docs: https://basecradle.com/docs/api
 """
 
 from basecradle._client import AsyncBaseCradle, BaseCradle
+from basecradle._contact_messages import (
+    AsyncContactMessagesResource,
+    ContactMessage,
+    ContactMessagesResource,
+)
 from basecradle._dashboard import (
     Dashboard,
     DashboardAccount,
+    DashboardAdmin,
     DashboardDocumentation,
     DashboardEnvironment,
     DashboardInteraction,
@@ -31,6 +37,7 @@ from basecradle._exceptions import (
     InvalidRequestError,
     InvalidSignatureError,
     MissingTokenError,
+    NotAnAdminError,
     NotAViewerError,
     NotFoundError,
     NotTaskAuthorError,
@@ -43,6 +50,7 @@ from basecradle._exceptions import (
     UnauthorizedError,
     ValidationError,
 )
+from basecradle._headers import RequestHeaders
 from basecradle._items import (
     Asset,
     AssetContent,
@@ -62,6 +70,7 @@ from basecradle._items import (
     TasksResource,
 )
 from basecradle._models import ApiObject
+from basecradle._notes import AsyncNotesResource, Note, NotesResource
 from basecradle._sessions import AsyncSessionsResource, Session, SessionsResource
 from basecradle._timelines import (
     AsyncTimelinesResource,
@@ -93,8 +102,10 @@ __all__ = [
     "Asset",
     "AssetContent",
     "AssetFile",
+    "ContactMessage",
     "Dashboard",
     "DashboardAccount",
+    "DashboardAdmin",
     "DashboardDocumentation",
     "DashboardEnvironment",
     "DashboardInteraction",
@@ -106,6 +117,8 @@ __all__ = [
     "Item",
     "Message",
     "MessageContent",
+    "Note",
+    "RequestHeaders",
     "Session",
     "Task",
     "TaskContent",
@@ -121,8 +134,10 @@ __all__ = [
     "WebhookVerification",
     # Sync resources
     "AssetsResource",
+    "ContactMessagesResource",
     "ItemsResource",
     "MessagesResource",
+    "NotesResource",
     "SessionsResource",
     "TasksResource",
     "TimelinesResource",
@@ -131,8 +146,10 @@ __all__ = [
     "WebhookEventsResource",
     # Async resources
     "AsyncAssetsResource",
+    "AsyncContactMessagesResource",
     "AsyncItemsResource",
     "AsyncMessagesResource",
+    "AsyncNotesResource",
     "AsyncSessionsResource",
     "AsyncTasksResource",
     "AsyncTimelinesResource",
@@ -152,6 +169,7 @@ __all__ = [
     "NotAViewerError",
     "NotTimelineOwnerError",
     "NotTaskAuthorError",
+    "NotAnAdminError",
     "TimelineLockedError",
     "NotFoundError",
     "ConflictError",

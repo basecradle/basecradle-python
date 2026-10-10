@@ -15,6 +15,7 @@ import basecradle
 from basecradle import (
     AsyncBaseCradle,
     BaseCradle,
+    ContactMessage,
     Session,
     Timeline,
     User,
@@ -32,6 +33,8 @@ RESOURCE_NAMES = (
     "webhook_events",
     "sessions",
     "users",
+    "contact_messages",
+    "notes",
 )
 
 
@@ -155,14 +158,15 @@ class TestModelParity:
         model_twins = [
             name
             for name in async_names
-            if name.removeprefix("Async") in ("Timeline", "User", "Session", "WebhookEndpoint")
+            if name.removeprefix("Async")
+            in ("Timeline", "User", "Session", "WebhookEndpoint", "ContactMessage", "Note")
         ]
         assert model_twins == [], f"Async model twins must not exist: {model_twins}"
 
     def test_verb_carrying_models_have_no_async_variants(self):
         import basecradle
 
-        for model in (Timeline, User, Session, WebhookEndpoint):
+        for model in (Timeline, User, Session, WebhookEndpoint, ContactMessage):
             assert not hasattr(basecradle, f"Async{model.__name__}")
 
 
@@ -178,6 +182,8 @@ class TestResourceMethodParity:
         ("WebhookEventsResource", "AsyncWebhookEventsResource"),
         ("SessionsResource", "AsyncSessionsResource"),
         ("UsersResource", "AsyncUsersResource"),
+        ("ContactMessagesResource", "AsyncContactMessagesResource"),
+        ("NotesResource", "AsyncNotesResource"),
     ]
 
     @pytest.mark.parametrize(("sync_name", "async_name"), SYNC_ASYNC_PAIRS)

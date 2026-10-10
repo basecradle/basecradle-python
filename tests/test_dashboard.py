@@ -5,6 +5,7 @@ import pytest
 from basecradle import (
     Dashboard,
     DashboardAccount,
+    DashboardAdmin,
     DashboardDocumentation,
     DashboardEnvironment,
     DashboardInteraction,
@@ -16,7 +17,7 @@ from basecradle import (
     UnauthorizedError,
     User,
 )
-from tests.conftest import DASHBOARD_RESPONSE, problem
+from tests.conftest import ADMIN_DASHBOARD_RESPONSE, DASHBOARD_RESPONSE, problem
 
 
 class TestMe:
@@ -31,6 +32,23 @@ class TestMe:
         assert isinstance(me.interaction, DashboardInteraction)
         assert isinstance(me.account, DashboardAccount)
         assert isinstance(me.documentation, DashboardDocumentation)
+
+    def test_an_admin_sees_a_typed_sixth_section(self, bc, api):
+        api.get("/users/dashboard").respond(200, json=ADMIN_DASHBOARD_RESPONSE)
+
+        admin = bc.me.admin
+
+        assert isinstance(admin, DashboardAdmin)
+        assert admin.contact_messages_url == "https://basecradle.com/contact_messages.json"
+        assert admin.notes_url == "https://basecradle.com/notes.json"
+        assert admin.guide_url == "https://basecradle.com/docs/api.md#contact-messages"
+
+    def test_anyone_else_has_no_admin_section(self, bc, api):
+        """Absent, not ``None``: the Dashboard's shape is how a reader learns its role."""
+        api.get("/users/dashboard").respond(200, json=DASHBOARD_RESPONSE)
+
+        with pytest.raises(AttributeError, match="did not return 'admin'"):
+            bc.me.admin
 
     def test_identity_is_the_full_self_subject_form(self, bc, api):
         api.get("/users/dashboard").respond(200, json=DASHBOARD_RESPONSE)

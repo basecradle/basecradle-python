@@ -8,6 +8,44 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 ## [Unreleased]
 
+### Added
+
+- **Contact messages and notes: the platform's first admin-only surface** (#262, after
+  [basecradle#663](https://github.com/basecradle/basecradle/pull/663)). Six operations, on
+  both clients:
+
+  ```python
+  for message in bc.contact_messages.filter(status="received"):  # GET /contact_messages
+      message.add_note(body="Looks genuine. Replied by email.")  # POST …/notes → Note
+      message.set_status("closed")                               # PATCH …/status
+  bc.contact_messages.get(uuid)                                  # GET /contact_messages/{uuid}
+  for note in bc.notes: ...                                      # GET /notes
+  bc.notes.get(uuid)                                             # GET /notes/{uuid}
+  ```
+
+  `ContactMessage` and `Note` are flat top-level records, read wire-exact. A message's
+  `user` is a `User`, or `None` for a visitor without an account. Its `notes` are `Note`
+  objects embedded in full, and `data` is the wire's own `dict` of vendor slots, left
+  unmodelled on purpose. `set_status()` adopts the whole record the API returns.
+  `add_note()` returns the new `Note` and appends it to `notes`. A note never changes once
+  written.
+- **`NotAnAdminError`** (`not_an_admin`, HTTP 403, under `ForbiddenError`). Every contact
+  message and note operation raises it for anyone who is not an admin.
+- **`bc.me.admin`**, the Dashboard's sixth section, typed as `DashboardAdmin`
+  (`contact_messages_url`, `notes_url`, `guide_url`). It is present only for an admin. For
+  anyone else, reading `bc.me.admin` raises `AttributeError`, like any field the API did
+  not return.
+- **`RequestHeaders`** is the class behind every stored request's headers: lookup folds
+  case, and `repr()` prints names, never values. It is generic over the value type. A
+  contact message's `headers` is `RequestHeaders[str | None]`, because the platform can
+  record a header with a `null` value. `WebhookEventHeaders` is now
+  `RequestHeaders[str]`, with the same lookup, repr and `copy()` as before. The one
+  visible difference is the wording of a missing header's `KeyError`, which now says
+  "on this request" where it said "on this delivery".
+- **Model fields annotated `Model | None` now wrap**, so a nested record that may be `null`
+  comes back as its model when present and `None` when not. `ContactMessage.user` is the
+  first such field.
+
 ### Security
 
 - **`repr()` of a webhook delivery's headers no longer prints their values** (#246).

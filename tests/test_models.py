@@ -108,6 +108,29 @@ class TestListWrapping:
         assert user.tags == ["a", "b"]
 
 
+class TestNullableWrapping:
+    """field: Model | None wraps a dict and keeps null — established for ContactMessage.user."""
+
+    class Submission(ApiObject):
+        sender: User | None
+
+    def test_a_present_value_wraps(self):
+        sender = self.Submission({"sender": DIRECTORY_FORM}).sender
+        assert isinstance(sender, User)
+        assert sender.handle == "john"
+
+    def test_null_stays_none(self):
+        assert self.Submission({"sender": None}).sender is None
+
+    def test_a_union_of_two_models_is_not_guessed(self):
+        """Only ``Model | None`` is unambiguous; anything wider reads raw."""
+
+        class Either(ApiObject):
+            party: User | Trust
+
+        assert Either({"party": DIRECTORY_FORM}).party == DIRECTORY_FORM
+
+
 class TestClientPropagation:
     """Models built by the client carry it, so resource verbs can call the API."""
 

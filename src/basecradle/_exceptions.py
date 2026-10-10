@@ -25,6 +25,7 @@ __all__ = [
     "NotAViewerError",
     "NotTimelineOwnerError",
     "NotTaskAuthorError",
+    "NotAnAdminError",
     "TimelineLockedError",
     "NotFoundError",
     "ConflictError",
@@ -123,6 +124,10 @@ class NotTaskAuthorError(ForbiddenError):
     """``not_task_author`` — cancelling a task requires being its author (or an admin)."""
 
 
+class NotAnAdminError(ForbiddenError):
+    """``not_an_admin`` — the surface is admin-only (contact messages and notes)."""
+
+
 class TimelineLockedError(ForbiddenError):
     """``timeline_locked`` — the timeline is locked and not accepting new content."""
 
@@ -219,6 +224,7 @@ _CODE_TO_ERROR: dict[str, type[BaseCradleError]] = {
     "not_a_viewer": NotAViewerError,
     "not_timeline_owner": NotTimelineOwnerError,
     "not_task_author": NotTaskAuthorError,
+    "not_an_admin": NotAnAdminError,
     "timeline_locked": TimelineLockedError,
     "not_found": NotFoundError,
     "task_not_pending": TaskNotPendingError,

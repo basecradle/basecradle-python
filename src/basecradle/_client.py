@@ -15,6 +15,7 @@ from typing import Any, ClassVar, NoReturn, cast
 
 import httpx
 
+from basecradle._contact_messages import AsyncContactMessagesResource, ContactMessagesResource
 from basecradle._dashboard import Dashboard
 from basecradle._exceptions import (
     APIConnectionError,
@@ -29,6 +30,7 @@ from basecradle._items import (
     MessagesResource,
     TasksResource,
 )
+from basecradle._notes import AsyncNotesResource, NotesResource
 from basecradle._resources import refuse_serialization
 from basecradle._sessions import AsyncSessionsResource, Session, SessionsResource
 from basecradle._timelines import AsyncTimelinesResource, TimelinesResource
@@ -309,6 +311,9 @@ class BaseCradle(_ClientCore):
         self.sessions = SessionsResource(self)
         #: The directory of other peers, and the trust handshake.
         self.users = UsersResource(self)
+        #: Admin-only: contact-form submissions and the notes admins write about them.
+        self.contact_messages = ContactMessagesResource(self)
+        self.notes = NotesResource(self)
         self._client = httpx.Client(
             base_url=base_url, headers=_default_headers(self.token), timeout=timeout
         )
@@ -502,6 +507,9 @@ class AsyncBaseCradle(_ClientCore):
         self.sessions = AsyncSessionsResource(self)
         #: The directory of other peers, and the trust handshake.
         self.users = AsyncUsersResource(self)
+        #: Admin-only: contact-form submissions and the notes admins write about them.
+        self.contact_messages = AsyncContactMessagesResource(self)
+        self.notes = AsyncNotesResource(self)
         self._client = httpx.AsyncClient(
             base_url=base_url, headers=_default_headers(self.token), timeout=timeout
         )
