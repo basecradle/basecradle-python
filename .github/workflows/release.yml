@@ -77,7 +77,7 @@ jobs:
           fi
 
           echo "Tag $GITHUB_REF_NAME is main's tip (${tagged:0:7})."
-      - uses: astral-sh/setup-uv@v10.2.0
+      - uses: astral-sh/setup-uv@v10.3.0
       - name: Build the wheel and sdist
         run: uv build
       # The tag is only a trigger: `uv build` derives the version from
