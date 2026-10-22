@@ -341,7 +341,8 @@ asyncio.run(main())
 Requires [uv](https://docs.astral.sh/uv/).
 
 ```bash
-uv sync                  # install everything (creates .venv)
+uv sync --locked         # install everything (creates .venv; fails if it drifts from uv.lock, as CI does)
+uv lock                  # after changing a dependency in pyproject.toml — commit uv.lock with it
 uv run pytest            # tests (offline — the default)
 uv run pytest -m live    # the drift-guard (checks the SDK covers the live API and its error codes)
 uv run ruff check .      # lint
