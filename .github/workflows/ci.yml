@@ -209,7 +209,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          declared="$(grep -E '^Seven shared artifacts are carried verbatim' CLAUDE.md \
+          # The inventory is the first paragraph under the heading, found by the heading
+          # rather than by its opening words: those carry the artifact count, which
+          # changes every time shared law gains an artifact (#277).
+          declared="$(awk '/^### Propagation$/ { found = 1; next } found && NF { print; exit }' CLAUDE.md \
             | grep -oE '\.github/workflows/[a-z-]+\.yml' | sed 's|.*/||' | sort -u)"
           configured="$(printf '%s' "$SHARED_STUBS" | tr ' ' '\n' | sed '/^$/d' | sort -u)"
 
