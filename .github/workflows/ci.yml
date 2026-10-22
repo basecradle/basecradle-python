@@ -124,7 +124,7 @@ jobs:
             # here-string still lets a grep error or a failed temp file read as
             # no match too; a pattern match has no I/O to fail. The leading
             # newline anchors the first line; ${message,,} ignores case.
-            if printf '%s\n' "$message" | grep -qi '^Co-Authored-By:'; then
+            if [[ $'\n'"${message,,}" == *$'\n'co-authored-by:* ]]; then
               bad+=("$(git show -s --format='%h %s' "$sha")")
             fi
           done
