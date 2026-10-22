@@ -118,7 +118,13 @@ jobs:
             # the final paragraph, so a trailer with any paragraph after it
             # slips through. A line-anchored scan fails closed instead.
             message=$(git show -s --format=%B "$sha")
-            if printf '%s\n' "$message" | grep -qi '^Co-Authored-By:'; then
+            # Matched in bash, never `printf ... | grep -q`: grep -q exits on its
+            # first match, printf dies of SIGPIPE on a message longer than the
+            # pipe buffer, and pipefail reads that as "no trailer" (#286). A
+            # here-string still lets a grep error or a failed temp file read as
+            # no match too; a pattern match has no I/O to fail. The leading
+            # newline anchors the first line; ${message,,} ignores case.
+            if [[ $'\n'"${message,,}" == *$'\n'co-authored-by:* ]]; then
               bad+=("$(git show -s --format='%h %s' "$sha")")
             fi
           done
