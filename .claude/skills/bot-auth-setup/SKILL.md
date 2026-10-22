@@ -31,7 +31,7 @@ The installed helper's modes are **`--token`** (the default, so a bare call work
 **On a laptop**, the shared fleet helper takes the slug instead:
 
 ```bash
-export GH_TOKEN="$(~/Documents/claude-workspace/2026-06-05-fleet-identity/gh-app-token basecradle-python-ai)"
+export GH_TOKEN="$(~/Documents/claude-workspace/shared/fleet-identity/gh-app-token basecradle-python-ai)"
 ```
 
 That helper and its registry (`fleet-apps.json`) live in the Claude workspace; `--author` prints the commit-author string there too. Never wrap either minter in `2>/dev/null` — on a laptop that hides a "command not found" and lets `gh` fall through silently to the ambient `drawkkwast` login.
