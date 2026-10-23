@@ -333,8 +333,9 @@ def _idempotency_headers(idempotency_key: str | None) -> dict[str, str] | None:
     Shared by every create method (here and in ``_webhooks``) so the header name lives in
     exactly one place. The platform treats the value opaquely (a UUID is recommended); a
     replay of the same key returns the original record rather than creating a duplicate.
+    An empty string is no key, so it sends no header and the create stays unkeyed.
     """
-    if idempotency_key is None:
+    if not idempotency_key:
         return None
     return {"Idempotency-Key": idempotency_key}
 

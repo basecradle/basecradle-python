@@ -165,6 +165,15 @@ class TestEndpointCreate:
 
         assert "Idempotency-Key" not in route.calls.last.request.headers
 
+    def test_create_with_empty_idempotency_key_sends_no_header(self, bc, api, timeline):
+        route = api.post(f"/timelines/{TIMELINE_UUID}/webhook_endpoints").respond(
+            201, json={"webhook_endpoint": webhook_endpoint_payload()}
+        )
+
+        timeline.webhook_endpoints.create(description="CI deploys", idempotency_key="")
+
+        assert "Idempotency-Key" not in route.calls.last.request.headers
+
     def test_verification_block_is_typed(self, bc, api, timeline):
         api.post(f"/timelines/{TIMELINE_UUID}/webhook_endpoints").respond(
             201, json={"webhook_endpoint": webhook_endpoint_payload()}

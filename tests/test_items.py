@@ -342,6 +342,16 @@ class TestCreateIdempotencyKey:
 
         assert "Idempotency-Key" not in route.calls.last.request.headers
 
+    def test_empty_key_sends_no_header(self, bc, api, timeline):
+        """``idempotency_key=""`` is unkeyed: no header, so no retry either."""
+        route = api.post(f"/timelines/{TIMELINE_UUID}/messages").respond(
+            201, json={"message": message_payload()}
+        )
+
+        timeline.messages.create(body="hi", idempotency_key="")
+
+        assert "Idempotency-Key" not in route.calls.last.request.headers
+
 
 class TestCreateAsset:
     def test_upload_from_path_sends_multipart(self, bc, api, timeline, tmp_path):

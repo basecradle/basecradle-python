@@ -38,6 +38,15 @@ class TestConstruction:
         with pytest.raises(basecradle.BaseCradleError):
             BaseCradle()
 
+    def test_negative_max_retries_is_refused(self):
+        """A negative count of retries means nothing, so it is refused, as in Ruby."""
+        with pytest.raises(ValueError, match="max_retries must be >= 0"):
+            BaseCradle(token=FAKE_TOKEN, max_retries=-1)
+
+    def test_zero_max_retries_is_allowed(self):
+        bc = BaseCradle(token=FAKE_TOKEN, max_retries=0)
+        bc.close()
+
     def test_start_here_is_none_without_login(self):
         bc = BaseCradle(token=FAKE_TOKEN)
         assert bc.start_here is None
@@ -183,6 +192,19 @@ class TestRetries:
             bc.request("POST", "/timelines/t/messages", json={})
 
         assert route.call_count == 1  # a lost unkeyed POST must not be blindly re-sent
+        bc.close()
+
+    def test_empty_idempotency_key_is_no_key(self, api):
+        """An empty key names no create to dedupe against, so it is never retried."""
+        bc = BaseCradle(token=FAKE_TOKEN, max_retries=3)
+        route = api.post("/timelines/t/messages").mock(
+            side_effect=httpx.ConnectError("connection refused")
+        )
+
+        with pytest.raises(APIConnectionError):
+            bc.request("POST", "/timelines/t/messages", json={}, headers={"Idempotency-Key": ""})
+
+        assert route.call_count == 1
         bc.close()
 
     def test_get_is_retried(self, api):
