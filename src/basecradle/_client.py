@@ -218,13 +218,17 @@ class _ClientCore:
         definition) or a create carrying an ``Idempotency-Key`` (the platform dedupes it).
         An unkeyed ``POST`` is never retried — a lost response might mean the record *was*
         created, and a blind re-send would duplicate it. An empty key is no key: it names
-        no logical create for the platform to dedupe against.
+        no logical create for the platform to dedupe against. The header is found in any
+        case (``idempotency-key`` too), as HTTP names are case-insensitive and are sent as
+        written.
         """
         if not isinstance(exc, self._RETRYABLE_ERRORS):
             return False
         if method.upper() == "GET":
             return True
-        return headers is not None and bool(headers.get("Idempotency-Key"))
+        return headers is not None and any(
+            value for name, value in headers.items() if name.lower() == "idempotency-key"
+        )
 
     @staticmethod
     def _retry_backoff(attempt: int) -> float:

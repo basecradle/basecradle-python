@@ -55,6 +55,12 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
   present rather than what it held, `max_retries` would re-send that create. Now nothing is
   sent and the create is never auto-retried, the same as passing no key; a request made
   through `request()` with an empty `Idempotency-Key` header is not retried either.
+- **The retry gate finds `Idempotency-Key` in any case** (found reviewing #297's retry
+  gate). A request made through `request()` with `headers={"idempotency-key": key}` was
+  sent keyed (header names are case-insensitive, and the platform deduped it) but was
+  never auto-retried, because the gate looked the header up by its exact spelling.
+  basecradle-ruby's gate was already case-insensitive (`Net::HTTP` folds header names).
+  The typed creates always spell it `Idempotency-Key`, so they were not affected.
 - **The package docstring states the identity sentence verbatim** (#297, the mirror of
   basecradle-ruby#137). `basecradle.__doc__` opened with a shortened third variant of the
   sentence `pyproject.toml` and the README carry. It now reads exactly as the package
