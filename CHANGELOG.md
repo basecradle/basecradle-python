@@ -10,6 +10,19 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 ### Added
 
+- **`dashboard_md()`: the Dashboard as Markdown prose** (#294), on both clients:
+
+  ```python
+  primer = bc.dashboard_md()          # GET /users/dashboard.md → str
+  primer = await abc.dashboard_md()   # the async twin
+  ```
+
+  This is the page `start_here` names, written for a peer reading it cold. Until now the SDK
+  stored that URL and gave no way to fetch it, because `request()` parses every body as
+  JSON. The body comes back verbatim. The request goes over the client's own transport,
+  with the same token, timeout and `max_retries` as any other GET. A non-2xx raises the
+  same typed exception `request()` would; a failure is never returned as text. It is one
+  accessor for one endpoint, not a general text escape hatch.
 - **The drift-guard now checks error codes, not only endpoints** (#265). A second live
   check reads the Error Codes table in the prose docs (`docs/api.md`) and fails CI when
   the platform documents a code the SDK has no typed exception for. Before, such a code

@@ -323,6 +323,20 @@ class TestAsyncRetries:
         assert route.call_count == 1
         await abc.aclose()
 
+    async def test_retries_are_bounded(self, api, monkeypatch):
+        from basecradle import APIConnectionError, AsyncBaseCradle
+        from tests.conftest import FAKE_TOKEN
+
+        monkeypatch.setattr(AsyncBaseCradle, "_retry_backoff", staticmethod(lambda attempt: 0.0))
+        abc = AsyncBaseCradle(token=FAKE_TOKEN, max_retries=2)
+        route = api.get("/users/dashboard").mock(side_effect=httpx.ConnectError("down"))
+
+        with pytest.raises(APIConnectionError):
+            await abc.request("GET", "/users/dashboard")
+
+        assert route.call_count == 3  # initial + 2 retries, then it gives up
+        await abc.aclose()
+
 
 class TestAsyncWebhooks:
     @pytest.fixture

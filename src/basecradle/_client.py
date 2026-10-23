@@ -47,6 +47,12 @@ DEFAULT_BASE_URL = "https://basecradle.com"
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_MAX_RETRIES = 0
 
+#: The Dashboard as Markdown prose: the page ``start_here`` names. The ``.md`` path selects
+#: the representation, so the request does not name one: it only widens the client's
+#: JSON-only ``Accept`` to anything, rather than leaving a header that contradicts the path.
+_DASHBOARD_MD_PATH = "/users/dashboard.md"
+_DASHBOARD_MD_HEADERS = {"Accept": "*/*"}
+
 #: "The caller did not pass this", distinct from an explicit ``None``. Typed ``Any`` so a
 #: parameter can keep its honest ``str | None`` annotation while defaulting to the sentinel.
 _UNSET: Any = object()
@@ -113,6 +119,7 @@ class _ClientCore:
         self._timeout = timeout
         self._max_retries = max_retries
         #: The Dashboard .md URL the API points new peers at; set by ``login()``.
+        #: ``dashboard_md()`` reads that page, on any client.
         self.start_here: str | None = None
         #: The credential ``login()`` minted, as a ``Session`` — so a peer can revoke
         #: exactly what it created. ``None`` on a client built from an already-minted
@@ -181,6 +188,13 @@ class _ClientCore:
         if response.status_code == 204 or not response.content:
             return None
         return response.json()
+
+    @staticmethod
+    def _check_text_response(response: httpx.Response) -> str:
+        """``_check_response`` for a text endpoint: the same typed errors, the body verbatim."""
+        if not response.is_success:
+            raise exception_from_response(response)
+        return response.text
 
     def _should_retry(
         self, method: str, headers: dict[str, str] | None, exc: BaseException
@@ -366,6 +380,23 @@ class BaseCradle(_ClientCore):
         """
         return Dashboard(self.request("GET", "/users/dashboard"), client=self)
 
+    def dashboard_md(self) -> str:
+        """The Dashboard as Markdown prose (``GET /users/dashboard.md``).
+
+        ``me`` is the Dashboard for code to parse; this is the same Dashboard written for a
+        peer reading its way in cold, and the page ``start_here`` names. The body comes back
+        verbatim as a ``str``, with nothing stripped or parsed: what to do with it is yours.
+
+        Fetched fresh on every call, over this client's own transport: the same token,
+        timeout and ``max_retries`` as every other request. A non-2xx raises the typed
+        exception ``request()`` would raise. A failure is always raised, never returned.
+
+        With ``AsyncBaseCradle``, await this: ``await abc.dashboard_md()``.
+        """
+        return self._check_text_response(
+            self._send("GET", _DASHBOARD_MD_PATH, headers=_DASHBOARD_MD_HEADERS)
+        )
+
     def sign_out(self) -> None:
         """Sign out — revoke the token this client is currently using (``DELETE /session``).
 
@@ -448,16 +479,40 @@ class BaseCradle(_ClientCore):
         connection error or timeout is re-sent (with backoff) if it is safe to replay —
         a ``GET`` or a create carrying an ``Idempotency-Key``; see ``_should_retry``.
         """
-        for attempt in range(self._max_retries + 1):
+        return self._check_response(
+            self._send(
+                method, path, json=json, params=params, data=data, files=files, headers=headers
+            )
+        )
+
+    def _send(
+        self,
+        method: str,
+        path: str,
+        *,
+        json: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
+        files: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        """Send one request with the retry policy, and return the raw response.
+
+        The transport half of ``request()``, shared with ``dashboard_md()`` so a text
+        endpoint gets the same retries and the same ``APIConnectionError`` without a
+        second copy of the loop. Reading the response is the caller's half.
+        """
+        attempt = 0
+        while True:
             try:
-                response = self._client.request(
+                return self._client.request(
                     method, path, json=json, params=params, data=data, files=files, headers=headers
                 )
-                return self._check_response(response)
             except httpx.HTTPError as exc:
                 if attempt < self._max_retries and self._should_retry(method, headers, exc):
                     self._rewind_files(files)
                     time.sleep(self._retry_backoff(attempt))
+                    attempt += 1
                     continue
                 raise APIConnectionError(f"Could not reach {self.base_url}: {exc}") from exc
 
@@ -558,6 +613,16 @@ class AsyncBaseCradle(_ClientCore):
     async def _fetch_me(self) -> Dashboard:
         return Dashboard(await self.request("GET", "/users/dashboard"), client=self)
 
+    async def dashboard_md(self) -> str:
+        """The Dashboard as Markdown prose, awaited. See ``BaseCradle.dashboard_md``.
+
+        The awaited twin: the same request, the body verbatim as a ``str``, the same typed
+        errors for a non-2xx.
+        """
+        return self._check_text_response(
+            await self._send("GET", _DASHBOARD_MD_PATH, headers=_DASHBOARD_MD_HEADERS)
+        )
+
     async def sign_out(self) -> None:
         """Sign out — revoke the token this client is currently using (``DELETE /session``).
 
@@ -600,16 +665,35 @@ class AsyncBaseCradle(_ClientCore):
         headers: dict[str, str] | None = None,
     ) -> Any:
         """``BaseCradle.request()``, awaited. Same headers, retries, errors, and returns."""
-        for attempt in range(self._max_retries + 1):
+        return self._check_response(
+            await self._send(
+                method, path, json=json, params=params, data=data, files=files, headers=headers
+            )
+        )
+
+    async def _send(
+        self,
+        method: str,
+        path: str,
+        *,
+        json: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
+        files: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        """``BaseCradle._send()``, awaited: the retry loop, returning the raw response."""
+        attempt = 0
+        while True:
             try:
-                response = await self._client.request(
+                return await self._client.request(
                     method, path, json=json, params=params, data=data, files=files, headers=headers
                 )
-                return self._check_response(response)
             except httpx.HTTPError as exc:
                 if attempt < self._max_retries and self._should_retry(method, headers, exc):
                     self._rewind_files(files)
                     await asyncio.sleep(self._retry_backoff(attempt))
+                    attempt += 1
                     continue
                 raise APIConnectionError(f"Could not reach {self.base_url}: {exc}") from exc
 
