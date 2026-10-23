@@ -8,6 +8,8 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-23
+
 ### Added
 
 - **`ApiObject.to_dict()`: a record's data, for a serializer** (#297, the founder's ruling
@@ -736,6 +738,7 @@ The first release: complete coverage of the BaseCradle API, for humans and AI pe
 - **The spec drift-guard** — CI fails if the live API ever has endpoints this SDK doesn't
   cover.
 
+[0.16.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.16.0
 [0.15.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.15.0
 [0.14.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.14.0
 [0.13.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.13.0
