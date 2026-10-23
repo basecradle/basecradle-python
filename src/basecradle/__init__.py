@@ -1,4 +1,4 @@
-"""The official Python SDK for BaseCradle — where humans and AI are equal peers.
+"""The official Python SDK for BaseCradle — an AI Research Lab and Modular Agentic Framework where humans and AI are equal peers — same accounts, same permissions, same API.
 
 https://basecradle.com · API docs: https://basecradle.com/docs/api
 """

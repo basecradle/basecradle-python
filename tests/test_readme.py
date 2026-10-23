@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 import respx
 
+import basecradle
 from tests.conftest import (
     BASE_URL,
     DASHBOARD_MD,
@@ -33,6 +34,7 @@ from tests.conftest import (
 )
 
 README = Path(__file__).parent.parent / "README.md"
+PYPROJECT = README.parent / "pyproject.toml"
 
 
 def python_blocks() -> list[str]:
@@ -40,6 +42,25 @@ def python_blocks() -> list[str]:
     blocks = re.findall(r"```python\n(.*?)```", README.read_text(), flags=re.DOTALL)
     assert blocks, "README.md has no ```python code blocks"
     return blocks
+
+
+def test_the_identity_sentence_has_one_form():
+    """The package docstring and the README say exactly what ``pyproject.toml`` says.
+
+    Three hand-typed copies of one sentence drift into variants, which is how the
+    docstring became a third one (#297, the mirror of basecradle-ruby#137). The README's
+    copy links the platform name and is otherwise the same sentence.
+    """
+    pyproject = PYPROJECT.read_text(encoding="utf-8")  # em dashes: never the locale's guess
+    (summary,) = re.findall(r'^description = "(.+)"$', pyproject, flags=re.MULTILINE)
+    assert basecradle.__doc__ is not None
+    assert basecradle.__doc__.splitlines()[0] == summary
+    (readme_line,) = [
+        line
+        for line in README.read_text(encoding="utf-8").splitlines()
+        if line.startswith("The official Python SDK for ")
+    ]
+    assert readme_line.replace("[BaseCradle](https://basecradle.com)", "BaseCradle") == summary
 
 
 def hero_block() -> str:
