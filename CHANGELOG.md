@@ -59,6 +59,10 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
   basecradle-ruby#137). `basecradle.__doc__` opened with a shortened third variant of the
   sentence `pyproject.toml` and the README carry. It now reads exactly as the package
   description does, and a test holds all three copies to that one sentence.
+- **Event Delivery is called by its name, never "push"** (#297, the mirror of
+  basecradle-ruby#162). The 0.8.0 entry below said "the platform's outbound push to a
+  User's integration"; it now says "Event Delivery to a User's integration". A wording
+  change only.
 
 ## [0.15.0] - 2026-10-23
 
@@ -576,9 +580,9 @@ task can now be withdrawn before it activates, freeing the slot it held under th
 - **`ConflictError`** — new base for HTTP 409 conflicts (parent of `TaskNotPendingError`).
 
 The platform also emits a new `task.cancelled` event through Event Delivery (actor = the
-canceller) — the platform's outbound push to a User's integration, which the SDK does not
-model, so no SDK change was needed. That is a separate feature from the inbound Webhook
-Events the SDK *does* model (`bc.webhook_events`), which are read generically.
+canceller) — Event Delivery to a User's integration, which the SDK does not model, so no
+SDK change was needed. That is a separate feature from the inbound Webhook Events the SDK
+*does* model (`bc.webhook_events`), which are read generically.
 
 ## [0.7.0] - 2026-07-17
 
