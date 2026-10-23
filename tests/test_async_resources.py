@@ -491,7 +491,9 @@ class TestAsyncSessions:
         route = api.patch("/users/password").respond(204)
 
         result = await abc.change_password(
-            current_password="correct-horse-battery-staple", password="Tr0ub4dor&3-new"
+            current_password="correct-horse-battery-staple",
+            password="Tr0ub4dor&3-new",
+            password_confirmation="Tr0ub4dor&3-new",
         )
 
         assert result is None
@@ -505,7 +507,17 @@ class TestAsyncSessions:
         api.patch("/users/password").respond(422, json=problem("current_password_incorrect", 422))
 
         with pytest.raises(CurrentPasswordIncorrectError):
-            await abc.change_password(current_password="wrong", password="Tr0ub4dor&3-new")
+            await abc.change_password(
+                current_password="wrong",
+                password="Tr0ub4dor&3-new",
+                password_confirmation="Tr0ub4dor&3-new",
+            )
+
+    async def test_change_password_requires_the_confirmation_awaited(self, abc, api):
+        with pytest.raises(TypeError, match="password_confirmation"):
+            await abc.change_password(
+                current_password="correct-horse-battery-staple", password="Tr0ub4dor&3-new"
+            )
 
 
 class TestAsyncUsers:

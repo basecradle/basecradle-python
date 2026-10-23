@@ -39,6 +39,14 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
   refuses it, so code that passed a negative count to mean "no retries" must pass `0`. Both
   clients and both `login()` methods check it, and `login()` checks it before
   `POST /session`, so a bad count never mints a token it then loses.
+- **`change_password()` requires `password_confirmation`** (#297), on both clients. This
+  corrects how 0.10.0 shipped the ruling on #189. The capital pinned all three arguments
+  (`current_password`, `password`, `password_confirmation`) as explicit and required in both
+  SDKs, and Ruby shipped exactly that. This SDK shipped the confirmation optional, filled
+  in from `password` when omitted, with a `TypeError` for an explicit `None`. The fallback
+  and the `None` branch are gone. The confirmation is sent as given, and the platform
+  judges whether it matches. **To upgrade,** pass `password_confirmation=` on every call
+  that omitted it; until you do, those calls raise `TypeError` before any request is sent.
 
 ### Fixed
 
@@ -418,6 +426,9 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
   password raises `CurrentPasswordIncorrectError` — both error classes have shipped in the
   public API since 0.1.0 and now have a first-party raise site. All three arguments are
   keyword-only: they are interchangeable strings, and a positional swap would be silent.
+
+  **Since corrected** (#297): as of 0.16.0, `password_confirmation` is required, as #189
+  ruled. See the entry at the top of this file.
 
   A lost response leaves the outcome unknown: the request is not replayable, so
   `max_retries` never re-sends it, and a retry after an `APIConnectionError` may report

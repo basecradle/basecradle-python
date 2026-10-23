@@ -53,10 +53,6 @@ DEFAULT_MAX_RETRIES = 0
 _DASHBOARD_MD_PATH = "/users/dashboard.md"
 _DASHBOARD_MD_HEADERS = {"Accept": "*/*"}
 
-#: "The caller did not pass this", distinct from an explicit ``None``. Typed ``Any`` so a
-#: parameter can keep its honest ``str | None`` annotation while defaulting to the sentinel.
-_UNSET: Any = object()
-
 _MISSING_TOKEN_MESSAGE = (
     "No BaseCradle token available. Pass one explicitly with {cls}(token='bc_uat_...'), "
     "set the BASECRADLE_TOKEN environment variable, or mint a fresh token with "
@@ -262,35 +258,18 @@ class _ClientCore:
 
     @staticmethod
     def _password_payload(
-        current_password: str, password: str, password_confirmation: str | None
+        current_password: str, password: str, password_confirmation: str
     ) -> dict[str, str]:
-        """The body ``PATCH /users/password`` takes — the API requires all three fields.
+        """The body ``PATCH /users/password`` takes: the API's three required fields, as given.
 
-        An *omitted* ``password_confirmation`` falls back to ``password``. The confirmation
-        field exists to catch a human mistyping a new password into a second box; a caller
-        handing the same string to two keyword arguments is not that check. Passing it is
-        for when you *do* have a separate second entry to verify — then a difference
-        raises ``PasswordConfirmationMismatchError`` instead of being papered over here.
-
-        An explicit ``None`` is neither, so it raises: it means a caller wired up a second
-        entry (``password_confirmation=form.get("confirm")``) and got nothing back. Falling
-        back to ``password`` there would quietly change the password with no confirmation
-        at all — the one case the argument exists to prevent.
+        Nothing is defaulted. The capital pinned this signature for both SDKs on #189, so
+        the confirmation is always the caller's own, and the platform judges whether it
+        matches.
         """
-        if password_confirmation is _UNSET:
-            confirmation = password
-        elif password_confirmation is None:
-            raise TypeError(
-                "password_confirmation must be a string. Omit it entirely to confirm with "
-                "`password` itself; passing None means a second entry was expected and did "
-                "not arrive, which is never a confirmation."
-            )
-        else:
-            confirmation = password_confirmation
         return {
             "current_password": current_password,
             "password": password,
-            "password_confirmation": confirmation,
+            "password_confirmation": password_confirmation,
         }
 
     @classmethod
@@ -433,19 +412,17 @@ class BaseCradle(_ClientCore):
         *,
         current_password: str,
         password: str,
-        password_confirmation: str | None = _UNSET,
+        password_confirmation: str,
     ) -> None:
         """Change this account's password (``PATCH /users/password``). Returns ``None``.
 
         Proving you hold the current password is what authorizes the change — the token
         alone is not enough.
 
-        ``password_confirmation`` is optional: omit it and the new password confirms
-        itself, which is what a caller holding one string should do. Pass it when you have
-        a genuinely separate second entry, and a difference raises
-        ``PasswordConfirmationMismatchError`` rather than going through. Passing an
-        explicit ``None`` raises ``TypeError`` — it means a second entry was expected and
-        never arrived, which is not a confirmation.
+        All three arguments are required, as the API requires them and as #189 pinned them
+        for both SDKs. ``password_confirmation`` is sent as given, never filled in from
+        ``password``; a difference raises ``PasswordConfirmationMismatchError`` rather than
+        going through.
 
         .. note::
             **A password change signs nothing out.** Every session stays valid — this
@@ -657,7 +634,7 @@ class AsyncBaseCradle(_ClientCore):
         *,
         current_password: str,
         password: str,
-        password_confirmation: str | None = _UNSET,
+        password_confirmation: str,
     ) -> None:
         """Change this account's password, awaited. See ``BaseCradle.change_password``.
 

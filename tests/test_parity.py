@@ -109,8 +109,9 @@ class TestClientParity:
         async_params = inspect.signature(AsyncBaseCradle.change_password).parameters
         assert list(sync_params) == list(async_params)
 
-    def test_change_password_is_keyword_only_on_both_clients(self):
+    def test_change_password_is_keyword_only_and_required_on_both_clients(self):
         """Three interchangeable strings: a positional swap would be silent, on either client.
+        And all three are required, as the API and the Ruby SDK have them (#189).
 
         Names matching is not enough — dropping the bare ``*`` from one client keeps every
         name and order intact, so only the parameter *kinds* catch it.
@@ -120,6 +121,9 @@ class TestClientParity:
             for name in ("current_password", "password", "password_confirmation"):
                 assert params[name].kind is inspect.Parameter.KEYWORD_ONLY, (
                     f"{cls.__name__}.change_password({name}=...) became positional"
+                )
+                assert params[name].default is inspect.Parameter.empty, (
+                    f"{cls.__name__}.change_password({name}=...) gained a default"
                 )
 
     def test_constructor_signatures_match(self):
