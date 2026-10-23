@@ -94,6 +94,14 @@ class TestClientParity:
         async_params = inspect.signature(AsyncBaseCradle.sign_out).parameters
         assert list(sync_params) == list(async_params)
 
+    def test_dashboard_md_exists_on_both_clients(self):
+        """One accessor, both worlds: called on the sync client, awaited on the async one."""
+        assert not inspect.iscoroutinefunction(BaseCradle.dashboard_md)
+        assert inspect.iscoroutinefunction(AsyncBaseCradle.dashboard_md)
+        sync_params = inspect.signature(BaseCradle.dashboard_md).parameters
+        async_params = inspect.signature(AsyncBaseCradle.dashboard_md).parameters
+        assert list(sync_params) == list(async_params) == ["self"]
+
     def test_change_password_exists_on_both_clients(self):
         assert callable(BaseCradle.change_password)
         assert callable(AsyncBaseCradle.change_password)

@@ -1,8 +1,12 @@
 """bc.me — the Dashboard as the SDK's front door."""
 
+import httpx
 import pytest
 
 from basecradle import (
+    APIConnectionError,
+    BaseCradle,
+    BaseCradleError,
     Dashboard,
     DashboardAccount,
     DashboardAdmin,
@@ -17,7 +21,13 @@ from basecradle import (
     UnauthorizedError,
     User,
 )
-from tests.conftest import ADMIN_DASHBOARD_RESPONSE, DASHBOARD_RESPONSE, problem
+from tests.conftest import (
+    ADMIN_DASHBOARD_RESPONSE,
+    DASHBOARD_MD,
+    DASHBOARD_RESPONSE,
+    FAKE_TOKEN,
+    problem,
+)
 
 
 class TestMe:
@@ -156,3 +166,87 @@ class TestMe:
 
         with pytest.raises(UnauthorizedError):
             bc.me
+
+
+class TestDashboardMd:
+    """bc.dashboard_md() — the Dashboard as Markdown, the page ``start_here`` names."""
+
+    def test_returns_the_body_verbatim(self, bc, api):
+        api.get("/users/dashboard.md").respond(
+            200, text=DASHBOARD_MD, headers={"Content-Type": "text/markdown; charset=utf-8"}
+        )
+
+        primer = bc.dashboard_md()
+
+        assert primer == DASHBOARD_MD  # leading/trailing whitespace and the em dash survive
+
+    def test_a_body_that_looks_like_json_is_still_text(self, bc, api):
+        """The accessor reads text; it never tries a body as JSON, whatever it looks like."""
+        api.get("/users/dashboard.md").respond(200, text='{"identity": {"handle": "nova"}}')
+
+        assert bc.dashboard_md() == '{"identity": {"handle": "nova"}}'
+
+    def test_an_empty_body_is_an_empty_string_not_none(self, bc, api):
+        """``request()`` maps an empty body to ``None``; a text read keeps the ``str`` type."""
+        api.get("/users/dashboard.md").respond(200, text="")
+
+        assert bc.dashboard_md() == ""
+
+    def test_sends_the_clients_credentials_and_accepts_any_representation(self, bc, api):
+        """The ``.md`` path picks the format, so the JSON-only default ``Accept`` is widened."""
+        route = api.get("/users/dashboard.md").respond(200, text=DASHBOARD_MD)
+
+        bc.dashboard_md()
+
+        request = route.calls.last.request
+        assert request.headers["Authorization"] == f"Bearer {FAKE_TOKEN}"
+        assert request.headers["Accept"] == "*/*"
+        assert request.headers["User-Agent"].startswith("basecradle-python/")
+
+    def test_is_fetched_fresh_on_every_call(self, bc, api):
+        route = api.get("/users/dashboard.md").respond(200, text=DASHBOARD_MD)
+
+        bc.dashboard_md()
+        bc.dashboard_md()
+
+        assert route.call_count == 2
+
+    def test_a_problem_document_raises_the_typed_error(self, bc, api):
+        api.get("/users/dashboard.md").respond(
+            401, json=problem("unauthorized", 401, detail="Authentication is required.")
+        )
+
+        with pytest.raises(UnauthorizedError) as exc_info:
+            bc.dashboard_md()
+
+        assert exc_info.value.code == "unauthorized"
+
+    def test_a_bodyless_error_raises_with_its_status(self, bc, api):
+        """A non-2xx with no problem document still raises; it is never returned as text.
+
+        This is also the live shape today for a dead token on this path: the platform
+        answers an unauthenticated ``.md`` request with a bodyless 406 (basecradle#714).
+        """
+        api.get("/users/dashboard.md").respond(406, text="")
+
+        with pytest.raises(BaseCradleError) as exc_info:
+            bc.dashboard_md()
+
+        assert exc_info.value.status == 406
+
+    def test_is_retried_like_any_get(self, api, monkeypatch):
+        monkeypatch.setattr(BaseCradle, "_retry_backoff", staticmethod(lambda attempt: 0.0))
+        route = api.get("/users/dashboard.md").mock(
+            side_effect=[httpx.ReadTimeout("timed out"), httpx.Response(200, text=DASHBOARD_MD)]
+        )
+
+        with BaseCradle(token=FAKE_TOKEN, max_retries=1) as bc:
+            assert bc.dashboard_md() == DASHBOARD_MD
+
+        assert route.call_count == 2
+
+    def test_a_transport_failure_raises_api_connection_error(self, bc, api):
+        api.get("/users/dashboard.md").mock(side_effect=httpx.ConnectError("connection refused"))
+
+        with pytest.raises(APIConnectionError):
+            bc.dashboard_md()

@@ -10,6 +10,7 @@ from basecradle import (
     AccountSuspendedError,
     APIConnectionError,
     AsyncBaseCradle,
+    BaseCradleError,
     Dashboard,
     InvalidCredentialsError,
     MissingTokenError,
@@ -21,6 +22,7 @@ from basecradle import (
 )
 from tests.conftest import (
     API_SESSION_UUID,
+    DASHBOARD_MD,
     DASHBOARD_RESPONSE,
     FAKE_TOKEN,
     problem,
@@ -137,6 +139,48 @@ class TestMe:
 
         await abc.me
         await abc.me
+
+        assert route.call_count == 2
+
+
+class TestDashboardMd:
+    """The awaited twin of bc.dashboard_md(): same request, same text, same errors."""
+
+    async def test_returns_the_body_verbatim(self, abc, api):
+        route = api.get("/users/dashboard.md").respond(
+            200, text=DASHBOARD_MD, headers={"Content-Type": "text/markdown; charset=utf-8"}
+        )
+
+        assert await abc.dashboard_md() == DASHBOARD_MD
+        assert route.calls.last.request.headers["Accept"] == "*/*"
+
+    async def test_a_body_that_looks_like_json_is_still_text(self, abc, api):
+        api.get("/users/dashboard.md").respond(200, text='{"identity": {"handle": "nova"}}')
+
+        assert await abc.dashboard_md() == '{"identity": {"handle": "nova"}}'
+
+    async def test_a_problem_document_raises_the_typed_error(self, abc, api):
+        api.get("/users/dashboard.md").respond(401, json=problem("unauthorized", 401))
+
+        with pytest.raises(UnauthorizedError):
+            await abc.dashboard_md()
+
+    async def test_a_bodyless_error_raises_with_its_status(self, abc, api):
+        api.get("/users/dashboard.md").respond(406, text="")
+
+        with pytest.raises(BaseCradleError) as exc_info:
+            await abc.dashboard_md()
+
+        assert exc_info.value.status == 406
+
+    async def test_is_retried_like_any_get(self, api, monkeypatch):
+        monkeypatch.setattr(AsyncBaseCradle, "_retry_backoff", staticmethod(lambda attempt: 0.0))
+        route = api.get("/users/dashboard.md").mock(
+            side_effect=[httpx.ReadTimeout("timed out"), httpx.Response(200, text=DASHBOARD_MD)]
+        )
+
+        async with AsyncBaseCradle(token=FAKE_TOKEN, max_retries=1) as abc:
+            assert await abc.dashboard_md() == DASHBOARD_MD
 
         assert route.call_count == 2
 

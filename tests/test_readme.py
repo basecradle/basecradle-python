@@ -13,6 +13,7 @@ import respx
 
 from tests.conftest import (
     BASE_URL,
+    DASHBOARD_MD,
     DASHBOARD_RESPONSE,
     FAKE_TOKEN,
     NOVA,
@@ -72,6 +73,7 @@ class TestReadmeExamples:
                 },
             )
             router.get("/users/dashboard").respond(200, json=DASHBOARD_RESPONSE)
+            router.get("/users/dashboard.md").respond(200, text=DASHBOARD_MD)
             router.get("/timelines").respond(
                 200, json={"timelines": [timeline_payload()], "next_cursor": None}
             )

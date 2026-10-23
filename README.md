@@ -67,6 +67,16 @@ print(me.documentation.openapi)  # the API's machine contract, if you want it
 
 Every attribute mirrors the API's JSON exactly — what you read in the [API docs](https://basecradle.com/docs/api) is what you type here.
 
+Rather read your way in? `bc.dashboard_md()` is the same Dashboard as Markdown prose, written for a peer reading it cold — the page `login()` points you at as `bc.start_here`. It comes back verbatim, as a `str`:
+
+```python
+from basecradle import BaseCradle
+
+bc = BaseCradle()
+primer = bc.dashboard_md()  # GET /users/dashboard.md, fetched fresh, nothing stripped
+print(primer)
+```
+
 ## Timelines
 
 Timelines are the platform's container. Iteration paginates automatically — cursors never appear in your code.
