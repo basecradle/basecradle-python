@@ -213,13 +213,14 @@ class TestChangePassword:
             "password_confirmation": NEW,
         }
 
-    def test_confirmation_defaults_to_the_new_password(self, bc, api):
-        """The API requires the field; handing one string to two arguments is not a check."""
-        route = api.patch("/users/password").respond(204)
+    def test_the_confirmation_is_required(self, bc, api):
+        """All three fields, explicit, in both SDKs (pinned on #189): nothing is defaulted.
 
-        bc.change_password(current_password=CURRENT, password=NEW)
-
-        assert jsonlib.loads(route.calls.last.request.read())["password_confirmation"] == NEW
+        ``api`` is requested so that, if a default came back, the call would hit respx and
+        fail loudly rather than reach basecradle.com.
+        """
+        with pytest.raises(TypeError, match="password_confirmation"):
+            bc.change_password(current_password=CURRENT, password=NEW)
 
     def test_an_explicit_confirmation_is_sent_verbatim(self, bc, api):
         """A caller with a real second entry keeps it — the platform, not the SDK, judges it."""
@@ -243,7 +244,7 @@ class TestChangePassword:
         )
 
         with pytest.raises(CurrentPasswordIncorrectError) as caught:
-            bc.change_password(current_password="wrong", password=NEW)
+            bc.change_password(current_password="wrong", password=NEW, password_confirmation=NEW)
 
         assert caught.value.code == "current_password_incorrect"
         assert isinstance(caught.value, ValidationError)
@@ -255,7 +256,9 @@ class TestChangePassword:
         )
 
         with pytest.raises(ValidationError):
-            bc.change_password(current_password=CURRENT, password="short")
+            bc.change_password(
+                current_password=CURRENT, password="short", password_confirmation="short"
+            )
 
     def test_arguments_are_keyword_only(self, bc, api):
         """Three interchangeable strings must never be positional — a swap is silent.
@@ -265,16 +268,7 @@ class TestChangePassword:
         rather than letting the suite reach basecradle.com.
         """
         with pytest.raises(TypeError):
-            bc.change_password(CURRENT, NEW)
-
-    def test_an_explicit_none_confirmation_is_refused(self, bc, api):
-        """``password_confirmation=form.get("confirm")`` with no box filled is a caller bug.
-
-        Falling back to ``password`` here would change the password with no confirmation at
-        all — precisely what a caller passing the argument was trying to guard against.
-        """
-        with pytest.raises(TypeError, match="Omit it entirely"):
-            bc.change_password(current_password=CURRENT, password=NEW, password_confirmation=None)
+            bc.change_password(CURRENT, NEW, NEW)
 
     def test_the_verb_leaves_this_client_untouched(self, bc, api):
         """Changing a password signs nothing out, so the SDK must not tear the client down.
@@ -288,7 +282,7 @@ class TestChangePassword:
         api.get("/users/dashboard").respond(200, json=DASHBOARD_RESPONSE)
         token_before, session_before = bc.token, bc.session
 
-        bc.change_password(current_password=CURRENT, password=NEW)
+        bc.change_password(current_password=CURRENT, password=NEW, password_confirmation=NEW)
         next_call = bc.me
 
         assert bc.token == token_before

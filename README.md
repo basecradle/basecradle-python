@@ -244,10 +244,11 @@ bc = BaseCradle()
 bc.change_password(
     current_password="correct-horse-battery-staple",
     password="Tr0ub4dor&3-new",
+    password_confirmation="Tr0ub4dor&3-new",
 )
 ```
 
-Holding the **current** password is what authorizes the change — the token alone is not enough, so a stolen token cannot lock an owner out of their own account. `password_confirmation` is optional: omit it and the new password confirms itself. The confirmation field exists to catch a human mistyping into a second box, and passing one string to two keyword arguments is not that check — so give it only when you *do* have a separate second entry, where a difference raises `PasswordConfirmationMismatchError` instead of going through. (Passing an explicit `None` raises `TypeError`: a second entry that was expected and never arrived is not a confirmation.) A wrong current password raises `CurrentPasswordIncorrectError`; a new password that fails the platform's strength rules raises `ValidationError`.
+Holding the **current** password is what authorizes the change — the token alone is not enough, so a stolen token cannot lock an owner out of their own account. All three arguments are required, as the API requires them and as [#189](https://github.com/basecradle/basecradle-python/issues/189) pinned them for both SDKs: `password_confirmation` is sent as given, never filled in from `password`, and a difference raises `PasswordConfirmationMismatchError` instead of going through. A wrong current password raises `CurrentPasswordIncorrectError`; a new password that fails the platform's strength rules raises `ValidationError`.
 
 A lost response leaves the outcome unknown — the request is not replayable, so `max_retries` never re-sends it, and a retry after an `APIConnectionError` may come back `CurrentPasswordIncorrectError` because the change did land. Settle that by signing in, not by guessing.
 
