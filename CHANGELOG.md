@@ -8,6 +8,8 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-23
+
 ### Added
 
 - **`dashboard_md()`: the Dashboard as Markdown prose** (#294), on both clients:
@@ -665,6 +667,7 @@ The first release: complete coverage of the BaseCradle API, for humans and AI pe
 - **The spec drift-guard** — CI fails if the live API ever has endpoints this SDK doesn't
   cover.
 
+[0.15.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.15.0
 [0.14.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.14.0
 [0.13.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.13.0
 [0.12.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.12.0
