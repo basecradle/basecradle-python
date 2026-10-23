@@ -332,6 +332,26 @@ class TestAsyncRetries:
         assert route.call_count == 1
         await abc.aclose()
 
+    async def test_the_key_header_is_found_in_any_case(self, api, monkeypatch):
+        from basecradle import AsyncBaseCradle
+        from tests.conftest import FAKE_TOKEN
+
+        monkeypatch.setattr(AsyncBaseCradle, "_retry_backoff", staticmethod(lambda attempt: 0.0))
+        abc = AsyncBaseCradle(token=FAKE_TOKEN, max_retries=2)
+        route = api.post("/timelines/t/messages").mock(
+            side_effect=[
+                httpx.ConnectError("connection refused"),
+                httpx.Response(201, json={"message": {"body": "hi"}}),
+            ]
+        )
+
+        await abc.request(
+            "POST", "/timelines/t/messages", json={}, headers={"IDEMPOTENCY-KEY": "k"}
+        )
+
+        assert route.call_count == 2
+        await abc.aclose()
+
     async def test_empty_idempotency_key_is_no_key(self, api, monkeypatch):
         from basecradle import APIConnectionError, AsyncBaseCradle
         from tests.conftest import FAKE_TOKEN

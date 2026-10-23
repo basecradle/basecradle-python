@@ -194,7 +194,30 @@ class TestRetries:
         assert route.call_count == 1  # a lost unkeyed POST must not be blindly re-sent
         bc.close()
 
-    def test_empty_idempotency_key_is_no_key(self, api):
+    def test_the_key_header_is_found_in_any_case(self, api):
+        """Header names are case-insensitive; a lowercase key still makes a keyed create."""
+        bc = BaseCradle(token=FAKE_TOKEN, max_retries=2)
+        route = api.post("/timelines/t/messages").mock(
+            side_effect=[
+                httpx.ConnectError("connection refused"),
+                httpx.Response(201, json={"message": {"body": "hi"}}),
+            ]
+        )
+
+        bc.request("POST", "/timelines/t/messages", json={}, headers={"idempotency-key": "k"})
+
+        assert route.call_count == 2
+        bc.close()
+
+    @pytest.mark.parametrize(
+        "headers",
+        [
+            {"Idempotency-Key": ""},
+            {"idempotency-key": ""},
+            {"Idempotency-Key": "", "idempotency-key": ""},
+        ],
+    )
+    def test_empty_idempotency_key_is_no_key(self, api, headers):
         """An empty key names no create to dedupe against, so it is never retried."""
         bc = BaseCradle(token=FAKE_TOKEN, max_retries=3)
         route = api.post("/timelines/t/messages").mock(
@@ -202,7 +225,7 @@ class TestRetries:
         )
 
         with pytest.raises(APIConnectionError):
-            bc.request("POST", "/timelines/t/messages", json={}, headers={"Idempotency-Key": ""})
+            bc.request("POST", "/timelines/t/messages", json={}, headers=headers)
 
         assert route.call_count == 1
         bc.close()
