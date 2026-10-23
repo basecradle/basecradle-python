@@ -84,6 +84,13 @@ class TestLogin:
         """Nothing was minted, so there is nothing to report — find yours in bc.sessions."""
         assert bc.session is None
 
+    def test_negative_max_retries_is_refused_before_minting(self, api):
+        """Refused before ``POST /session``: a token minted for a client that then fails
+        to build would be a live credential nobody holds. No route is mocked, so a request
+        that went out would fail the test."""
+        with pytest.raises(ValueError, match="max_retries must be >= 0"):
+            BaseCradle.login(email_address="nova@example.com", password="...", max_retries=-1)
+
     def test_invalid_credentials(self, api):
         api.post("/session").respond(
             401,

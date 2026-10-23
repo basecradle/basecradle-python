@@ -113,6 +113,7 @@ class _ClientCore:
         resolved = token or os.environ.get("BASECRADLE_TOKEN")
         if not resolved:
             raise MissingTokenError(_MISSING_TOKEN_MESSAGE.format(cls=type(self).__name__))
+        self._check_max_retries(max_retries)
 
         self.token = resolved
         self.base_url = base_url
@@ -181,6 +182,20 @@ class _ClientCore:
         )
 
     @staticmethod
+    def _check_max_retries(max_retries: int) -> None:
+        """Refuse a negative ``max_retries``, as basecradle-ruby does.
+
+        A negative count of retries means nothing. Through 0.14.0 it made the send loop run
+        zero times, so no request went out and a verb that returns nothing (``sign_out()``,
+        ``timeline.lock()``) reported success. The loop no longer depends on the count being
+        sane, and this keeps it from mattering again. ``login()`` checks it before its
+        ``POST /session`` too, so a bad count cannot mint a token and then lose it when the
+        client it belongs to fails to build.
+        """
+        if max_retries < 0:
+            raise ValueError("max_retries must be >= 0")
+
+    @staticmethod
     def _check_response(response: httpx.Response) -> Any:
         """Shared response handling: typed errors for non-2xx, parsed JSON otherwise."""
         if not response.is_success:
@@ -205,13 +220,14 @@ class _ClientCore:
         platform can replay without duplicating a record: a ``GET`` (idempotent by HTTP
         definition) or a create carrying an ``Idempotency-Key`` (the platform dedupes it).
         An unkeyed ``POST`` is never retried — a lost response might mean the record *was*
-        created, and a blind re-send would duplicate it.
+        created, and a blind re-send would duplicate it. An empty key is no key: it names
+        no logical create for the platform to dedupe against.
         """
         if not isinstance(exc, self._RETRYABLE_ERRORS):
             return False
         if method.upper() == "GET":
             return True
-        return headers is not None and "Idempotency-Key" in headers
+        return headers is not None and bool(headers.get("Idempotency-Key"))
 
     @staticmethod
     def _retry_backoff(attempt: int) -> float:
@@ -351,6 +367,7 @@ class BaseCradle(_ClientCore):
         ``name`` is an optional label to tell credentials apart later. ``max_retries`` is
         carried onto the returned client (see ``BaseCradle``).
         """
+        cls._check_max_retries(max_retries)
         try:
             response = httpx.post(
                 f"{base_url.rstrip('/')}/session",
@@ -585,6 +602,7 @@ class AsyncBaseCradle(_ClientCore):
         The returned client carries the same ``.token``, ``.session`` and ``.start_here``;
         revoking the credential it minted is ``await client.session.revoke()``.
         """
+        cls._check_max_retries(max_retries)
         try:
             async with httpx.AsyncClient(timeout=timeout) as http:
                 response = await http.post(

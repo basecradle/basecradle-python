@@ -58,6 +58,10 @@ class TestConstruction:
         assert "BASECRADLE_TOKEN" in message
         assert "AsyncBaseCradle.login" in message  # the message names the right class
 
+    async def test_negative_max_retries_is_refused(self):
+        with pytest.raises(ValueError, match="max_retries must be >= 0"):
+            AsyncBaseCradle(token=FAKE_TOKEN, max_retries=-1)
+
     async def test_async_context_manager(self):
         async with AsyncBaseCradle(token=FAKE_TOKEN) as client:
             assert isinstance(client, AsyncBaseCradle)
@@ -110,6 +114,13 @@ class TestLogin:
 
         assert revoke.called
         await client.aclose()
+
+    async def test_negative_max_retries_is_refused_before_minting(self, api):
+        """No route is mocked, so a ``POST /session`` that went out would fail the test."""
+        with pytest.raises(ValueError, match="max_retries must be >= 0"):
+            await AsyncBaseCradle.login(
+                email_address="nova@example.com", password="...", max_retries=-1
+            )
 
     async def test_invalid_credentials(self, api):
         api.post("/session").respond(401, json=problem("invalid_credentials", 401))

@@ -8,6 +8,25 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 ## [Unreleased]
 
+### Changed
+
+- **A negative `max_retries` raises `ValueError`** (#297, the mirror of basecradle-ruby#108).
+  Through 0.14.0 it made the send loop run zero times, so no request went out at all:
+  `request()` returned `None`, `sign_out()` "succeeded" without signing out, and
+  `timeline.lock()` reported success without locking. 0.15.0's rewrite of that loop (#295)
+  happened to make a negative count act like `0`. It is now refused outright, as Ruby
+  refuses it, so code that passed a negative count to mean "no retries" must pass `0`. Both
+  clients and both `login()` methods check it, and `login()` checks it before
+  `POST /session`, so a bad count never mints a token it then loses.
+
+### Fixed
+
+- **An empty `idempotency_key` is no key** (#297). `idempotency_key=""` used to send an
+  empty `Idempotency-Key` header, and because the retry gate tested whether the header was
+  present rather than what it held, `max_retries` would re-send that create. Now nothing is
+  sent and the create is never auto-retried, the same as passing no key; a request made
+  through `request()` with an empty `Idempotency-Key` header is not retried either.
+
 ## [0.15.0] - 2026-10-23
 
 ### Added

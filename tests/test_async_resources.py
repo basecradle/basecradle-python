@@ -284,6 +284,15 @@ class TestAsyncItems:
 
         assert route.calls.last.request.headers["Idempotency-Key"] == "019f5e48-async"
 
+    async def test_empty_key_sends_no_header(self, abc, api, timeline):
+        route = api.post(f"/timelines/{TIMELINE_UUID}/messages").respond(
+            201, json={"message": message_payload()}
+        )
+
+        await timeline.messages.create(body="hi", idempotency_key="")
+
+        assert "Idempotency-Key" not in route.calls.last.request.headers
+
 
 class TestAsyncRetries:
     async def test_keyed_post_retries_then_succeeds(self, api, monkeypatch):
@@ -323,6 +332,24 @@ class TestAsyncRetries:
         assert route.call_count == 1
         await abc.aclose()
 
+    async def test_empty_idempotency_key_is_no_key(self, api, monkeypatch):
+        from basecradle import APIConnectionError, AsyncBaseCradle
+        from tests.conftest import FAKE_TOKEN
+
+        monkeypatch.setattr(AsyncBaseCradle, "_retry_backoff", staticmethod(lambda attempt: 0.0))
+        abc = AsyncBaseCradle(token=FAKE_TOKEN, max_retries=3)
+        route = api.post("/timelines/t/messages").mock(
+            side_effect=httpx.ConnectError("connection refused")
+        )
+
+        with pytest.raises(APIConnectionError):
+            await abc.request(
+                "POST", "/timelines/t/messages", json={}, headers={"Idempotency-Key": ""}
+            )
+
+        assert route.call_count == 1
+        await abc.aclose()
+
     async def test_retries_are_bounded(self, api, monkeypatch):
         from basecradle import APIConnectionError, AsyncBaseCradle
         from tests.conftest import FAKE_TOKEN
@@ -345,6 +372,15 @@ class TestAsyncWebhooks:
             201, json={"webhook_endpoint": webhook_endpoint_payload()}
         )
         return await timeline.webhook_endpoints.create(description="CI deploys")
+
+    async def test_create_with_empty_idempotency_key_sends_no_header(self, abc, api, timeline):
+        route = api.post(f"/timelines/{TIMELINE_UUID}/webhook_endpoints").respond(
+            201, json={"webhook_endpoint": webhook_endpoint_payload()}
+        )
+
+        await timeline.webhook_endpoints.create(description="CI deploys", idempotency_key="")
+
+        assert "Idempotency-Key" not in route.calls.last.request.headers
 
     async def test_endpoint_lifecycle_awaited(self, abc, api, endpoint):
         api.delete(f"/webhook_endpoints/{WEBHOOK_ENDPOINT_UUID}/enablement").respond(

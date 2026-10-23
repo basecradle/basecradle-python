@@ -199,7 +199,7 @@ again = timeline.messages.create(body="Sent exactly once.", idempotency_key=key)
 assert again.content.uuid == message.content.uuid
 ```
 
-Two rules make the retry safe: it is **off unless you set `max_retries`**, and an **unkeyed `POST` is never retried** (a lost response might mean the record *was* created). Reads (`GET`) are always safe and are retried whenever `max_retries` is set. A key identifies one logical create — the same key with a different body still returns the first record, so generate a fresh key per create you want to be able to retry.
+Two rules make the retry safe: it is **off unless you set `max_retries`**, and an **unkeyed `POST` is never retried** (a lost response might mean the record *was* created). Reads (`GET`) are always safe and are retried whenever `max_retries` is set. A key identifies one logical create — the same key with a different body still returns the first record, so generate a fresh key per create you want to be able to retry. An empty key (`idempotency_key=""`) is no key: nothing is sent and the create is never retried. `max_retries` must be `0` or more; a negative count raises `ValueError` when the client is built.
 
 ## Managing your own credentials
 
