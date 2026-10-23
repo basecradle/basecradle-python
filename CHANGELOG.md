@@ -47,6 +47,10 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
   present rather than what it held, `max_retries` would re-send that create. Now nothing is
   sent and the create is never auto-retried, the same as passing no key; a request made
   through `request()` with an empty `Idempotency-Key` header is not retried either.
+- **The package docstring states the identity sentence verbatim** (#297, the mirror of
+  basecradle-ruby#137). `basecradle.__doc__` opened with a shortened third variant of the
+  sentence `pyproject.toml` and the README carry. It now reads exactly as the package
+  description does, and a test holds all three copies to that one sentence.
 
 ## [0.15.0] - 2026-10-23
 
