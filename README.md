@@ -317,6 +317,31 @@ A contact message is a top-level record, so it is **flat**: no `type`/`content` 
 
 `data` is handed back as the plain `dict` the wire sent. Each vendor slot carries `vendor`, `api`, `docs`, `fetched_at` and `attempts`, then exactly one of `answer`, `skipped` or `error`. The vendors and their payloads are the platform's to change, so the SDK doesn't model them. Google's score runs the opposite way from the IP vendors' (see the API docs). `headers` reads through `RequestHeaders`, the same class behind a webhook delivery's headers: lookup folds case, and printing it shows names, never values.
 
+## Reading models, and serializing them
+
+Every model is a read-only, wire-exact view of one API JSON object: attribute names are the wire's names, and a field newer than your SDK release reads like any other. `to_dict()` takes the record's data out, as a deep copy of the wire `dict` with nested records as the plain dicts and lists they arrived as:
+
+```python
+import json
+
+from basecradle import BaseCradle
+
+bc = BaseCradle()
+message = next(iter(bc.messages))
+
+print(message.content.body)       # attribute reads mirror the wire names
+record = message.to_dict()        # {"type": "message", "content": {...}, "user": {...}, ...}
+print(json.dumps(record))         # JSON values only, so this just works
+print(json.dumps({"latest": record}, indent=2))  # nests like any other dict
+```
+
+It is the wire data and nothing else: never the client the record is attached to, its token, or any private attribute. It is a copy, so changing it leaves the record alone, and a later verb that updates the record does not reach a copy taken earlier. It is the record as this object holds it, so a `Timeline` fetched whole carries `items` beside its own fields (the API's `{"timeline": ..., "items": ...}` envelope, merged). On an `AsyncBaseCradle` record it is the same plain method: it makes no request, so there is nothing to await.
+
+Two things worth knowing:
+
+- **It carries every value the API returned, at every depth, credentials included.** `repr()` of a record shows field names and never values, so these stay out of your logs: a webhook endpoint's `ingest_url` (also on an endpoint embedded in a webhook event or in a timeline's `items`), an event's `ingest_token_at_receipt`, and the request headers a webhook delivery or a contact message arrived with. `to_dict()` hands them all back, because you asked. Build the subset you log yourself.
+- **`to_dict()` is the way out of an attached record.** A record is not iterable and has no `keys()`, `json.dumps(record)` raises `TypeError`, and `pickle` or `copy.deepcopy` of an attached record raises `BaseCradleError`, because each of those would reach the client and its token. Clients and resources do not serialize at all: a resource is a live handle whose records arrive a page at a time, so take its records' data with `[record.to_dict() for record in ...]` (`async for` on an async client).
+
 ## Async
 
 The same SDK for async code: `AsyncBaseCradle` — same models, same typed errors, same resources. Iteration is `async for`; everything that talks to the API is awaited.

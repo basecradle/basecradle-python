@@ -1,9 +1,17 @@
 """The model layer's invariants: wire-exact reads, additive-API tolerance, access tiers."""
 
+import json
+
 import pytest
 
-from basecradle import ApiObject, Trust, User
-from tests.conftest import DASHBOARD_RESPONSE
+from basecradle import ApiObject, Dashboard, Trust, User
+from tests.conftest import (
+    DASHBOARD_RESPONSE,
+    TIMELINE_UUID,
+    message_payload,
+    timeline_payload,
+    webhook_event_payload,
+)
 
 SELF_FORM = DASHBOARD_RESPONSE["identity"]
 
@@ -175,3 +183,45 @@ class TestDunders:
 
     def test_hashable(self):
         assert len({User(DIRECTORY_FORM), User(DIRECTORY_FORM)}) == 1
+
+
+class TestToDict:
+    """``to_dict()``: a deep copy of the record's wire data, nested records included."""
+
+    def test_returns_the_wire_data_with_nested_records_as_plain_dicts(self):
+        user = User(SELF_FORM)
+        data = user.to_dict()
+        assert data == SELF_FORM
+        assert type(data["trust"]) is dict  # the wire dict, not the wrapping Trust
+
+    def test_a_field_newer_than_the_sdk_comes_out_like_any_other(self):
+        user = User({**DIRECTORY_FORM, "pronouns": "they/them"})
+        assert user.to_dict()["pronouns"] == "they/them"
+
+    def test_the_whole_dashboard_round_trips_through_json(self):
+        dashboard = Dashboard(DASHBOARD_RESPONSE)
+        assert json.loads(json.dumps(dashboard.to_dict())) == DASHBOARD_RESPONSE
+
+    def test_a_fetched_timeline_carries_its_merged_items(self, bc, api):
+        items = [message_payload(), webhook_event_payload()]
+        api.get(f"/timelines/{TIMELINE_UUID}").respond(
+            200, json={"timeline": timeline_payload(), "items": items}
+        )
+        timeline = bc.timelines.get(TIMELINE_UUID)
+        assert timeline.to_dict() == {**timeline_payload(), "items": items}
+
+    def test_changing_the_copy_leaves_the_record_alone(self):
+        # Its own copy of the form, so a regression here cannot corrupt the shared constant.
+        user = User({**DIRECTORY_FORM, "trust": dict(DIRECTORY_FORM["trust"])})
+        data = user.to_dict()
+        data["handle"] = "changed"
+        data["trust"]["mutual"] = False
+        assert user.handle == "john"
+        assert user.trust.mutual is True
+
+    def test_a_copy_taken_earlier_does_not_follow_the_record(self):
+        source = {**DIRECTORY_FORM, "trust": dict(DIRECTORY_FORM["trust"])}
+        user = User(source)
+        data = user.to_dict()
+        source["trust"]["mutual"] = False
+        assert data["trust"]["mutual"] is True

@@ -8,6 +8,27 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 ## [Unreleased]
 
+### Added
+
+- **`ApiObject.to_dict()`: a record's data, for a serializer** (#297, the founder's ruling
+  on basecradle#715; the mirror of basecradle-ruby's `ApiObject#to_h`). Every model has it:
+
+  ```python
+  record = message.to_dict()   # a deep copy of the wire dict, nested records included
+  json.dumps(record)           # JSON values only
+  ```
+
+  It is the record's wire data and nothing else: never the client, its token, or any
+  private attribute. It is a deep copy, so changing it leaves the record alone. It carries
+  every value the API returned, at every depth, so the credentials a record holds come out
+  too: an `ingest_url` wherever an endpoint appears, an event's `ingest_token_at_receipt`,
+  and the request headers of a webhook delivery or a contact message. `repr()` still
+  withholds them. A record stays non-iterable, and `json.dumps(record)`, `pickle` and
+  `copy.deepcopy` of an attached record still refuse, so `to_dict()` is the way out of
+  one. The refusals a client and a resource raise when copied or pickled now name it.
+  This supersedes 0.13.0's "offers no `to_dict`", which recorded its absence. README:
+  "Reading models, and serializing them".
+
 ### Changed
 
 - **A negative `max_retries` raises `ValueError`** (#297, the mirror of basecradle-ruby#108).
@@ -207,6 +228,10 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
   `BaseCradleError` keeps only the parsed problem document — no `httpx` request or response
   — so no caught error reaches the `Authorization` header. Those are now pinned by tests
   rather than resting on nobody having looked.
+
+  **Since superseded** (#297): `ApiObject.to_dict()` exists as of 0.16.0, by the founder's
+  ruling. It returns a deep copy of the wire data and never the client, so it does not
+  reopen what this entry closed. See the entry at the top of this file.
 
   One thing the sweep found and deliberately did **not** change: `WebhookEventHeaders` is a
   `dict` subclass, so unlike every `ApiObject` it renders and JSON-serializes its values

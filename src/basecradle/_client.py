@@ -175,8 +175,9 @@ class _ClientCore:
             f"A {type(self).__name__} cannot be serialized: it authenticates with your "
             f"bearer token, and any serializer that walks it writes that credential "
             f"wherever the output goes. Nothing holding a client can be serialized "
-            f"either, so copying a resource or a record reaches this too — copy the "
-            f"record's data instead. Where you need a client, build one: "
+            f"either, so copying a resource or a record reaches this too — take the "
+            f"record's data with record.to_dict() instead. Where you need a client, "
+            f"build one: "
             f"{type(self).__name__}(token=...), moving the token only through whatever "
             f"you already trust with secrets."
         )
