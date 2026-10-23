@@ -590,17 +590,53 @@ class TestModels:
         for secret in SENDER_SECRETS.values():
             assert secret not in captured
 
-    def test_a_model_offers_no_generic_serialization(self, clients):
-        """No ``to_dict``, not iterable: ``_client`` is reachable by no documented route."""
+    def test_to_dict_carries_no_client_token_or_private_key_at_any_depth(self, clients):
+        """``to_dict()`` is the one documented route out of a record, and it is the wire data.
+
+        Walked to every depth: each value is a JSON value (so no client, no resource, no
+        record), no key is private, and the token appears nowhere in the serialized form.
+        The record stays non-iterable, so ``to_dict()`` remains the only route.
+        """
+
+        def walk(value, path):
+            if type(value) is dict:  # exactly dict: a subclass carries its own repr and state
+                for key, child in value.items():
+                    assert isinstance(key, str), path
+                    assert not key.startswith("_"), f"{path}.{key}"
+                    walk(child, f"{path}.{key}")
+            elif type(value) is list:
+                for index, child in enumerate(value):
+                    walk(child, f"{path}[{index}]")
+            else:
+                assert isinstance(value, (str, int, float, bool, type(None))), path
+
         for client in clients:
-            model = ApiObject(timeline_payload(), client=client)
-            with pytest.raises(AttributeError):
-                model.to_dict()
-            with pytest.raises(TypeError):
-                iter(model)
-            with pytest.raises(TypeError):
-                dict(model)
-            assert not hasattr(model, "keys")
+            models = [
+                ApiObject(timeline_payload(), client=client),
+                # a fetched timeline, items merged in: a delivery embeds its endpoint in full
+                Timeline({**timeline_payload(), "items": [webhook_event_payload()]}, client=client),
+                WebhookEndpoint(webhook_endpoint_payload(), client=client),
+                WebhookEvent(webhook_event_payload(), client=client),
+            ]
+            for model in models:
+                data = model.to_dict()
+                walk(data, type(model).__name__)
+                assert FAKE_TOKEN not in json.dumps(data)
+                with pytest.raises(TypeError):
+                    iter(model)
+                with pytest.raises(TypeError):
+                    dict(model)
+                assert not hasattr(model, "keys")
+
+    def test_the_refusals_point_at_to_dict(self, clients):
+        """A copied record and a pickled resource are told the route that does work."""
+        for client in clients:
+            with pytest.raises(BaseCradleError) as caught:
+                copy.deepcopy(Timeline(timeline_payload(), client=client))
+            assert "record.to_dict()" in str(caught.value)
+            with pytest.raises(BaseCradleError) as caught:
+                pickle.dumps(client.messages)
+            assert "record.to_dict()" in str(caught.value)
 
     def test_equality_and_hashing_read_wire_data_only(self, clients):
         """So a failed comparison renders through ``__repr__``, which shows keys."""

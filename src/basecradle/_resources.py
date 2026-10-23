@@ -62,6 +62,7 @@ class Resource:
             f"A {type(self).__name__} cannot be serialized. It is a live handle on a "
             f"BaseCradle client — a short walk from your bearer token — and its records "
             f"are fetched lazily, a page at a time, so there is nothing in it to "
-            f"serialize yet. Iterate it explicitly and keep the records instead: "
-            f"`list(...)`, or `for record in ...`."
+            f"serialize yet. Iterate it explicitly and take each record's data instead: "
+            f"`[record.to_dict() for record in ...]`, or `list(...)` to keep the records "
+            f"(`async for` on an async client)."
         )

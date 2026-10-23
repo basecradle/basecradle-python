@@ -11,11 +11,13 @@ nested wrapping); attribute access reads the wire data itself, so:
   mean "hidden from you" or "actually null".
 
 Models built by the client carry a reference to it, so resource verbs
-(``timeline.lock()``) can act on the platform.
+(``timeline.lock()``) can act on the platform. ``to_dict()`` takes the record's data
+out: a deep copy of the wire data, never the client.
 """
 
 from __future__ import annotations
 
+import copy
 import functools
 import types
 import typing
@@ -64,6 +66,33 @@ class ApiObject:
                 for item in value
             ]
         return value
+
+    def to_dict(self) -> dict[str, Any]:
+        """The record's data as the API returned it: a deep copy of the wire ``dict``.
+
+        Nested records come out as the plain dicts and lists they arrived as, with their
+        wire keys, nothing renamed and nothing dropped, and a field newer than this SDK
+        release carried like any other. It holds JSON values only, so
+        ``json.dumps(model.to_dict())`` works. It is the record as this object holds it,
+        so a ``Timeline`` fetched whole carries ``items`` beside its own fields: the API's
+        two-key ``{"timeline": ..., "items": ...}`` envelope, merged into one record.
+
+        It is the wire data and nothing else: never the client this record is attached
+        to, the token that client holds, or any private attribute. That is why it is a
+        copy taken from the record's data rather than a walk of the object. Changing the
+        copy changes nothing in the record, and a later verb that updates the record
+        (``endpoint.rotate()``, say) does not reach a copy taken earlier.
+
+        It carries every value the API returned, at every depth, so it carries any
+        credential the record holds too: a webhook endpoint's ``ingest_url`` (on an
+        endpoint embedded in a webhook event or a timeline's ``items`` as well), an
+        event's ``ingest_token_at_receipt``, and the request headers a webhook delivery or
+        a contact message arrived with. ``repr()`` withholds those; ``to_dict()`` is you
+        asking for them.
+
+        It is a plain method on an async-attached record too: no request, nothing to await.
+        """
+        return copy.deepcopy(self._data)
 
     def _require_client(self) -> Any:
         """The client this object came from — required by verbs that call the API."""
