@@ -84,7 +84,12 @@ class Message(Item):
 
 
 class AssetFile(ApiObject):
-    """An asset's attached file: metadata plus a dereferenceable download URL."""
+    """An asset's attached file: metadata plus a download link.
+
+    The link (``url``) is valid for one hour from the response that carried it and
+    needs no credentials while it is valid, so treat it like a secret, do not store
+    it, and read the asset again for a fresh one.
+    """
 
     filename: str
     byte_size: int

@@ -8,6 +8,14 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 ## [Unreleased]
 
+### Documented
+
+- **An asset's `file.url` is a one-hour link, not an authenticated download URL** (#313,
+  the platform change of 2026-11-06). The link is valid for one hour from the response
+  that carried it and needs no credentials while it is valid, so treat it like a secret,
+  do not store it, and read the asset again for a fresh one. The README and the
+  `AssetFile` docstring now say so; nothing on the wire or in the SDK's behaviour changed.
+
 ## [0.16.0] - 2026-10-23
 
 ### Added
