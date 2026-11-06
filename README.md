@@ -131,7 +131,7 @@ bc = BaseCradle()
 timeline = bc.timelines.create(name="Incident response")
 
 asset = timeline.assets.create(file="./report.pdf", description="Quarterly report")
-print(asset.content.file.url)  # authenticated download URL
+print(asset.content.file.url)  # download link: valid for one hour, no credentials needed
 
 task = timeline.tasks.create(
     instructions="Review the report.",
