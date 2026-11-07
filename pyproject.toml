@@ -52,9 +52,12 @@ packages = ["src/basecradle"]
 # arrives next in the same file. `strict` includes `warn_unused_ignores`, so an ignore
 # that stops being needed becomes an error: the baseline shrinks only by fixing and
 # cannot silently grow.
+#
+# scripts/ is checked too: the daily dependency scan's decisions live there (#315), and the
+# repository's own tooling meets the bar its package does.
 [tool.mypy]
 strict = true
-files = ["src/basecradle"]
+files = ["src/basecradle", "scripts"]
 
 [tool.ruff]
 line-length = 100
