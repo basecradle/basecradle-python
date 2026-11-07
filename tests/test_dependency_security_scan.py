@@ -35,8 +35,18 @@ def sole(items: list[Any]) -> Any:
     return items[0]
 
 
-def _without_code_spans(text: str) -> str:
-    return re.sub(r"`[^`]*`", "", text)
+# Walks the text as GitHub's renderer does: backticks toggle a code span in order, and a name
+# is safe only inside one. A regex that pairs backticks greedily would miss the stray-backtick
+# case this guards against.
+def assert_no_bare_mentions(text: str, label: str) -> None:
+    inside = False
+    for index, char in enumerate(text):
+        if char == "`":
+            inside = not inside
+        elif char == "@" and not inside and re.match(r"\w", text[index + 1 : index + 2]):
+            raise AssertionError(
+                f"bare mention at {index} in {label}: {text[max(index - 20, 0) :][:60]!r}"
+            )
 
 
 def group(
@@ -725,8 +735,16 @@ def test_nothing_it_writes_can_mention_a_github_account() -> None:
 
     for plan in scan.plans([]):
         assert plan.body is not None
-        bare = _without_code_spans(plan.body)
-        assert "@" not in bare.replace("`@origin`", ""), plan.title
+        assert_no_bare_mentions(plan.body, plan.title)
+
+
+def test_a_stray_backtick_in_upstream_text_cannot_unwrap_a_name_into_a_mention() -> None:
+    title = "a ` b @evil and `x` then @also"
+    plan = sole(scan_of(pypi("h11", "GHSA-4444-5555-6666", "low", title=title)).plans([]))
+
+    assert plan.body is not None
+    assert_no_bare_mentions(plan.body, "advisories issue")
+    assert "a b `@evil` and x then `@also`" in plan.body
 
 
 def test_a_change_comment_cannot_mention_a_github_account_either() -> None:
@@ -739,7 +757,7 @@ def test_a_change_comment_cannot_mention_a_github_account_either() -> None:
     )
 
     assert plan.comment is not None
-    assert "@" not in _without_code_spans(plan.comment)
+    assert_no_bare_mentions(plan.comment, "change comment")
 
 
 def test_upstream_text_cannot_break_the_table_or_pose_as_the_marker() -> None:

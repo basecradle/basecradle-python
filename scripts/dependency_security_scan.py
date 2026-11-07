@@ -650,9 +650,11 @@ def _tally(advisories: list[Advisory]) -> str:
 
 # Upstream text, made safe for a table cell: a pipe would split the row, a "<" could open a
 # comment that reads as this scan's own marker, and GitHub reads a bare @name as a mention
-# of whoever holds that account.
+# of whoever holds that account. Upstream backticks go first: one stray backtick would pair
+# with the span opened around a name and leave the name bare (found by the harness captain,
+# 2026-11-06).
 def _cell(text: str) -> str:
-    text = re.sub(r"\s+", " ", str(text)).replace("<", "&lt;").replace("|", "\\|")
+    text = re.sub(r"\s+", " ", str(text).replace("`", "")).replace("<", "&lt;").replace("|", "\\|")
     return re.sub(r"@[\w\-/.]+", lambda match: f"`{match.group(0)}`", text)
 
 
