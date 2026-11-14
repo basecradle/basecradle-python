@@ -1,0 +1,24 @@
+# actionlint reads this file from the repository root on its own; ci.yml's actionlint
+# job passes no flag for it.
+#
+# actionlint checks a popular action's inputs against a table compiled into the binary,
+# and that table predates `client-id` on actions/create-github-app-token@v3: it still
+# lists `app-id` as required and does not know `client-id` at all. The action itself
+# (action.yml at v3.3.0) takes `client-id` and marks `app-id` deprecated, so the mint
+# step is right and the linter is stale (#322). Upstream's table had not caught up as of
+# 2026-11-14, so bumping the pinned image does not clear it yet.
+#
+# Each pattern matches one message about this one action, in the one file that uses it,
+# so every other finding in that file still blocks. The cost: a mint step that lost its
+# `client-id` would lint clean, because its only finding is the ignored missing
+# `app-id`; that failure shows up as the scheduled run's mint step failing and its
+# heartbeat going silent, not as a red PR.
+#
+# Remove this file when the pinned actionlint's table knows `client-id`. actionlint does
+# not report an ignore that no longer matches, so the check belongs to every bump of
+# ACTIONLINT_IMAGE in ci.yml, which points here.
+paths:
+  .github/workflows/dependency-security-scan.yml:
+    ignore:
+      - 'missing input "app-id" which is required by action "actions/create-github-app-token@v3"'
+      - 'input "client-id" is not defined in action "actions/create-github-app-token@v3"'
