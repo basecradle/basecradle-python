@@ -162,8 +162,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10  # the gate now needs this job; never let it wedge every merge
     env:
-      # rhysd/actionlint 1.7.12. On a bump, check whether .github/actionlint.yaml's
-      # ignores are still needed: it filters two stale findings out of the blocking pass.
+      # rhysd/actionlint 1.7.12
       ACTIONLINT_IMAGE: "rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667"
       # Derived from CLAUDE.md below rather than trusted from here -- this is the value
       # the cross-check asserts against, not a second source of truth.
