@@ -129,7 +129,7 @@ jobs:
           if [ "$(jq -r '.verdict' "$RUNNER_TEMP/plan.json")" = "error" ]; then
             echo "a scanner reached no verdict: the heartbeat is withheld"
           else
-            curl -fsS --retry 3 --max-time 15 -o /dev/null "$HEARTBEAT_URL"
+            printf 'url = "%s"\n' "$HEARTBEAT_URL" | curl -q -fsS --retry 3 --max-time 15 -o /dev/null --config -
           fi
 
       # A run that found something, or could not look, is red.
