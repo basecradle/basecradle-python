@@ -3796,7 +3796,13 @@ def ls_remote_tags(repository: str, tags: set[str], cwd: Path) -> str:
         for key, value in os.environ.items()
         if not key.startswith("GIT_") and key != "SSH_ASKPASS"
     }
-    env |= {"GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    env |= {
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        # And no repository above `cwd` is found either, wherever pytest's basetemp is.
+        "GIT_CEILING_DIRECTORIES": str(cwd.resolve().parent),
+    }
     failure = ""
     for attempt in (1, 2, 3):
         try:
