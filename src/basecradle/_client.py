@@ -20,6 +20,7 @@ from basecradle._dashboard import Dashboard
 from basecradle._exceptions import (
     APIConnectionError,
     MissingTokenError,
+    UnsendableRequestError,
     exception_from_response,
 )
 from basecradle._items import (
@@ -99,6 +100,42 @@ class _ClientCore:
         httpx.TimeoutException,
     )
 
+    #: The exception types the HTTP client refuses a request with (#351); which of them
+    #: really are a refusal is ``_refused_by_http_client``'s call.
+    _UNSENDABLE_ERRORS: ClassVar[tuple[type[BaseException], ...]] = (
+        httpx.LocalProtocolError,
+        UnicodeEncodeError,
+    )
+
+    @staticmethod
+    def _refused_by_http_client(exc: BaseException) -> bool:
+        """Did the HTTP client refuse to send the request as not valid HTTP? (#351)
+
+        h11 refuses a value HTTP cannot carry with ``LocalProtocolError`` before a byte is
+        sent, and httpx refuses a non-ASCII header name or value while it encodes it as
+        ASCII. Neither is "could not reach", and either one's message or ``.object`` can hold
+        the bearer token. A body or query that fails to encode fails in UTF-8, not ASCII: that
+        error is about the caller's own data, so it is left to reach them unchanged.
+        """
+        if isinstance(exc, httpx.LocalProtocolError):
+            return True
+        return isinstance(exc, UnicodeEncodeError) and exc.encoding == "ascii"
+
+    @staticmethod
+    def _unsendable_request_error(base_url: str) -> UnsendableRequestError:
+        """The error for a request the HTTP client refused, naming the base URL and nothing else.
+
+        Raise it **after** the ``except`` block that caught the refusal, never inside it:
+        raised inside, even ``from None``, it would keep the refusal as ``__context__``, and
+        the refusal may hold the token.
+        """
+        return UnsendableRequestError(
+            f"Could not send the request to {base_url}: the HTTP client refused it as invalid "
+            "HTTP, so the platform never received a complete request. The usual cause is a "
+            "header value HTTP cannot carry, such as a token read with its trailing newline. "
+            "The refused value is not shown, as it may be the token."
+        )
+
     def __init__(
         self,
         token: str | None = None,
@@ -111,6 +148,13 @@ class _ClientCore:
         if not resolved:
             raise MissingTokenError(_MISSING_TOKEN_MESSAGE.format(cls=type(self).__name__))
         self._check_max_retries(max_retries)
+        if not resolved.isascii():
+            # httpx would fail on it anyway, building the client: with a ``UnicodeEncodeError``
+            # whose ``.object``, and so its ``repr``, is the whole ``Authorization`` value.
+            raise ValueError(
+                "The token is not ASCII, so it cannot be sent in an HTTP header. It is not "
+                "shown here, as it is a credential: check where it was read from."
+            )
 
         self.token = resolved
         self.base_url = base_url
@@ -363,8 +407,14 @@ class BaseCradle(_ClientCore):
                 headers={"Accept": "application/json"},
                 timeout=timeout,
             )
+        except cls._UNSENDABLE_ERRORS as exc:
+            if not cls._refused_by_http_client(exc):
+                raise
+            response = None
         except httpx.HTTPError as exc:
             raise APIConnectionError(f"Could not reach {base_url}: {exc}") from exc
+        if response is None:  # refused: raised out here, so the refusal is not its context
+            raise cls._unsendable_request_error(base_url)
 
         if response.status_code != 201:
             raise exception_from_response(response)
@@ -511,6 +561,9 @@ class BaseCradle(_ClientCore):
                 return self._client.request(
                     method, path, json=json, params=params, data=data, files=files, headers=headers
                 )
+            except self._UNSENDABLE_ERRORS as exc:
+                if not self._refused_by_http_client(exc):
+                    raise
             except httpx.HTTPError as exc:
                 if attempt < self._max_retries and self._should_retry(method, headers, exc):
                     self._rewind_files(files)
@@ -518,6 +571,9 @@ class BaseCradle(_ClientCore):
                     attempt += 1
                     continue
                 raise APIConnectionError(f"Could not reach {self.base_url}: {exc}") from exc
+            # Refused: raised out here, so the refusal (which may hold the token) is not
+            # even this error's ``__context__``.
+            raise self._unsendable_request_error(self.base_url)
 
     def close(self) -> None:
         """Close the underlying HTTP connection pool."""
@@ -596,8 +652,14 @@ class AsyncBaseCradle(_ClientCore):
                     json=cls._login_payload(email_address, password, name),
                     headers={"Accept": "application/json"},
                 )
+        except cls._UNSENDABLE_ERRORS as exc:
+            if not cls._refused_by_http_client(exc):
+                raise
+            response = None
         except httpx.HTTPError as exc:
             raise APIConnectionError(f"Could not reach {base_url}: {exc}") from exc
+        if response is None:  # refused: raised out here, so the refusal is not its context
+            raise cls._unsendable_request_error(base_url)
 
         if response.status_code != 201:
             raise exception_from_response(response)
@@ -693,6 +755,9 @@ class AsyncBaseCradle(_ClientCore):
                 return await self._client.request(
                     method, path, json=json, params=params, data=data, files=files, headers=headers
                 )
+            except self._UNSENDABLE_ERRORS as exc:
+                if not self._refused_by_http_client(exc):
+                    raise
             except httpx.HTTPError as exc:
                 if attempt < self._max_retries and self._should_retry(method, headers, exc):
                     self._rewind_files(files)
@@ -700,6 +765,9 @@ class AsyncBaseCradle(_ClientCore):
                     attempt += 1
                     continue
                 raise APIConnectionError(f"Could not reach {self.base_url}: {exc}") from exc
+            # Refused: raised out here, so the refusal (which may hold the token) is not
+            # even this error's ``__context__``.
+            raise self._unsendable_request_error(self.base_url)
 
     async def aclose(self) -> None:
         """Close the underlying HTTP connection pool."""

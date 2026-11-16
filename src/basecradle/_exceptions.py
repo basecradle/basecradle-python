@@ -16,6 +16,7 @@ __all__ = [
     "BaseCradleError",
     "MissingTokenError",
     "APIConnectionError",
+    "UnsendableRequestError",
     "AuthenticationError",
     "UnauthorizedError",
     "InvalidCredentialsError",
@@ -79,7 +80,23 @@ class MissingTokenError(BaseCradleError):
 class APIConnectionError(BaseCradleError):
     """The request never got an API response (DNS failure, refused connection, timeout).
 
-    The underlying ``httpx`` exception is preserved as ``__cause__``.
+    The underlying ``httpx`` exception is preserved as ``__cause__``, except on
+    ``UnsendableRequestError``, whose underlying error may hold the token.
+    """
+
+
+class UnsendableRequestError(APIConnectionError):
+    """The HTTP client refused to send the request, because it is not valid HTTP (#351).
+
+    The network is not at fault, and the platform never received a complete request. The
+    usual cause is a header value HTTP cannot carry: a token read with its trailing newline,
+    or a header passed to ``request(headers=...)`` that holds a control character,
+    whitespace at either end, or a non-ASCII character. A request built from the same
+    values fails the same way, so it is never retried. It subclasses ``APIConnectionError``
+    (no API response), so code that catches that error catches this one too.
+
+    The refused value is never shown: it may be the bearer token. For the same reason the
+    underlying error is neither its ``__cause__`` nor its ``__context__``.
     """
 
 
