@@ -1,6 +1,7 @@
 """Six workflow invariants: bounded artifact retention, a gate that covers every job, a
 gate that cannot fail open, a release pipeline that publishes what it says it does, a test
-matrix that runs exactly the Python versions the package declares (#336), and an action
+matrix that runs exactly the Python versions the package declares, with a
+``requires-python`` floor at the oldest of them (#336, #338), and an action
 pinned to a commit SHA in every workflow that holds a secret or a write grant (#339). The
 last two carry their reasons beside their code, at the end of this file.
 
@@ -2465,7 +2466,8 @@ class TestEachReleaseEditIsCaught:
 
 
 # ---------------------------------------------------------------------------------------
-# #336: CI tests exactly the Python versions the package declares
+# #336, #338: CI tests exactly the Python versions the package declares, and pip installs
+# on no older one
 # ---------------------------------------------------------------------------------------
 
 # ``pyproject.toml``'s ``Programming Language :: Python :: 3.N`` classifiers and the
@@ -2475,6 +2477,12 @@ class TestEachReleaseEditIsCaught:
 # drifted once: 3.15 was released on 2026-10-09 and was in neither until #334. A matrix is
 # only half of it, too: the job's setup step must hand each leg its version, or every leg
 # runs one interpreter under the matrix's names.
+#
+# ``requires-python``'s floor is a third copy of the list's oldest entry (#338). Leave it
+# behind when that version is dropped and pip keeps installing the SDK on a Python nothing
+# declares or tests; raise it early and pip refuses one that both lists still name. Only
+# the floor is compared: an upper bound is deliberately absent, because a new Python should
+# install before it is declared.
 #
 # The classifiers are read with ``tomllib``, standard library from 3.11. The 3.10 leg skips
 # the comparison rather than add ``tomli`` for one test ("every dependency is debt"): the
@@ -2615,6 +2623,52 @@ def test_ci_tests_exactly_the_declared_python_versions():
 
 def test_each_test_leg_sets_up_its_matrix_version():
     check_each_leg_sets_up_its_matrix_version(CI_WORKFLOW.read_text(encoding="utf-8"))
+
+
+#: The one ``requires-python`` form the floor check reads: a lone lower bound.
+REQUIRES_PYTHON_FLOOR = re.compile(r">=(?P<version>3\.\d+)")
+
+#: ``pyproject.toml``'s ``requires-python`` line, found rather than pinned, for the probes.
+REQUIRES_PYTHON_LINE = re.compile(r"^requires-python = .*\n", re.MULTILINE)
+
+
+def _version_key(version: str) -> tuple[int, ...]:
+    """Numeric order, so 3.9 sorts before 3.10 (as text it would sort after)."""
+    return tuple(int(part) for part in version.split("."))
+
+
+def oldest_declared_python_version(pyproject_text: str) -> str:
+    """The oldest ``3.N`` the classifiers declare, ordered as numbers."""
+    declared = declared_python_versions(pyproject_text)
+    assert declared, "pyproject.toml declares no Programming Language :: Python :: 3.N"
+    return min(declared, key=_version_key)
+
+
+def check_requires_python_floor_is_the_oldest_declared(pyproject_text: str) -> None:
+    tomllib = pytest.importorskip("tomllib", reason="tomllib is standard library from 3.11")
+    requires = tomllib.loads(pyproject_text)["project"].get("requires-python")
+    assert requires is not None, (
+        "pyproject.toml has no requires-python, so pip installs the SDK on any Python; "
+        'it must be ">=" followed by the oldest declared version'
+    )
+    floor = REQUIRES_PYTHON_FLOOR.fullmatch(requires)
+    assert floor, (
+        f'requires-python is {requires!r}; this check reads only a lone floor, ">=3.N" '
+        f"with no space, no patch number, and no other operator or clause. An upper bound is "
+        f"deliberately absent, so a new Python installs before it is declared."
+    )
+    oldest = oldest_declared_python_version(pyproject_text)
+    assert floor.group("version") == oldest, (
+        f"requires-python is {requires!r} but the oldest declared Python is {oldest}: "
+        f'it must be ">={oldest}". Lower, and pip installs the SDK on a Python nothing '
+        f"declares or tests; higher, and pip refuses one both lists still name. Dropping "
+        f"a version edits every file that names it (git grep -nF for the version being "
+        f"dropped finds them); regenerate uv.lock with uv lock rather than editing it."
+    )
+
+
+def test_requires_python_floor_is_the_oldest_declared_version():
+    check_requires_python_floor_is_the_oldest_declared(PYPROJECT.read_text(encoding="utf-8"))
 
 
 #: The test job's matrix line, found rather than pinned, so the probes below survive the
@@ -2761,6 +2815,67 @@ class TestEachPythonVersionDriftIsCaught:
         broken = _mutate_in_job(ci, TEST_JOB, old, new)
         with pytest.raises(AssertionError, match="exactly once"):
             check_each_leg_sets_up_its_matrix_version(broken)
+
+
+class TestTheRequiresPythonFloorDriftIsCaught:
+    """One probe per direction the floor can leave the oldest declared version, and one
+    per shape the check refuses to read. Each edits the real file's own lines, and derives
+    its versions from the oldest one declared, so a version change changes no probe."""
+
+    @pytest.fixture(scope="module")
+    @classmethod
+    def pyproject(cls):
+        return PYPROJECT.read_text(encoding="utf-8")
+
+    @pytest.fixture(scope="module")
+    @classmethod
+    def floor_line(cls, pyproject):
+        lines = REQUIRES_PYTHON_LINE.findall(pyproject)
+        assert len(lines) == 1, f"expected one requires-python line, found {lines}"
+        return lines[0]
+
+    @pytest.fixture(scope="module")
+    @classmethod
+    def oldest_minor(cls, pyproject):
+        """The oldest declared version's minor number: 10 for 3.10."""
+        return _version_key(oldest_declared_python_version(pyproject))[1]
+
+    def _requires(self, floor: str) -> str:
+        return f'requires-python = "{floor}"\n'
+
+    def test_a_floor_below_the_oldest_declared_version_is_caught(
+        self, pyproject, floor_line, oldest_minor
+    ):
+        """The state dropping the oldest version and forgetting the floor leaves behind."""
+        broken = _mutate(pyproject, floor_line, self._requires(f">=3.{oldest_minor - 1}"))
+        with pytest.raises(AssertionError, match=rf"oldest declared Python is 3\.{oldest_minor}:"):
+            check_requires_python_floor_is_the_oldest_declared(broken)
+
+    def test_a_floor_above_the_oldest_declared_version_is_caught(
+        self, pyproject, floor_line, oldest_minor
+    ):
+        broken = _mutate(pyproject, floor_line, self._requires(f">=3.{oldest_minor + 1}"))
+        with pytest.raises(AssertionError, match=rf"oldest declared Python is 3\.{oldest_minor}:"):
+            check_requires_python_floor_is_the_oldest_declared(broken)
+
+    def test_versions_are_ordered_as_numbers_not_text(self, pyproject):
+        """As text, 3.9 sorts after every 3.1N, so a text ``min`` would miss it."""
+        anchor = '    "Programming Language :: Python :: 3",\n'
+        added = '    "Programming Language :: Python :: 3.9",\n'
+        broken = _mutate(pyproject, anchor, anchor + added)
+        with pytest.raises(AssertionError, match=r"oldest declared Python is 3\.9:"):
+            check_requires_python_floor_is_the_oldest_declared(broken)
+
+    def test_a_missing_floor_is_caught(self, pyproject, floor_line):
+        broken = _mutate(pyproject, floor_line, "")
+        with pytest.raises(AssertionError, match="has no requires-python"):
+            check_requires_python_floor_is_the_oldest_declared(broken)
+
+    @pytest.mark.parametrize("form", ["~=3.{m}", ">=3.{m},<4", ">= 3.{m}", ">=3.{m}.0"])
+    def test_a_floor_in_any_other_form_is_refused(self, pyproject, floor_line, oldest_minor, form):
+        broken = _mutate(pyproject, floor_line, self._requires(form.format(m=oldest_minor)))
+        with pytest.raises(AssertionError, match="reads only a lone floor"):
+            check_requires_python_floor_is_the_oldest_declared(broken)
 
 
 # The sixth invariant (#339): wherever a workflow holds power, its actions are pinned to a
