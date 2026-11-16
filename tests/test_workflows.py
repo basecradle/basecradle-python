@@ -3771,36 +3771,51 @@ def pin_comment_mismatches(
 def ls_remote_tags(repository: str, tags: set[str], cwd: Path) -> str:
     """One anonymous ``git ls-remote`` of these tags, both the ref and its peeled form.
 
-    Anonymous on purpose: the repositories are public, and git over HTTPS does not draw on
-    the REST API's 60-an-hour allowance for unauthenticated callers. Run from ``cwd``, an
-    empty directory, rather than the checkout, because ci.yml's checkouts persist the
-    job's ``GITHUB_TOKEN`` into ``.git/config`` as an ``http.https://github.com/.extraheader``,
-    which git would send to every repository on github.com. ``GIT_TERMINAL_PROMPT=0``
-    because GitHub answers a repository that does not exist with a credential prompt,
-    which would hang the job instead of failing it.
+    Anonymous on purpose, and wholly: the repositories are public, and git over HTTPS
+    does not draw on the REST API's 60-an-hour allowance for unauthenticated callers. Run
+    from ``cwd``, an empty directory, rather than the checkout, because ci.yml's checkouts
+    persist the job's ``GITHUB_TOKEN`` into ``.git/config`` as an
+    ``http.https://github.com/.extraheader``, which git would send to every repository on
+    github.com. Global and system config are ignored too, so a credential helper on a
+    contributor's machine is never asked. ``GIT_TERMINAL_PROMPT=0`` because GitHub answers
+    a repository that does not exist with a credential prompt, which would hang the job
+    instead of failing it.
 
     Three attempts, as ci.yml's actionlint pull makes, because this job gates every merge:
-    a blip on GitHub's side must not redden a PR that touched no workflow. A comment that
-    does not match its pin fails on the first answer; only a failure to get one is retried.
+    a blip on GitHub's side, an error or a stall, must not redden a PR that touched no
+    workflow. A comment that does not match its pin fails on the first answer; only a
+    failure to get one is retried.
     """
     patterns = [f"refs/tags/{tag}{suffix}" for tag in sorted(tags) for suffix in ("", "^{}")]
+    env = {
+        **os.environ,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+    }
+    failure = ""
     for attempt in (1, 2, 3):
-        result = subprocess.run(
-            ["git", "ls-remote", f"https://github.com/{repository}.git", *patterns],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
-        )
-        if result.returncode == 0:
-            return result.stdout
+        try:
+            result = subprocess.run(
+                ["git", "ls-remote", f"https://github.com/{repository}.git", *patterns],
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+                env=env,
+            )
+        except subprocess.TimeoutExpired:
+            failure = "no answer within 60 s"
+        else:
+            if result.returncode == 0:
+                return result.stdout
+            failure = f"exit {result.returncode}: {result.stderr.strip()}"
         if attempt < 3:
             time.sleep(attempt * 5)
     raise AssertionError(
-        f"`git ls-remote` of {repository} failed three times (exit {result.returncode}), so "
-        f"whether its pins' comments are true is unknown:\n{result.stderr}"
+        f"`git ls-remote` of {repository} failed three times, so whether its pins' comments "
+        f"are true is unknown. Last failure: {failure}"
     )
 
 
@@ -3832,7 +3847,9 @@ def test_every_pin_comment_names_the_pinned_commit(tmp_path):
     )
 
 
-#: Fabricated: one lightweight tag, one annotated (object, then its peeled commit).
+#: ``git ls-remote``'s answer in miniature: one lightweight tag, and one annotated (the tag
+#: object, then its peeled commit). The SHAs are the real ones for those two tags, so the
+#: fixture shows the very case that makes peeling necessary; nothing here reads them live.
 LS_REMOTE = (
     "3d3c42e5aac5ba805825da76410c181273ba90b1\trefs/tags/v7.0.1\n"
     "aef6c9b6e301dc803e1bc9133e9ce67ae9b0906b\trefs/tags/v1.14.3\n"
