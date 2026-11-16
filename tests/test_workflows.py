@@ -1538,7 +1538,8 @@ class TestEachFailOpenEditIsCaught:
     """
 
     @pytest.fixture(scope="module")
-    def ci(self):
+    @classmethod
+    def ci(cls):
         return CI_WORKFLOW.read_text(encoding="utf-8")
 
     def test_dropping_the_gates_always_is_caught(self, ci):
@@ -2259,7 +2260,8 @@ class TestEachReleaseEditIsCaught:
     """
 
     @pytest.fixture(scope="module")
-    def release(self):
+    @classmethod
+    def release(cls):
         return RELEASE_WORKFLOW.read_text(encoding="utf-8")
 
     def test_renaming_the_pypi_environment_is_caught(self, release):
