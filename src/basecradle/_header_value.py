@@ -13,8 +13,10 @@ def _header_value_defect(value: str) -> tuple[int | None, str] | None:
 
     The value must be printable ASCII (``!`` to ``~``), with spaces or tabs allowed only
     between those characters. HTTP cannot carry a non-ASCII character, NUL, CR or LF.
-    Whitespace at either end is not part of a header value: httpx refuses to send it, and a
-    hop that accepted it would strip it, so the platform would read a different value.
+    Whitespace at either end is not part of the value: a hop strips it, so the platform
+    would read a different value. (h11 refuses it at the end of a header; at the start of
+    a token it lands mid-header, after ``Bearer``, and goes out, which is why the rule is
+    about the value the caller gave and not the header line.)
     Other control characters are refused as well, though h11 would send them, because the
     rule is the same in every SDK and not whatever one HTTP library tolerates.
 
