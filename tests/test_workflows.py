@@ -3373,6 +3373,21 @@ LOCKED_COMMANDS = {
 #: The bootstrap that writes uv's hashed requirement for the install above to read.
 LOCKED_BOOTSTRAP = 'python3 scripts/locked_requirement.py uv > "$RUNNER_TEMP/uv-requirement.txt"'
 
+#: Every other command in the build action that runs uv, exactly: the check that the uv on
+#: the PATH is the locked one.
+UV_HELPERS = ('running="$(uv --version)"',)
+
+#: uv or pip where the shell runs it: a command's first word (a path to it included), after
+#: a separator or `$(`, or after `-m`. Not as an argument (`locked_requirement.py uv`) or in
+#: a message (`echo "...uv..."`), which run nothing.
+RUNS_UV_OR_PIP = re.compile(
+    r"(?:^|[;&|(]\s*|-m\s+)(?:[^\s;&|()]*/)?(?:uv|pip3?)(?=[\"'\s)]|$)", re.MULTILINE
+)
+
+#: Setting what uv or pip read from their environment (an index, a constraint, hash
+#: checking), or appending to the job's environment, changes what an exact command does.
+TOOLCHAIN_ENVIRONMENT = re.compile(r"\b(?:UV|PIP)_[A-Z0-9_]+\s*[:=]|\bGITHUB_ENV\b")
+
 
 def steps_using(text: str, action: str) -> list[tuple[int, list[str]]]:
     """Every step whose ``uses:`` names ``action`` (``owner/repo``), with the step's lines.
@@ -3417,8 +3432,10 @@ def run_scripts(text: str) -> list[str]:
         for following in range(index + 1, len(lines)):
             if following not in inside_a_script:
                 break
-            body.append(lines[following].strip())
-        while body and not body[-1]:
+            # Leading indentation only: a line ending in `\ ` is an escaped space, not a
+            # continuation, and `command_at` must not read it as one.
+            body.append(lines[following].lstrip())
+        while body and not body[-1].strip():
             body.pop()
         scripts.append("\n".join(body))
     return scripts
@@ -3543,26 +3560,46 @@ def check_build_requirements_are_locked(pyproject_text: str, lock_text: str) -> 
 
 def check_the_build_action_builds_from_the_lock(text: str) -> None:
     """Assert the one build runs exactly the locked commands, and nothing it cannot read."""
+    lines = text.splitlines()
+    inside_a_script = block_scalar_line_numbers(lines)
     scripts = run_scripts(text)
     wrong = []
-    folded = [
+    not_literal = [
         line.strip()
-        for line in text.splitlines()
-        if (match := KEY_LINE.match(line))
+        for index, line in enumerate(lines)
+        if index not in inside_a_script
+        and (match := KEY_LINE.match(line))
         and match.group("key") == "run"
-        and _strip_comment(match.group("value") or "").strip().startswith(">")
+        and not _strip_comment(match.group("value") or "").strip().startswith("|")
     ]
-    if folded:
+    if not_literal:
         wrong.append(
-            f"a folded (`>`) run block is not read here, so a command in it cannot be held "
-            f"to its locked form; write it as `|`: {folded}"
+            f"every run here must be a literal (`|`) block: YAML folds any other form, a "
+            f"plain multi-line value included, and no command is read through that folding "
+            f"here: {not_literal}"
         )
     bootstrap = commands_matching(scripts, re.compile(r"locked_requirement\.py"))
     if [words(command) for command in bootstrap] != [words(LOCKED_BOOTSTRAP)]:
         wrong.append(f"uv's requirement is not written by one `{LOCKED_BOOTSTRAP}`: {bootstrap}")
     for what in LOCKED_COMMANDS:
         wrong += locked_command_problems(what, scripts)
-    third_party = [r.action for r in uses_references(text.splitlines())]
+    allowed = {words(c) for c in (*UV_HELPERS, *(e for _, e in LOCKED_COMMANDS.values()))}
+    others = [
+        command
+        for command in commands_matching(scripts, RUNS_UV_OR_PIP)
+        if not command.startswith("#") and words(command) not in allowed
+    ]
+    if others:
+        wrong.append(
+            f"a command runs uv or pip and is none of the locked ones (a global flag before "
+            f"the subcommand still runs it): {others}"
+        )
+    if TOOLCHAIN_ENVIRONMENT.search(text):
+        wrong.append(
+            "it sets a UV_ or PIP_ variable, or writes $GITHUB_ENV: either changes what an "
+            "exact command fetches or checks"
+        )
+    third_party = [r.action for r in uses_references(lines)]
     if third_party:
         wrong.append(
             f"it uses {third_party}: Dependabot never reads .github/actions/, so a pin here "
@@ -3607,7 +3644,12 @@ def check_nothing_else_builds(name: str, text: str) -> None:
 
 
 def check_the_publish_path_installs_only_the_locked_uv(name: str, text: str) -> None:
-    """Assert the publish path's one install, if any, is the hash-checked uv bootstrap."""
+    """Assert the publish path's one install, if any, is the hash-checked uv bootstrap, and
+    nothing on it sets what uv or pip read from their environment."""
+    assert not TOOLCHAIN_ENVIRONMENT.search(text), (
+        f"{name} sets a UV_ or PIP_ variable, or writes $GITHUB_ENV, on the publish path: "
+        f"either changes what the build action's exact commands fetch or check (#346)"
+    )
     installs = commands_matching(run_scripts(text), INSTALLER)
     locked = words(LOCKED_COMMANDS["uv install"][1])
     loose = installs if len(installs) > 1 or any(words(c) != locked for c in installs) else []
@@ -3685,8 +3727,8 @@ def test_the_publish_path_installs_only_the_locked_uv(path):
 
 
 def test_the_run_reader_reads_the_build_actions_scripts():
-    """All three ``run:`` steps, the folded (``>-``) one included: a reader that lost one
-    would let every check above pass on less than the build runs."""
+    """All three ``run:`` steps: a reader that lost one would let every check above pass on
+    less than the build runs."""
     scripts = run_scripts(BUILD_ACTION.read_text(encoding="utf-8"))
     assert len(scripts) == 3
     assert scripts[-1].startswith("uv build --build-constraints")
@@ -3921,6 +3963,34 @@ class TestTheToolchainScannersThemselves:
         (problem,) = locked_command_problems("build", [expected + suffix])
         assert "is not the locked one" in problem
 
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "uv build",
+            "uv --quiet build",
+            '"$RUNNER_TEMP/uv-venv/bin/uv" build',
+            'running="$(uv --version)"',
+            '"$X/bin/python" -m pip install q',
+            "true; pip3 install q",
+            "true && uv export",
+        ],
+    )
+    def test_reads_where_uv_or_pip_runs(self, line):
+        assert RUNS_UV_OR_PIP.search(line), line
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            'python3 scripts/locked_requirement.py uv > "$F"',
+            'echo "::error::The uv on the PATH says $running"',
+            'if [ "uv==$(printf %s "$v")" != "$locked" ]; then',
+            "uv-bin/uvicorn run",
+            "--only-group build",
+        ],
+    )
+    def test_an_argument_or_a_message_is_not_a_run(self, line):
+        assert not RUNS_UV_OR_PIP.search(line), line
+
     def test_a_locked_command_may_wrap_its_lines(self):
         expected = LOCKED_COMMANDS["build"][1]
         wrapped = expected.replace(" --managed-python", " \\\n  --managed-python")
@@ -4136,11 +4206,75 @@ class TestEachToolchainEditIsCaught:
         with pytest.raises(AssertionError, match="installs something"):
             check_the_publish_path_installs_only_the_locked_uv(BUILD_ACTION.name, broken)
 
+    def test_a_plain_multi_line_run_is_caught(self, action):
+        """YAML folds a plain value's continuation lines too: `&& pip install q` would run."""
+        old = "      run: |\n        uv build"
+        broken = _mutate(action, old, "      run: uv build")
+        broken = _mutate(
+            broken,
+            "          --managed-python --no-cache\n",
+            "          --managed-python --no-cache\n          && pip install q\n",
+        )
+        with pytest.raises(AssertionError, match="literal"):
+            check_the_build_action_builds_from_the_lock(broken)
+
+    @pytest.mark.parametrize(
+        "second",
+        [
+            "uv --quiet build --no-build-isolation",
+            'uv --no-cache export --frozen --output-file "$RUNNER_TEMP/build-constraints.txt"',
+            '"$RUNNER_TEMP/uv-venv/bin/python" -m pip --isolated install uv',
+        ],
+    )
+    def test_a_second_toolchain_command_behind_a_global_flag_is_caught(self, action, second):
+        old = "          --managed-python --no-cache\n"
+        broken = _mutate(action, old, old + f"        {second}\n")
+        with pytest.raises(AssertionError, match="none of the locked ones"):
+            check_the_build_action_builds_from_the_lock(broken)
+
+    @pytest.mark.parametrize(
+        "addition",
+        [
+            "      env:\n        UV_INDEX_URL: https://example.com/simple\n",
+            "      env:\n        PIP_INDEX_URL: https://example.com/simple\n",
+        ],
+    )
+    def test_a_toolchain_environment_on_the_build_step_is_caught(self, action, addition):
+        old = "    - name: Build the wheel and sdist\n      shell: bash\n"
+        broken = _mutate(action, old, old + addition)
+        with pytest.raises(AssertionError, match="UV_ or PIP_"):
+            check_the_build_action_builds_from_the_lock(broken)
+
+    def test_writing_the_jobs_environment_is_caught(self, action):
+        old = '        echo "$RUNNER_TEMP/uv-bin" >> "$GITHUB_PATH"\n'
+        broken = _mutate(
+            action, old, old + '        echo "UV_CONSTRAINT=/tmp/x" >> "$GITHUB_ENV"\n'
+        )
+        with pytest.raises(AssertionError, match="GITHUB_ENV"):
+            check_the_build_action_builds_from_the_lock(broken)
+
+    def test_a_toolchain_environment_in_the_release_is_caught(self, release):
+        old = "    runs-on: ubuntu-latest\n    steps:\n"
+        broken = _mutate_in_job(
+            release,
+            "build",
+            old,
+            "    runs-on: ubuntu-latest\n    env:\n      UV_NO_VERIFY_HASHES: '1'\n    steps:\n",
+        )
+        with pytest.raises(AssertionError, match="UV_ or PIP_"):
+            check_the_publish_path_installs_only_the_locked_uv(RELEASE_WORKFLOW.name, broken)
+
+    def test_an_escaped_space_is_not_a_continuation(self, action):
+        old = 'constraints.txt" --require-hashes \\\n'
+        broken = _mutate(action, old, 'constraints.txt" --require-hashes \\ \n')
+        with pytest.raises(AssertionError, match="build"):
+            check_the_build_action_builds_from_the_lock(broken)
+
     def test_a_folded_build_step_is_caught(self, action):
         broken = _mutate(
             action, "      run: |\n        uv build", "      run: >-\n        uv build"
         )
-        with pytest.raises(AssertionError, match="folded"):
+        with pytest.raises(AssertionError, match="literal"):
             check_the_build_action_builds_from_the_lock(broken)
 
     def test_a_second_install_beside_the_locked_one_is_caught(self, action):
@@ -4159,22 +4293,6 @@ class TestEachToolchainEditIsCaught:
         old = '-r "$RUNNER_TEMP/uv-requirement.txt"\n'
         broken = _mutate(action, old, '-r "$RUNNER_TEMP/other.txt"\n')
         with pytest.raises(AssertionError, match="uv install is not the locked one"):
-            check_the_build_action_builds_from_the_lock(broken)
-
-    def test_a_comment_folded_into_the_build_is_caught(self, action):
-        """In a ``>`` block YAML folds a ``#`` line into the command, and the shell then
-        reads every flag after it as a comment."""
-        broken = _mutate(
-            action,
-            "      run: |\n        uv build",
-            "      run: >-\n        uv build",
-        )
-        broken = _mutate(
-            broken,
-            "--managed-python --no-cache\n",
-            "--managed-python\n        # x\n          --no-cache\n",
-        )
-        with pytest.raises(AssertionError, match="folded"):
             check_the_build_action_builds_from_the_lock(broken)
 
     def test_an_install_after_a_quoted_hash_in_the_release_is_caught(self, release):
