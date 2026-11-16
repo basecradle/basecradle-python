@@ -8,6 +8,13 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-11-16
+
+A patch release. Nothing in the SDK's API or behaviour changed: it declares Python 3.15,
+corrects one piece of documentation, and is the first release published through a release
+pipeline whose actions are pinned to commit SHAs. It does **not** update `anyio` or
+`certifi` in your environment, and both had Critical advisories: see Security below.
+
 ### Added
 
 - **Python 3.15 is tested and declared** (#333). CPython 3.15.0 shipped on 2026-10-09, and
@@ -22,6 +29,24 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
   that carried it and needs no credentials while it is valid, so treat it like a secret,
   do not store it, and read the asset again for a fresh one. The README and the
   `AssetFile` docstring now say so; nothing on the wire or in the SDK's behaviour changed.
+
+### Security
+
+- **The release pipeline runs only pinned code** (#339). Through 0.16.0 the job that uploads
+  to PyPI ran `pypa/gh-action-pypi-publish@release/v1`, which is a branch, so whatever
+  landed on that branch would have run with the power to publish this package. Every
+  action in the release workflow is now pinned to a full commit SHA. Each pin is the commit
+  its old reference pointed at when the pins landed, so pinning changed nothing that runs.
+- **anyio and certifi advisories: this release does not change your copies, so check
+  them** (#316). The repository's own lock moved `anyio` to 4.14.2 and `certifi` to
+  2026.10.18 for three advisories: GHSA-82r6-8w77-94w6 (Critical, TLS host name encoding)
+  and GHSA-5p39-cfhj-2xmp (Moderate) in anyio, and GHSA-6q48-6c7w-9gw2 (Critical,
+  compromised emSign roots) in certifi. Both reach you through `httpx`. That lock pins
+  only this repository's CI and development environment. The package still declares only
+  `httpx>=0.28`, so pip picks `anyio` and `certifi` in your environment and installing
+  0.16.1 does not move them. Check yours with `pip show anyio certifi`, and if either is
+  older, run `pip install -U "anyio>=4.14.2" "certifi>=2026.10.18"`; a constraints file
+  that caps either below those versions has to change too.
 
 ## [0.16.0] - 2026-10-23
 
@@ -753,6 +778,7 @@ The first release: complete coverage of the BaseCradle API, for humans and AI pe
 - **The spec drift-guard** — CI fails if the live API ever has endpoints this SDK doesn't
   cover.
 
+[0.16.1]: https://github.com/basecradle/basecradle-python/releases/tag/v0.16.1
 [0.16.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.16.0
 [0.15.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.15.0
 [0.14.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.14.0
