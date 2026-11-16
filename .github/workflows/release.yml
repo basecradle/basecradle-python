@@ -4,6 +4,21 @@
 # The workflow filename and the environment names (testpypi, pypi) are contractual —
 # they match the pending publishers registered on PyPI/TestPyPI (issue #1). Renaming
 # any of them breaks the trust relationship.
+#
+# Every action here is pinned to a full commit SHA, its version in the trailing comment
+# (#339). The publish jobs hold id-token: write, so whatever an action's ref points at
+# runs with the power to publish this package under our name -- and a tag or a branch
+# (`release/v1` was one) moves whenever its owner, or whoever takes over its owner's
+# account, moves it. The build job is pinned too: it makes the bytes that get published.
+# Dependabot's github-actions entry bumps a pin and its comment together, in a PR that the
+# shared auto-merge policy merges on green when the bump is patch or minor -- so a pin
+# stops a ref being moved under us, not a bad new release being adopted.
+# tests/test_workflows.py fails on any action here that is not SHA-pinned.
+#
+# What an action pin cannot reach. gh-action-pypi-publish runs its upload in the container
+# ghcr.io/pypa/gh-action-pypi-publish:<the pinned sha>, and a registry tag is pypa's to
+# move; the action offers no digest input. And the build's own toolchain -- the uv that
+# setup-uv installs, the hatchling `uv build` resolves -- is fetched fresh on each tag.
 name: Release
 
 on:
@@ -18,7 +33,7 @@ jobs:
     name: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # #214 asserts the tag names the version the tree builds, and #216 derives the
       # tag from that tree -- which between them removed the tag's only independent
       # cross-check. A derived tag on a checkout one commit behind main is the RIGHT
@@ -77,7 +92,13 @@ jobs:
           fi
 
           echo "Tag $GITHUB_REF_NAME is main's tip (${tagged:0:7})."
-      - uses: astral-sh/setup-uv@v10.3.3
+      # No Actions cache, said outright: every push to main writes one (ci.yml), and a tag
+      # run can read the default branch's caches, so a restored cache is a way for an
+      # action this workflow never ran to reach the bytes it publishes. setup-uv's own
+      # default ("auto") already skips tag pushes; this keeps that true across its bumps.
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: false
       - name: Build the wheel and sdist
         run: uv build
       # The tag is only a trigger: `uv build` derives the version from
@@ -165,7 +186,7 @@ jobs:
       # GitHub holds a waiting deployment -- the pypi gate the capital actuates --
       # for up to 30 days, and an artifact that expired first would fail
       # publish-pypi's download and force a re-tag.
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist
           path: dist/
@@ -181,11 +202,11 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
           path: dist/
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           repository-url: https://test.pypi.org/legacy/
 
@@ -203,8 +224,8 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
           path: dist/
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
