@@ -3787,12 +3787,16 @@ def ls_remote_tags(repository: str, tags: set[str], cwd: Path) -> str:
     failure to get one is retried.
     """
     patterns = [f"refs/tags/{tag}{suffix}" for tag in sorted(tags) for suffix in ("", "^{}")]
+    # The caller's environment minus everything that steers git to a credential or a
+    # repository: GIT_ASKPASS is asked before GIT_TERMINAL_PROMPT is consulted (an IDE
+    # terminal sets one), and GIT_DIR or GIT_CONFIG_* from a hook would bring a repo's own
+    # config back. Proxy settings and PATH stay, or git could not reach GitHub at all.
     env = {
-        **os.environ,
-        "GIT_TERMINAL_PROMPT": "0",
-        "GIT_CONFIG_GLOBAL": os.devnull,
-        "GIT_CONFIG_NOSYSTEM": "1",
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("GIT_") and key != "SSH_ASKPASS"
     }
+    env |= {"GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
     failure = ""
     for attempt in (1, 2, 3):
         try:
@@ -3843,7 +3847,10 @@ def test_every_pin_comment_names_the_pinned_commit(tmp_path):
         "a pin's version comment must name the tag whose commit it pins. Re-read the SHA "
         "off the action's repository (`git ls-remote https://github.com/OWNER/REPO "
         "'refs/tags/vX.Y.Z^{}'`, falling back to the bare tag for a lightweight one) and "
-        "fix whichever side is wrong (#341):\n" + "\n".join(mismatches)
+        "fix whichever side is wrong (#341). If the comment was right when it landed, the "
+        "tag has moved upstream: what runs is still the pinned commit, but a moved release "
+        "tag is how a compromised action reaches its users, so find out why before editing "
+        "either side:\n" + "\n".join(mismatches)
     )
 
 

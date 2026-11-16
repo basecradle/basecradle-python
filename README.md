@@ -374,13 +374,13 @@ asyncio.run(main())
 
 ## Development
 
-Requires [uv](https://docs.astral.sh/uv/).
+Requires [uv](https://docs.astral.sh/uv/). CI installs the version `.tool-versions` names.
 
 ```bash
 uv sync --locked         # install everything (creates .venv; fails if it drifts from uv.lock, as CI does)
 uv lock                  # after changing a dependency in pyproject.toml — commit uv.lock with it
 uv run pytest            # tests (offline — the default)
-uv run pytest -m live    # the drift-guard (checks the SDK covers the live API and its error codes)
+uv run pytest -m live    # the drift-guard (the SDK covers the live API and its error codes; pin comments are true)
 uv run ruff check .      # lint
 uv run ruff format .     # format
 uv build                 # build the wheel + sdist

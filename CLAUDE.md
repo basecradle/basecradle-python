@@ -240,7 +240,7 @@ Your home directory on the fleet box carries six standing folders (`~/scratch`, 
 uv sync --locked         # install everything (creates .venv; fails if it drifts from uv.lock, as CI does)
 uv lock                  # after changing a dependency in pyproject.toml — commit uv.lock with it
 uv run pytest            # tests (offline — the default)
-uv run pytest -m live    # the drift-guard (one network call each to the live spec and docs)
+uv run pytest -m live    # the drift-guard (one GET each of the live spec and docs, one git ls-remote per pinned action)
 uv run ruff check .      # lint
 uv run ruff format .     # format
 uv run mypy              # types (--strict; flags in pyproject.toml, same as CI)
