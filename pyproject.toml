@@ -35,7 +35,8 @@ dev = ["mypy>=1.18", "pytest>=8", "respx>=0.22", "ruff>=0.16.8"]
 # Exact, because this is the code that makes the bytes published to PyPI (#341): `uv build`
 # resolves it fresh from PyPI on every tag, outside uv.lock, so a range would build each
 # release with whatever was newest that day. Dependabot's uv entry reads this table and
-# moves the pin. tests/test_workflows.py refuses anything but `==X.Y.Z` here.
+# moves the pin (it moved the old range here in #146). tests/test_workflows.py refuses
+# anything but one exact `==<version>` here.
 [build-system]
 requires = ["hatchling==1.33.0"]
 build-backend = "hatchling.build"

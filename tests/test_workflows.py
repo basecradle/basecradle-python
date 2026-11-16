@@ -76,6 +76,7 @@ be undone.
 import os
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import NamedTuple
 
@@ -2990,18 +2991,27 @@ def privilege_reasons(text: str) -> list[str]:
     return reasons
 
 
-def unpinned_actions(name: str, text: str) -> list[str]:
-    """Every ``uses:`` in a workflow that is not a SHA pin carrying its version comment.
+class UsesReference(NamedTuple):
+    """One ``uses:`` in a workflow: where it is, what it names, and its trailing comment."""
+
+    index: int  # 0-indexed line
+    line: str
+    action: str  # the reference, quotes dropped
+    comment: str  # the trailing YAML comment, ``#`` included, or ""
+
+
+def uses_references(lines: list[str]) -> list[UsesReference]:
+    """Every ``uses:`` in a workflow's lines -- the one reader of them in this module.
 
     Steps and job-level reusable-workflow calls alike, both of which run someone's code
     with the job's power. ``run:`` scripts are skipped, as every reader here skips them:
     a ``uses:`` in shell is text, not an action. A ``uses:`` this cannot read at all is
-    ``unreadable_key_lines``' to report, not this one's to pass.
+    ``unreadable_key_lines``' to report. The pin rule, the toolchain rule and the live
+    pin-comment check all read through here, so they cannot disagree about which actions
+    a workflow uses.
     """
-    lines = text.splitlines()
     inside_a_script = block_scalar_line_numbers(lines)
-
-    unpinned = []
+    references = []
     for index, line in enumerate(lines):
         match = KEY_LINE.match(line)
         if index in inside_a_script or not match or match.group("key") != "uses":
@@ -3009,16 +3019,23 @@ def unpinned_actions(name: str, text: str) -> list[str]:
         raw = match.group("value") or ""
         reference = _strip_comment(raw)
         comment = raw[len(reference) :].strip()
-        action = reference.strip("\"'")
-        if not action or action.startswith(LOCAL_ACTION_PREFIX):
+        references.append(UsesReference(index, line, reference.strip("\"'"), comment))
+    return references
+
+
+def unpinned_actions(name: str, text: str) -> list[str]:
+    """Every ``uses:`` in a workflow that is not a SHA pin carrying its version comment."""
+    unpinned = []
+    for ref in uses_references(text.splitlines()):
+        if not ref.action or ref.action.startswith(LOCAL_ACTION_PREFIX):
             continue
-        where = f"{name}:{index + 1}: {line.strip()}"
-        if not (SHA_PINNED.match(action) or DIGEST_PINNED.match(action)):
+        where = f"{name}:{ref.index + 1}: {ref.line.strip()}"
+        if not (SHA_PINNED.match(ref.action) or DIGEST_PINNED.match(ref.action)):
             unpinned.append(
                 f"{where} -- not pinned to a full 40-character commit SHA "
                 f"(or, for a docker:// image, a sha256 digest)"
             )
-        elif not VERSION_COMMENT.match(comment):
+        elif not VERSION_COMMENT.match(ref.comment):
             unpinned.append(f"{where} -- pinned, but no `# vX.Y.Z` comment names the version")
     return unpinned
 
@@ -3258,8 +3275,10 @@ class TestEachPinEditIsCaught:
 # - **uv.** setup-uv given no version installs the newest uv on the day of the tag. Every
 #   setup-uv step now reads `.tool-versions` through `version-file:`, so CI and the release
 #   build run one uv, and the file names it exactly. Not `[tool.uv] required-version`: uv
-#   enforces that on every local command too, so an exact pin there breaks every
-#   contributor whose uv differs, the fleet box's NOC-managed one included.
+#   enforces that on every contributor's every local command, so an exact pin there
+#   breaks anyone whose uv differs, the fleet box's NOC-managed one included. A
+#   `.tool-versions` binds only a contributor who uses asdf or mise, which read it and
+#   hand them CI's uv; that is what those tools are for.
 # - **The build backend.** `uv build` resolves `[build-system].requires` from PyPI on every
 #   tag, outside uv.lock. It is pinned to an exact version, which Dependabot's uv entry
 #   reads and moves.
@@ -3281,29 +3300,24 @@ CHECKOUT = "actions/checkout"
 #: A version setup-uv installs as exactly itself: no range, no ``latest``, no ``v``.
 EXACT_UV_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
 
-#: One requirement pinned to exactly one release, ``name==X.Y.Z`` with nothing after it.
-#: A marker, an extra or a second clause is refused rather than read.
-EXACT_REQUIREMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*==\d+(?:\.\d+)*$")
+#: One requirement pinned to exactly one release: ``name==<version>``, nothing after it.
+#: The version is any PEP 440 one -- ``1.33.0``, ``1.34.0.post1``, ``2.0.0rc1`` -- but never
+#: a wildcard, a second clause, a marker or an extra, each of which admits more than one.
+EXACT_REQUIREMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*==[0-9][0-9A-Za-z.!+-]*$")
 
 
 def steps_using(text: str, action: str) -> list[tuple[int, list[str]]]:
     """Every step whose ``uses:`` names ``action`` (``owner/repo``), with the step's lines.
 
     Any ref, and case-insensitive, because Actions resolves ``Astral-SH/Setup-UV`` to the
-    same repository: a rule that one capital letter steps around is no rule. ``run:``
-    scripts are skipped, as every reader in this module skips them.
+    same repository: a rule that one capital letter steps around is no rule.
     """
     lines = text.splitlines()
-    inside_a_script = block_scalar_line_numbers(lines)
-    found = []
-    for index, line in enumerate(lines):
-        match = KEY_LINE.match(line)
-        if index in inside_a_script or not match or match.group("key") != "uses":
-            continue
-        reference = _strip_comment(match.group("value") or "").strip("\"'")
-        if reference.split("@", 1)[0].lower() == action.lower():
-            found.append((index + 1, _step_containing(lines, index)))
-    return found
+    return [
+        (ref.index + 1, _step_containing(lines, ref.index))
+        for ref in uses_references(lines)
+        if ref.action.split("@", 1)[0].lower() == action.lower()
+    ]
 
 
 def pinned_uv_version(tool_versions: str) -> str:
@@ -3312,6 +3326,11 @@ def pinned_uv_version(tool_versions: str) -> str:
     setup-uv drops everything from a ``#``, splits on whitespace, and takes the first line
     whose first word is ``uv``. This is stricter on purpose: a second ``uv`` line, which
     setup-uv would silently ignore, or a version it would resolve as a range, is refused.
+
+    So is any other tool. setup-uv also reads a ``python`` line from this file, and sets
+    that interpreter for every step that names none of its own: one added line would move
+    lint, types, the drift-guard and the release build off ``.python-version`` with no
+    diff in any workflow.
     """
     entries = []
     for line in tool_versions.splitlines():
@@ -3319,8 +3338,12 @@ def pinned_uv_version(tool_versions: str) -> str:
         if not content:
             continue
         tool, *versions = content.split()
-        if tool == "uv":
-            entries.append(versions)
+        assert tool == "uv", (
+            f"{UV_VERSION_FILE} names {tool!r}: it holds uv and nothing else. setup-uv reads "
+            f"a `python` line from it too, and would set that interpreter for every step "
+            f"that names none of its own, the release build included (#341)."
+        )
+        entries.append(versions)
     assert len(entries) == 1, (
         f"{UV_VERSION_FILE} must name uv on exactly one line, found {len(entries)}. "
         f"setup-uv reads only the first, so a second is a version that looks pinned and is not."
@@ -3362,7 +3385,7 @@ def check_build_backend_is_pinned_exactly(pyproject_text: str) -> None:
     assert requires, "[build-system].requires is missing or empty: the backend comes from nowhere"
     loose = [entry for entry in requires if not EXACT_REQUIREMENT.match(entry)]
     assert not loose, (
-        f"[build-system].requires must pin each entry to one release, `name==X.Y.Z`: "
+        f"[build-system].requires must pin each entry to one release, `name==<version>`: "
         f"`uv build` resolves it from PyPI on every tag, outside uv.lock, so a range builds "
         f"each release with whatever was newest that day (#341). Dependabot's uv entry moves "
         f"an exact pin. Not exact: {loose}"
@@ -3405,15 +3428,6 @@ def test_every_setup_uv_step_reads_the_version_file(workflow):
     check_setup_uv_reads_the_version_file(workflow.name, workflow.read_text(encoding="utf-8"))
 
 
-@pytest.mark.parametrize("workflow", OWNED_WORKFLOWS, ids=lambda path: path.name)
-def test_no_version_file_escapes_the_scanner(workflow):
-    unreadable = unreadable_key_lines(workflow, "version-file", "persist-credentials")
-    assert not unreadable, (
-        "write these as a plain `key: value` under the step's `with:`, so the toolchain "
-        "check can read them:\n" + "\n".join(unreadable)
-    )
-
-
 def test_the_build_backend_is_pinned_exactly():
     check_build_backend_is_pinned_exactly(PYPROJECT.read_text(encoding="utf-8"))
 
@@ -3449,7 +3463,6 @@ class TestTheToolchainScannersThemselves:
         [
             "uv 0.13.6\n",
             "# a comment\nuv 0.13.6  # trailing\n",
-            "python 3.13.1\nuv 0.13.6\n",
         ],
     )
     def test_reads_one_exact_uv(self, text):
@@ -3467,6 +3480,8 @@ class TestTheToolchainScannersThemselves:
             "uv 0.13.6 0.13.7\n",
             "uv 0.13.6\nuv 0.13.7\n",
             "uv\n",
+            "python 3.13.1\nuv 0.13.6\n",
+            "uv 0.13.6\nruff 0.16.8\n",
         ],
     )
     def test_refuses_anything_but_one_exact_uv(self, text):
@@ -3501,6 +3516,21 @@ class TestTheToolchainScannersThemselves:
         with pytest.raises(AssertionError, match="setup-uv"):
             check_setup_uv_reads_the_version_file("w.yml", self.workflow(step))
 
+    @pytest.mark.parametrize(
+        "inputs",
+        [
+            "        with: {version-file: .tool-versions}\n",
+            "        with:\n          version-file:\n            .tool-versions\n",
+            "        with:\n          python-version-file: .tool-versions\n",
+        ],
+    )
+    def test_a_version_file_it_cannot_read_fails_closed(self, inputs):
+        """No blind-spot scan is needed here: the check demands a positive reading of
+        the file, so any shape it cannot read is a step that fails it, never one that
+        slips past it."""
+        with pytest.raises(AssertionError, match="setup-uv"):
+            check_setup_uv_reads_the_version_file("w.yml", self.workflow(self.UV + inputs))
+
     def test_a_neighbours_version_file_does_not_vouch_for_a_step(self):
         text = self.workflow(
             self.UV,
@@ -3519,6 +3549,8 @@ class TestTheToolchainScannersThemselves:
             'requires = ["hatchling==1.33.0"]',
             "requires = ['hatchling==1.33.0']",
             'requires = [\n    "hatchling==1.33.0",\n    "hatch-vcs==0.5.0",\n]',
+            'requires = ["hatchling==1.34.0.post1"]',
+            'requires = ["hatchling==2.0.0rc1"]',
         ],
     )
     def test_accepts_an_exact_build_backend(self, requires):
@@ -3531,6 +3563,8 @@ class TestTheToolchainScannersThemselves:
             'requires = ["hatchling"]',
             'requires = ["hatchling~=1.33"]',
             'requires = ["hatchling==1.*"]',
+            'requires = ["hatchling===1.33.0"]',
+            'requires = ["hatchling== 1.33.0"]',
             'requires = ["hatchling==1.33.0,<2"]',
             "requires = [\"hatchling==1.33.0; python_version>='3.10'\"]",
             'requires = ["hatchling[x]==1.33.0"]',
@@ -3567,6 +3601,18 @@ class TestTheToolchainScannersThemselves:
     def test_refuses_a_checkout_that_keeps_its_token_where_power_is_held(self, step):
         with pytest.raises(AssertionError, match="persist-credentials"):
             check_checkouts_leave_no_token("w.yml", self.workflow(step, power=True))
+
+    @pytest.mark.parametrize(
+        "inputs",
+        [
+            "        with: {persist-credentials: false}\n",
+            "        with:\n          persist-credentials:\n            false\n",
+        ],
+    )
+    def test_a_persist_credentials_it_cannot_read_fails_closed(self, inputs):
+        text = self.workflow(self.CO + inputs, power=True)
+        with pytest.raises(AssertionError, match="persist-credentials"):
+            check_checkouts_leave_no_token("w.yml", text)
 
     def test_accepts_a_checkout_that_drops_its_token(self):
         step = self.CO + "        with:\n          persist-credentials: false  # #341\n"
@@ -3674,23 +3720,14 @@ def action_pins(name: str, text: str) -> list[ActionPin]:
     action's own tag name there, so ``# 7.0.1`` against a repository that tags
     ``v7.0.1`` is a comment naming a tag that does not exist, and is reported as one.
     """
-    lines = text.splitlines()
-    inside_a_script = block_scalar_line_numbers(lines)
     pins = []
-    for index, line in enumerate(lines):
-        match = KEY_LINE.match(line)
-        if index in inside_a_script or not match or match.group("key") != "uses":
+    for ref in uses_references(text.splitlines()):
+        if not SHA_PINNED.match(ref.action) or not VERSION_COMMENT.match(ref.comment):
             continue
-        raw = match.group("value") or ""
-        reference = _strip_comment(raw)
-        comment = raw[len(reference) :].strip()
-        action = reference.strip("\"'")
-        if not SHA_PINNED.match(action) or not VERSION_COMMENT.match(comment):
-            continue
-        path, sha = action.split("@")
-        tag = comment.lstrip("#").split()[0]
+        path, sha = ref.action.split("@")
+        tag = ref.comment.lstrip("#").split()[0]
         repository = "/".join(path.split("/")[:2])
-        pins.append(ActionPin(f"{name}:{index + 1}", repository, sha, tag))
+        pins.append(ActionPin(f"{name}:{ref.index + 1}", repository, sha, tag))
     return pins
 
 
@@ -3736,18 +3773,23 @@ def ls_remote_tags(repository: str, tags: set[str]) -> str:
 
     Anonymous on purpose: the repositories are public, and git over HTTPS is not
     GitHub's API, so there is no unauthenticated rate limit to share with every runner
-    on the IP. ``GIT_TERMINAL_PROMPT=0`` because GitHub answers a repository that does
-    not exist with a credential prompt, which would hang the job instead of failing it.
+    on the IP. Run from a fresh empty directory rather than the checkout, because
+    ci.yml's checkouts persist the job's ``GITHUB_TOKEN`` into ``.git/config`` as an
+    ``http.https://github.com/.extraheader``, which git would send to every repository
+    on github.com. ``GIT_TERMINAL_PROMPT=0`` because GitHub answers a repository that
+    does not exist with a credential prompt, which would hang the job instead of failing it.
     """
     patterns = [f"refs/tags/{tag}{suffix}" for tag in sorted(tags) for suffix in ("", "^{}")]
-    result = subprocess.run(
-        ["git", "ls-remote", f"https://github.com/{repository}.git", *patterns],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
-    )
+    with tempfile.TemporaryDirectory() as outside_the_checkout:
+        result = subprocess.run(
+            ["git", "ls-remote", f"https://github.com/{repository}.git", *patterns],
+            cwd=outside_the_checkout,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
     assert result.returncode == 0, (
         f"`git ls-remote` of {repository} failed (exit {result.returncode}), so whether its "
         f"pins' comments are true is unknown:\n{result.stderr}"

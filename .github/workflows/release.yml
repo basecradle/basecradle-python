@@ -24,8 +24,8 @@
 # What a pin here cannot reach. gh-action-pypi-publish runs its upload in the container
 # ghcr.io/pypa/gh-action-pypi-publish:<the pinned sha>, and a registry tag is pypa's to
 # move; the action offers no digest input. And hatchling's own dependencies (packaging,
-# pathspec, pluggy, tomlkit, trove-classifiers) still resolve fresh on each tag: an exact
-# hatchling pin does not reach them.
+# pathspec, pluggy, tomlkit, trove-classifiers, and tomli on the 3.10 the build runs
+# under) still resolve fresh on each tag: an exact hatchling pin does not reach them.
 name: Release
 
 on:
