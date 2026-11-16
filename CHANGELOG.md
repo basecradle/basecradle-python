@@ -8,6 +8,31 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 ## [Unreleased]
 
+### Changed
+
+- **An `idempotency_key` HTTP cannot carry exactly as given raises `ValueError` before
+  any request** (#351). Every SDK now shares one meaning: a blank key (`None`, empty, or
+  only ASCII whitespace) is still no key, and any other key must be printable ASCII, with
+  spaces or tabs only between characters. A key that is not is the caller's error. The
+  create raises `ValueError` naming `idempotency_key`, saying what is wrong with it and
+  that nothing was sent, and the SDK never strips or repairs it. What a caller who passed
+  such a key sees now:
+  - Whitespace at either end (`" key-1 "`, a key read from a file with its trailing
+    newline), NUL (`"\0"`), CR, LF, vertical tab or form feed: until now, the create
+    failed inside the SDK as an `APIConnectionError` reading "Could not reach", though the
+    network was fine. It now raises `ValueError`.
+  - A non-ASCII character (`"clé-1"`): until now, a `UnicodeEncodeError` from deep inside
+    httpx that named no argument. It now raises `ValueError`, the SDK's argument error, as
+    a negative `max_retries` does.
+  - Any other control character (`"\x01"` to `"\x08"`, `"\x0e"` to `"\x1f"`, and DEL,
+    `"\x7f"`): **until now, a key holding one was sent and the create went through.** These
+    keys now raise `ValueError` too, as the meaning every SDK shares refuses every control
+    character. If yours can hold one, change how you make keys: a UUID is ideal.
+
+  A NUL-only key is still a key, not a blank one, so it raises rather than going out
+  unkeyed. basecradle-ruby sends that create unkeyed today and is adopting the same
+  meaning (basecradle-ruby#295).
+
 ## [0.16.2] - 2026-11-16
 
 A patch release. It adds nothing to the SDK's API. It fixes one bug: a whitespace-only

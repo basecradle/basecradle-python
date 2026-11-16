@@ -294,6 +294,25 @@ class TestAsyncItems:
 
         assert "Idempotency-Key" not in route.calls.last.request.headers
 
+    @pytest.mark.parametrize("key", [" key-1 ", "\x00", "clé-1"])
+    async def test_unsendable_key_raises_before_any_request(self, abc, api, timeline, key):
+        with pytest.raises(ValueError, match="idempotency_key"):
+            await timeline.messages.create(body="hi", idempotency_key=key)
+        with pytest.raises(ValueError, match="idempotency_key"):
+            await timeline.tasks.create(
+                instructions="Review", activate_at="2026-01-03T15:00:00Z", idempotency_key=key
+            )
+        with pytest.raises(ValueError, match="idempotency_key"):
+            await timeline.assets.create(file=io.BytesIO(b"bytes"), idempotency_key=key)
+
+    async def test_a_missing_upload_path_does_not_hide_a_bad_key(
+        self, abc, api, timeline, tmp_path
+    ):
+        with pytest.raises(ValueError, match="idempotency_key"):
+            await timeline.assets.create(
+                file=str(tmp_path / "missing.png"), idempotency_key="clé-1"
+            )
+
 
 class TestAsyncRetries:
     async def test_keyed_post_retries_then_succeeds(self, api, monkeypatch):
@@ -404,6 +423,11 @@ class TestAsyncWebhooks:
         await timeline.webhook_endpoints.create(description="CI deploys", idempotency_key=key)
 
         assert "Idempotency-Key" not in route.calls.last.request.headers
+
+    @pytest.mark.parametrize("key", [" key-1 ", "\x00", "clé-1"])
+    async def test_create_with_unsendable_idempotency_key_raises(self, abc, api, timeline, key):
+        with pytest.raises(ValueError, match="idempotency_key"):
+            await timeline.webhook_endpoints.create(description="CI deploys", idempotency_key=key)
 
     async def test_endpoint_lifecycle_awaited(self, abc, api, endpoint):
         api.delete(f"/webhook_endpoints/{WEBHOOK_ENDPOINT_UUID}/enablement").respond(

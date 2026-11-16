@@ -175,6 +175,13 @@ class TestEndpointCreate:
 
         assert "Idempotency-Key" not in route.calls.last.request.headers
 
+    @pytest.mark.parametrize("key", [" key-1 ", "\x00", "clé-1"])
+    def test_create_with_unsendable_idempotency_key_raises_before_any_request(
+        self, bc, api, timeline, key
+    ):
+        with pytest.raises(ValueError, match="idempotency_key"):
+            timeline.webhook_endpoints.create(description="CI deploys", idempotency_key=key)
+
     def test_verification_block_is_typed(self, bc, api, timeline):
         api.post(f"/timelines/{TIMELINE_UUID}/webhook_endpoints").respond(
             201, json={"webhook_endpoint": webhook_endpoint_payload()}

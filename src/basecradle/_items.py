@@ -332,10 +332,11 @@ class _NestedCreatorCore(Resource):
         return {"timeline": self._timeline_uuid}
 
 
-#: The whitespace a blank key is made of: ASCII's six, which Rails' ``blank?`` and Ruby's
-#: ``strip`` both count (Ruby's ``strip`` also drops NUL, which no HTTP header can carry).
-#: Never bare ``str.strip()``, which also strips ``\x1c``-``\x1f``: those travel in a
-#: header, and the platform reads them as a key.
+#: The whitespace a blank key is made of: ASCII's six, as the one meaning names them (#351).
+#: Unicode whitespace is not blank (Rails' ``blank?`` counts it, but HTTP cannot carry it).
+#: NUL is not whitespace, though Ruby's ``strip`` drops it, and neither are ``\x1c``-``\x1f``,
+#: though bare ``str.strip()`` drops them. A key made of those is not blank. It is a key
+#: HTTP cannot carry, refused by ``_unsendable_key_reason``.
 _KEY_WHITESPACE = " \t\n\v\f\r"
 
 
@@ -344,11 +345,34 @@ def _is_idempotency_key(value: str | None) -> TypeGuard[str]:
 
     ``None``, an empty string, or a string of only whitespace is no key. The platform reads
     the header with Rails' ``presence``, which treats a blank value as absent, so a create
-    keyed with one could not be deduplicated. Every SDK shares this meaning (basecradle-ruby
-    asks ``strip.empty?``). Both places that read a key ask it here: the header builder
-    (``_idempotency_headers``) and the retry gate (``_should_retry``).
+    keyed with one could not be deduplicated. Every SDK shares this meaning (#351). Both
+    places that read a key ask it here: the header builder (``_idempotency_headers``) and
+    the retry gate (``_should_retry``). A key is not always a key HTTP can carry; that is
+    the second question, ``_unsendable_key_reason``.
     """
     return value is not None and value.strip(_KEY_WHITESPACE) != ""
+
+
+def _unsendable_key_reason(key: str) -> str | None:
+    """Why HTTP cannot carry this key exactly as given, or ``None`` when it can.
+
+    The second half of the one meaning every SDK shares (#351). A key is sent as given and
+    never repaired, so it must be a header value no hop can change: printable ASCII
+    (``!`` to ``~``), with spaces or tabs allowed only between those characters. HTTP
+    cannot carry a non-ASCII character, NUL, CR or LF. Whitespace at either end is not part
+    of a header value: httpx refuses to send it, and a hop that accepted it would strip it,
+    so the platform would store a different key. Other control characters are refused as
+    well, though h11 would send them, because the one meaning is the same in every SDK and
+    not whatever one HTTP library tolerates.
+    """
+    for index, char in enumerate(key):
+        if not char.isascii():
+            return f"{char!r} at index {index} is not ASCII"
+        if char not in " \t" and not "!" <= char <= "~":
+            return f"{char!r} at index {index} is a control character"
+    if key.startswith((" ", "\t")) or key.endswith((" ", "\t")):
+        return "it begins or ends with whitespace, which a header value cannot"
+    return None
 
 
 def _idempotency_headers(idempotency_key: str | None) -> dict[str, str] | None:
@@ -358,11 +382,19 @@ def _idempotency_headers(idempotency_key: str | None) -> dict[str, str] | None:
     exactly one place. The platform treats the value opaquely (a UUID is recommended); a
     replay of the same key returns the original record rather than creating a duplicate.
     A key that is empty or only whitespace is no key (``_is_idempotency_key``), so it sends
-    no header and the create stays unkeyed.
+    no header and the create stays unkeyed. Any other key HTTP cannot carry exactly as
+    given (``_unsendable_key_reason``) raises ``ValueError`` here, before any request is
+    built: the caller's error, never stripped or repaired.
     """
-    if _is_idempotency_key(idempotency_key):
-        return {"Idempotency-Key": idempotency_key}
-    return None
+    if not _is_idempotency_key(idempotency_key):
+        return None
+    reason = _unsendable_key_reason(idempotency_key)
+    if reason is not None:
+        raise ValueError(
+            f"idempotency_key cannot be sent as an HTTP header: {reason}. A key must be "
+            "printable ASCII, with spaces or tabs only between characters. Nothing was sent."
+        )
+    return {"Idempotency-Key": idempotency_key}
 
 
 def _message_request(timeline_uuid: str, body: str) -> tuple[str, str, dict[str, Any]]:
@@ -451,11 +483,10 @@ class TimelineAssets(_NestedCreatorCore):
         of the same key returns the original asset, never a duplicate. See the client's
         ``max_retries`` for opt-in automatic retry of keyed creates.
         """
+        headers = _idempotency_headers(idempotency_key)  # a bad key raises before the open
         path, files, data, fileobj, opened = _asset_upload(self._timeline_uuid, file, description)
         try:
-            response = self._client.request(
-                "POST", path, files=files, data=data, headers=_idempotency_headers(idempotency_key)
-            )
+            response = self._client.request("POST", path, files=files, data=data, headers=headers)
         finally:
             if opened:
                 fileobj.close()
@@ -476,10 +507,11 @@ class AsyncTimelineAssets(_NestedCreatorCore):
         idempotency_key: str | None = None,
     ) -> Asset:
         """Upload a file to this timeline (multipart). See ``TimelineAssets.create``."""
+        headers = _idempotency_headers(idempotency_key)  # a bad key raises before the open
         path, files, data, fileobj, opened = _asset_upload(self._timeline_uuid, file, description)
         try:
             response = await self._client.request(
-                "POST", path, files=files, data=data, headers=_idempotency_headers(idempotency_key)
+                "POST", path, files=files, data=data, headers=headers
             )
         finally:
             if opened:
