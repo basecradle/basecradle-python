@@ -37,6 +37,8 @@ dev = ["mypy>=1.18", "pytest>=8", "respx>=0.22", "ruff>=0.16.8"]
 # release with whatever was newest that day. Dependabot's uv entry reads this table and
 # moves the pin (it moved the old range here in #146). tests/test_workflows.py refuses
 # anything but one exact `==<version>` here.
+# The pin ships in the sdist too, so rebuilding the sdist without build isolation needs
+# this exact hatchling installed. That is the price of an exact pin here (#341).
 [build-system]
 requires = ["hatchling==1.33.0"]
 build-backend = "hatchling.build"

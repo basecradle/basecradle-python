@@ -76,7 +76,7 @@ be undone.
 import os
 import re
 import subprocess
-import tempfile
+import time
 from pathlib import Path
 from typing import NamedTuple
 
@@ -3293,7 +3293,7 @@ class TestEachPinEditIsCaught:
 # is marked `live` and runs in the drift-guard job.
 
 TOOL_VERSIONS = WORKFLOWS.parent.parent / ".tool-versions"
-UV_VERSION_FILE = ".tool-versions"
+UV_VERSION_FILE = TOOL_VERSIONS.name
 SETUP_UV = "astral-sh/setup-uv"
 CHECKOUT = "actions/checkout"
 
@@ -3768,37 +3768,44 @@ def pin_comment_mismatches(
     return mismatches
 
 
-def ls_remote_tags(repository: str, tags: set[str]) -> str:
+def ls_remote_tags(repository: str, tags: set[str], cwd: Path) -> str:
     """One anonymous ``git ls-remote`` of these tags, both the ref and its peeled form.
 
-    Anonymous on purpose: the repositories are public, and git over HTTPS is not
-    GitHub's API, so there is no unauthenticated rate limit to share with every runner
-    on the IP. Run from a fresh empty directory rather than the checkout, because
-    ci.yml's checkouts persist the job's ``GITHUB_TOKEN`` into ``.git/config`` as an
-    ``http.https://github.com/.extraheader``, which git would send to every repository
-    on github.com. ``GIT_TERMINAL_PROMPT=0`` because GitHub answers a repository that
-    does not exist with a credential prompt, which would hang the job instead of failing it.
+    Anonymous on purpose: the repositories are public, and git over HTTPS does not draw on
+    the REST API's 60-an-hour allowance for unauthenticated callers. Run from ``cwd``, an
+    empty directory, rather than the checkout, because ci.yml's checkouts persist the
+    job's ``GITHUB_TOKEN`` into ``.git/config`` as an ``http.https://github.com/.extraheader``,
+    which git would send to every repository on github.com. ``GIT_TERMINAL_PROMPT=0``
+    because GitHub answers a repository that does not exist with a credential prompt,
+    which would hang the job instead of failing it.
+
+    Three attempts, as ci.yml's actionlint pull makes, because this job gates every merge:
+    a blip on GitHub's side must not redden a PR that touched no workflow. A comment that
+    does not match its pin fails on the first answer; only a failure to get one is retried.
     """
     patterns = [f"refs/tags/{tag}{suffix}" for tag in sorted(tags) for suffix in ("", "^{}")]
-    with tempfile.TemporaryDirectory() as outside_the_checkout:
+    for attempt in (1, 2, 3):
         result = subprocess.run(
             ["git", "ls-remote", f"https://github.com/{repository}.git", *patterns],
-            cwd=outside_the_checkout,
+            cwd=cwd,
             capture_output=True,
             text=True,
             timeout=60,
             check=False,
             env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
         )
-    assert result.returncode == 0, (
-        f"`git ls-remote` of {repository} failed (exit {result.returncode}), so whether its "
-        f"pins' comments are true is unknown:\n{result.stderr}"
+        if result.returncode == 0:
+            return result.stdout
+        if attempt < 3:
+            time.sleep(attempt * 5)
+    raise AssertionError(
+        f"`git ls-remote` of {repository} failed three times (exit {result.returncode}), so "
+        f"whether its pins' comments are true is unknown:\n{result.stderr}"
     )
-    return result.stdout
 
 
 @pytest.mark.live
-def test_every_pin_comment_names_the_pinned_commit():
+def test_every_pin_comment_names_the_pinned_commit(tmp_path):
     """A pin's ``# vX.Y.Z`` is what a reviewer of its next bump reads as the starting
     point, and #339's guard checked only that one is there. Read each tag off the action's
     own repository and hold the comment to the commit."""
@@ -3810,7 +3817,9 @@ def test_every_pin_comment_names_the_pinned_commit():
     assert pins, "no SHA pins with version comments found: the reader has gone blind"
     tags_by_repository = {
         repository: resolved_tags(
-            ls_remote_tags(repository, {pin.tag for pin in pins if pin.repository == repository})
+            ls_remote_tags(
+                repository, {pin.tag for pin in pins if pin.repository == repository}, tmp_path
+            )
         )
         for repository in sorted({pin.repository for pin in pins})
     }

@@ -114,9 +114,10 @@ jobs:
       # setup-uv fails when it cannot read a version there, rather than falling back to
       # the latest. Without that file it would install whatever uv is newest on the day of
       # the tag, and anything newer than setup-uv's built-in checksum table is checked
-      # only against a manifest fetched from the same place as the binary. So bump uv only
-      # to a version this pin's table holds: x86_64-unknown-linux-gnu-<version> in
-      # src/download/checksum/known-checksums.json, at this commit of astral-sh/setup-uv.
+      # only against a manifest fetched from the same place as the binary. So prefer a uv
+      # this pin's table holds -- x86_64-unknown-linux-gnu-<version> in
+      # src/download/checksum/known-checksums.json at this commit of astral-sh/setup-uv --
+      # which is why .tool-versions names 0.13.6, not the newer 0.13.8. Nothing checks it.
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           enable-cache: false

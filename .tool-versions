@@ -2,6 +2,6 @@
 # (#341), so CI and the release build run the same uv, and a bump is a reviewable diff.
 # Exactly one `uv X.Y.Z` line and no other tool: setup-uv would take a `python` line here as
 # every workflow's interpreter. asdf and mise read this file too, and give their users
-# CI's uv. Bump by hand, and only to a version the pinned setup-uv knows a checksum for:
+# CI's uv. Bump by hand, preferably to a version the pinned setup-uv knows a checksum for:
 # see the note on release.yml's setup-uv step.
 uv 0.13.6
