@@ -20,6 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import IO, Any, Generic, TypeGuard, TypeVar, cast
 
+from basecradle._header_value import _header_value_defect
 from basecradle._models import ApiObject
 from basecradle._pagination import apaginate, paginate
 from basecradle._resources import Resource
@@ -336,7 +337,7 @@ class _NestedCreatorCore(Resource):
 #: Unicode whitespace is not blank (Rails' ``blank?`` counts it, but HTTP cannot carry it).
 #: NUL is not whitespace, though Ruby's ``strip`` drops it, and neither are ``\x1c``-``\x1f``,
 #: though bare ``str.strip()`` drops them. A key made of those is not blank. It is a key
-#: HTTP cannot carry, refused by ``_unsendable_key_reason``.
+#: HTTP cannot carry, refused by ``_header_value_defect``.
 _KEY_WHITESPACE = " \t\n\v\f\r"
 
 
@@ -354,25 +355,16 @@ def _is_idempotency_key(value: str | None) -> TypeGuard[str]:
 
 
 def _unsendable_key_reason(key: str) -> str | None:
-    """Why HTTP cannot carry this key exactly as given, or ``None`` when it can.
+    """Why HTTP cannot carry this key exactly as given (``_header_value_defect``), or ``None``.
 
-    The second half of the one meaning every SDK shares (#351). A key is sent as given and
-    never repaired, so it must be a header value no hop can change: printable ASCII
-    (``!`` to ``~``), with spaces or tabs allowed only between those characters. HTTP
-    cannot carry a non-ASCII character, NUL, CR or LF. Whitespace at either end is not part
-    of a header value: httpx refuses to send it, and a hop that accepted it would strip it,
-    so the platform would store a different key. Other control characters are refused as
-    well, though h11 would send them, because the one meaning is the same in every SDK and
-    not whatever one HTTP library tolerates.
+    The second half of the one meaning every SDK shares (#351). A key is not a secret, so
+    the reason shows the character at fault.
     """
-    for index, char in enumerate(key):
-        if not char.isascii():
-            return f"{char!r} at index {index} is not ASCII"
-        if char not in " \t" and not "!" <= char <= "~":
-            return f"{char!r} at index {index} is a control character"
-    if key.startswith((" ", "\t")) or key.endswith((" ", "\t")):
-        return "it begins or ends with whitespace, which a header value cannot"
-    return None
+    defect = _header_value_defect(key)
+    if defect is None:
+        return None
+    index, reason = defect
+    return reason if index is None else f"{key[index]!r} at index {index} {reason}"
 
 
 def _idempotency_headers(idempotency_key: str | None) -> dict[str, str] | None:

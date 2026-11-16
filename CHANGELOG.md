@@ -17,7 +17,7 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 - **A request the HTTP client refuses no longer puts the token in the error, and no
   longer says "Could not reach"** (#351). When a header value is one HTTP cannot carry,
-  h11 refuses it before a byte is sent. The usual case is a token read from a file or an
+  h11 refuses it before a byte is sent. The worst case was a token read from a file or an
   environment variable with its trailing newline. Until now that failed every request as
   `APIConnectionError: Could not reach <base_url>: Illegal header value b'Bearer
   bc_uat_…'`: the whole bearer token was in the message and in the chained httpx error,
@@ -29,11 +29,21 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
   context, so no traceback or crash reporter finds the token through it. It is not
   retried, because it would fail the same way. Code that catches `APIConnectionError`
   still catches it. A body or query that cannot be encoded (a lone surrogate) is the
-  caller's own data, and its `UnicodeEncodeError` still reaches them unchanged.
-- **A non-ASCII token no longer carries itself in its error** (#351). It already failed
-  when the client was built, as a `UnicodeEncodeError` from httpx whose `repr` held the
-  whole `Authorization` value. It is still a `ValueError` at the same moment, now saying
-  the token is not ASCII and not showing it.
+  caller's own data, and its `UnicodeEncodeError` still reaches them unchanged. With the
+  next entry, a bad token is refused before any request is made. This error remains for
+  a header passed to `request(headers=...)`, which can hold a secret of the caller's own.
+- **A token HTTP cannot carry is refused when the client is built, without showing it**
+  (#359). The idempotency key's rule applies to the token: printable ASCII, with spaces
+  or tabs only between characters, sent exactly as given and never stripped. A token
+  with a trailing newline (read from a file or an env file that kept it), another
+  control character, or whitespace at either end used to build a client that failed
+  every request, first as "Could not reach" with the token in the message, then (above)
+  as `UnsendableRequestError`. A non-ASCII token failed at construction inside httpx,
+  with a `UnicodeEncodeError` whose `repr` held the whole `Authorization` value.
+  `BaseCradle(...)` and `AsyncBaseCradle(...)` now raise `ValueError` for all of them.
+  The error says where the fault is (`the character at index 39 is a control
+  character`) and shows no part of the token. **If your token comes from a file or an
+  env file, pass it without the trailing newline.**
 
 ### Changed
 
