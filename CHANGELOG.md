@@ -22,7 +22,7 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
   the lock, which Dependabot moves. `[build-system].requires` is a range again
   (`hatchling>=1.27`), so rebuilding the sdist without build isolation no longer needs one
   exact hatchling. Measured when this landed: the wheel the locked build makes is
-  byte-identical to the one the previous toolchain built from `main` that day.
+  byte-identical to the one the old, unlocked toolchain builds from the same tree.
 
 ## [0.17.0] - 2026-11-16
 
