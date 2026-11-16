@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.3
         with:
-          version-file: .tool-versions
+          version-file: uv.lock
       - name: Install dependencies
         run: uv sync --locked
       - name: Lint
@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.3
         with:
-          version-file: .tool-versions
+          version-file: uv.lock
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
         run: uv sync --locked
@@ -48,26 +48,43 @@ jobs:
 
   # The drift-guard: fails when the live API has endpoints the SDK doesn't cover, or the
   # live docs list error codes the SDK has no typed exception for (#265), or a pinned
-  # action's `# vX.Y.Z` comment no longer names the commit it is pinned to (#341).
+  # action's `# vX.Y.Z` comment no longer names the commit it is pinned to (#341), or
+  # setup-uv's built-in checksum table does not hold the uv uv.lock pins (#346).
   # The only job that reaches the live platform (one GET each of the public spec and
-  # the public prose docs), and the only one that reads the pinned actions' own
-  # repositories (one anonymous `git ls-remote` each);
+  # the public prose docs), and the only one that reads the actions' own repositories
+  # (one anonymous `git ls-remote` per pinned action, one GET of setup-uv's table);
   # actionlint below also leaves the runner, but only to a pinned linter image.
   drift:
     name: drift-guard
     runs-on: ubuntu-latest
-    # The gate needs this job, and the pin-comment check retries a stalled git fetch per
-    # action repository: bound the worst case rather than let it hold every merge (#341).
+    # The gate needs this job, and the pin-comment and checksum checks retry a stalled
+    # fetch: bound the worst case rather than let it hold every merge (#341, #346).
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.3
         with:
-          version-file: .tool-versions
+          version-file: uv.lock
       - name: Install dependencies
         run: uv sync --locked
       - name: Check the SDK covers the live API and its error codes, and the pin comments are true
         run: uv run pytest -m live
+
+  # The one build, the same one release.yml publishes (#346), on every change: a bump to the
+  # build toolchain, which Dependabot opens against uv.lock, is built before it merges, and
+  # the release never builds with a toolchain CI has not. Its token is not left in the tree,
+  # as the release's is not, because the build runs the build backend's code there.
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    # The gate needs this job, and it downloads uv, the toolchain and a CPython with no
+    # cache: bound a stalled download rather than let it hold every merge.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/build-distributions
 
   # Fleet Bot Identity: a commit authored by this repo's bot carries no
   # Co-Authored-By trailer — the commit author already *is* the agent (#187).
@@ -345,7 +362,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.3
         with:
-          version-file: .tool-versions
+          version-file: uv.lock
       - name: Install dependencies
         run: uv sync --locked
       - name: Type-check
@@ -356,7 +373,7 @@ jobs:
   ci:
     name: CI
     runs-on: ubuntu-latest
-    needs: [lint, test, drift, trailers, actionlint, types]
+    needs: [lint, test, drift, build, trailers, actionlint, types]
     if: always()
     steps:
       - name: Fail unless every required job succeeded

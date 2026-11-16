@@ -3,7 +3,7 @@ gate that cannot fail open, a release pipeline that publishes what it says it do
 matrix that runs exactly the Python versions the package declares, with a
 ``requires-python`` floor at the oldest of them (#336, #338), an action
 pinned to a commit SHA in every workflow that holds a secret or a write grant (#339), and a
-build toolchain that is fixed rather than fetched fresh on each tag (#341). The last three
+build toolchain held by uv.lock rather than fetched fresh on each tag (#341, #346). The last three
 carry their reasons beside their code, at the end of this file.
 
 ``constitution.md`` → How We Build: whatever a build leaves behind has a named owner, a
@@ -73,14 +73,18 @@ rules, so the release ships before the ``pypi`` gate is ever actuated; and job-l
 be undone.
 """
 
+import json
 import os
 import re
 import subprocess
 import time
+import urllib.request
 from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+
+from scripts.locked_requirement import locked_package
 
 WORKFLOWS = Path(__file__).parent.parent / ".github" / "workflows"
 
@@ -2494,6 +2498,14 @@ class TestEachReleaseEditIsCaught:
 # that reads ``ci.yml`` alone runs on every leg, 3.10 included.
 
 PYPROJECT = WORKFLOWS.parent.parent / "pyproject.toml"
+
+
+def _toml(text: str) -> dict:
+    """``text`` parsed, or the test skipped on 3.10, where ``tomllib`` is not standard."""
+    tomllib = pytest.importorskip("tomllib", reason="tomllib is standard library from 3.11")
+    return tomllib.loads(text)
+
+
 TEST_JOB = "test"
 
 #: A version classifier, matched whole: ``Programming Language :: Python :: 3`` and
@@ -2511,8 +2523,7 @@ MATRIX_VERSION_EXPRESSION = "${{matrix.python-version}}"
 
 def declared_python_versions(pyproject_text: str) -> set[str]:
     """The ``3.N`` versions ``pyproject.toml``'s classifiers declare."""
-    tomllib = pytest.importorskip("tomllib", reason="tomllib is standard library from 3.11")
-    classifiers = tomllib.loads(pyproject_text)["project"]["classifiers"]
+    classifiers = _toml(pyproject_text)["project"]["classifiers"]
     return {m.group("version") for c in classifiers if (m := VERSION_CLASSIFIER.fullmatch(c))}
 
 
@@ -2649,8 +2660,7 @@ def oldest_declared_python_version(pyproject_text: str) -> str:
 
 
 def check_requires_python_floor_is_the_oldest_declared(pyproject_text: str) -> None:
-    tomllib = pytest.importorskip("tomllib", reason="tomllib is standard library from 3.11")
-    requires = tomllib.loads(pyproject_text)["project"].get("requires-python")
+    requires = _toml(pyproject_text)["project"].get("requires-python")
     assert requires is not None, (
         "pyproject.toml has no requires-python, so pip installs the SDK on any Python; "
         'it must be ">=" followed by the oldest declared version'
@@ -2809,7 +2819,7 @@ class TestEachPythonVersionDriftIsCaught:
             # python-version: sits at a step's depth, so this is also the probe that it
             # is never counted as the setup.
             # The input alone, not its `with:`: the step reads its uv from
-            # .tool-versions through the same block (#341).
+            # uv.lock through the same block (#341, #346).
             ("          python-version: ${{ matrix.python-version }}\n", ""),
         ],
         ids=["pinned", "removed"],
@@ -3267,23 +3277,33 @@ class TestEachPinEditIsCaught:
 
 
 # ---------------------------------------------------------------------------------------
-# The seventh invariant (#341): the toolchain that builds the published bytes is fixed, not
-# fetched fresh on each tag. #339 pinned which *actions* run in `release.yml`; it did not
-# pin what those actions fetch. Whatever builds the bytes is as powerful as whatever uploads
-# them, and three links still moved:
+# The seventh invariant (#341, #346): the toolchain that builds the published bytes is held
+# by uv.lock, not fetched fresh on each tag. #339 pinned which *actions* run in
+# `release.yml`; it did not pin what they fetch, and whatever builds the bytes is as
+# powerful as whatever uploads them. #341 pinned uv (in `.tool-versions`) and hatchling
+# (exactly, in `[build-system].requires`); #346 took the shape basecradle-harness shipped
+# (basecradle-harness#916) and moved every link into the lock, where Dependabot moves it as
+# a reviewable diff and the daily scan (#315) reads it:
 #
-# - **uv.** setup-uv given no version installs the newest uv on the day of the tag. Every
-#   setup-uv step now reads `.tool-versions` through `version-file:`, so CI and the release
-#   build run one uv, and the file names it exactly. Not `[tool.uv] required-version`: uv
-#   enforces that on every contributor's every local command, so an exact pin there
-#   breaks anyone whose uv differs, the fleet box's NOC-managed one included. A
-#   `.tool-versions` binds only a contributor who uses asdf or mise, which read it and
-#   hand them CI's uv; that is what those tools are for.
-# - **The build backend.** `uv build` resolves `[build-system].requires` from PyPI on every
-#   tag, outside uv.lock. It is pinned to an exact version, which Dependabot's uv entry
-#   reads and moves.
+# - **uv** is the `build` dependency group's. The one build,
+#   `.github/actions/build-distributions`, installs the very wheel the lock holds, by pip in
+#   hash-checking mode from the lock's own sha256s (`scripts/locked_requirement.py`), so
+#   setup-uv is off the publish path. CI's setup-uv steps read the same version off the
+#   lock (`version-file: uv.lock`). Not `[tool.uv] required-version`: uv enforces that on
+#   every contributor's every local command.
+# - **The build backend and everything it imports.** `uv build` resolves
+#   `[build-system].requires` in an isolated environment, outside uv.lock. Every name there
+#   is declared in the `build` group with the same specifier, so the lock holds it and its
+#   whole closure, and the build exports them as hashed constraints and runs
+#   `--require-hashes`, which refuses a build requirement with no trusted hash. The table
+#   itself is a range again: it ships in the sdist, and an exact pin there bound anyone
+#   rebuilding the sdist without build isolation.
+# - **The interpreter** is uv-managed (`--managed-python`), never the runner image's.
+# - **One build.** The release and CI's `build` job both run the action, and the gate
+#   needs that job, so a toolchain bump is built on its pull request before it can build a
+#   release. Nothing else in a workflow builds.
 # - **The checkout's token.** actions/checkout leaves `GITHUB_TOKEN` in `.git/config`
-#   unless told not to, while `uv build` runs the backend's code in that tree. Every
+#   unless told not to, while the build runs the backend's code in that tree. Every
 #   checkout in a workflow that holds power -- the pin rule's scope -- says
 #   `persist-credentials: false`.
 #
@@ -3292,18 +3312,81 @@ class TestEachPinEditIsCaught:
 # the next Dependabot bump the wrong starting point. That check needs the network, so it
 # is marked `live` and runs in the drift-guard job.
 
-TOOL_VERSIONS = WORKFLOWS.parent.parent / ".tool-versions"
-UV_VERSION_FILE = TOOL_VERSIONS.name
+LOCK = WORKFLOWS.parent.parent / "uv.lock"
+UV_VERSION_FILE = LOCK.name
+BUILD_ACTION = WORKFLOWS.parent / "actions" / "build-distributions" / "action.yml"
+#: How a workflow names the build action in its ``uses:``.
+BUILD_ACTION_REF = "./.github/actions/build-distributions"
 SETUP_UV = "astral-sh/setup-uv"
 CHECKOUT = "actions/checkout"
 
 #: A version setup-uv installs as exactly itself: no range, no ``latest``, no ``v``.
 EXACT_UV_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
 
-#: One requirement pinned to exactly one release: ``name==<version>``, nothing after it.
-#: The version is any PEP 440 one -- ``1.33.0``, ``1.34.0.post1``, ``2.0.0rc1`` -- but never
-#: a wildcard, a second clause, a marker or an extra, each of which admits more than one.
-EXACT_REQUIREMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*==[0-9][0-9A-Za-z.!+-]*$")
+#: A requirement's name: what precedes its specifier, extras or marker.
+REQUIREMENT_NAME = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
+
+#: Anything that builds a distribution. A build outside the action is one the lock's
+#: constraints do not reach.
+BUILDER = re.compile(r"\buv build\b|-m build\b|\bpyproject-build\b|\bpip wheel\b|\bhatch build\b")
+
+#: Anything that installs or fetches a tool. On the publish path the one install allowed is
+#: the uv bootstrap: pip, by the lock's hashes, no dependencies, no source builds.
+INSTALLER = re.compile(
+    r"\b(?:pip3? (?:install|download)|pipx|uv (?:tool |pip |python )?install|uv pip\b|uvx"
+    r"|uv run\b[^;&|\n]*--with|ensurepip|conda|mamba|curl|wget|apt(?:-get)?|npm|npx"
+    r"|gh release download)\b"
+)
+LOCKED_PIP = ("--require-hashes", "--no-deps", "--only-binary :all:")
+
+#: The three commands the build's integrity rests on, exactly as the build action must run
+#: them, compared word for word after continuations and spacing are collapsed. Exact, not a
+#: list of flags each must carry: a flag check passes a second `-r`, a `<(...)`, an escaped
+#: space or a trailing `& pip install`, and every review of the looser check found another
+#: one. A deliberate change edits the action and this table in one diff, where it is read.
+#: What it holds is how the toolchain is fetched and run; a command that fetches and runs
+#: nothing (a `mkdir`, an `echo`) is the reviewer's to read, as release.yml's guards are.
+LOCKED_COMMANDS = {
+    "uv install": (
+        re.compile(r"\bpip install\b"),
+        (
+            '"$RUNNER_TEMP/uv-venv/bin/python" -m pip install --quiet --disable-pip-version-check'
+            ' --require-hashes --no-deps --only-binary :all: -r "$RUNNER_TEMP/uv-requirement.txt"'
+        ),
+    ),
+    "toolchain export": (
+        re.compile(r"\buv export\b"),
+        (
+            "uv export --no-cache --quiet --locked --only-group build --no-emit-project"
+            ' --format requirements.txt --output-file "$RUNNER_TEMP/build-constraints.txt"'
+        ),
+    ),
+    "build": (
+        BUILDER,
+        (
+            'uv build --build-constraints "$RUNNER_TEMP/build-constraints.txt" --require-hashes'
+            " --managed-python --no-cache"
+        ),
+    ),
+}
+
+#: The bootstrap that writes uv's hashed requirement for the install above to read.
+LOCKED_BOOTSTRAP = 'python3 scripts/locked_requirement.py uv > "$RUNNER_TEMP/uv-requirement.txt"'
+
+#: Every other command in the build action that runs uv, exactly: the check that the uv on
+#: the PATH is the locked one.
+UV_HELPERS = ('running="$(uv --version)"',)
+
+#: uv or pip where the shell runs it: a command's first word (a path to it included), after
+#: a separator or `$(`, or after `-m`. Not as an argument (`locked_requirement.py uv`) or in
+#: a message (`echo "...uv..."`), which run nothing.
+RUNS_UV_OR_PIP = re.compile(
+    r"(?:^|[;&|(]\s*|-m\s+)(?:[^\s;&|()]*/)?(?:uv|pip3?)(?=[\"'\s)]|$)", re.MULTILINE
+)
+
+#: Setting what uv or pip read from their environment (an index, a constraint, hash
+#: checking), or appending to the job's environment, changes what an exact command does.
+TOOLCHAIN_ENVIRONMENT = re.compile(r"\b(?:UV|PIP)_[A-Z0-9_]+\s*[:=]|\bGITHUB_ENV\b")
 
 
 def steps_using(text: str, action: str) -> list[tuple[int, list[str]]]:
@@ -3320,76 +3403,269 @@ def steps_using(text: str, action: str) -> list[tuple[int, list[str]]]:
     ]
 
 
-def pinned_uv_version(tool_versions: str) -> str:
-    """The one exact uv version ``.tool-versions`` names, read the way setup-uv reads it.
+def run_scripts(text: str) -> list[str]:
+    """Each ``run:`` step's script in a workflow or action, line by line, raw.
 
-    setup-uv drops everything from a ``#``, splits on whitespace, and takes the first line
-    whose first word is ``uv``. This is stricter on purpose: a second ``uv`` line, which
-    setup-uv would silently ignore, or a version it would resolve as a range, is refused.
-
-    So is any other tool. setup-uv also reads a ``python`` line from this file, and sets
-    that interpreter for every step that names none of its own: one added line would move
-    lint, types, the drift-guard and the release build off ``.python-version`` with no
-    diff in any workflow.
+    Comments, quotes and separators are left in, because nothing here parses shell. A
+    check that something is absent reads the whole script, comments included, which errs
+    toward finding an install or a build that is not there and never misses one that is.
+    A check that a command is right takes it whole with ``command_at`` and compares it to
+    the one it must be. A folded block (``>``) is NOT folded: its lines are kept, which is
+    enough to find a match in, and the build action may not use one
+    (``check_the_build_action_builds_from_the_lock``), so no exact command is ever read
+    through YAML's folding rules. The scalar is bounded the way
+    ``block_scalar_line_numbers`` bounds it, so a ``run:`` inside another script's text is
+    not a step.
     """
-    entries = []
-    for line in tool_versions.splitlines():
-        content = line.split("#", 1)[0].strip()
-        if not content:
+    lines = text.splitlines()
+    inside_a_script = block_scalar_line_numbers(lines)
+    scripts = []
+    for index, line in enumerate(lines):
+        match = KEY_LINE.match(line)
+        if index in inside_a_script or not match or match.group("key") != "run":
             continue
-        tool, *versions = content.split()
-        assert tool == "uv", (
-            f"{UV_VERSION_FILE} names {tool!r}: it holds uv and nothing else. setup-uv reads "
-            f"a `python` line from it too, and would set that interpreter for every step "
-            f"that names none of its own, the release build included (#341)."
-        )
-        entries.append(versions)
-    assert len(entries) == 1, (
-        f"{UV_VERSION_FILE} must name uv on exactly one line, found {len(entries)}. "
-        f"setup-uv reads only the first, so a second is a version that looks pinned and is not."
-    )
-    (versions,) = entries
-    assert len(versions) == 1 and EXACT_UV_VERSION.match(versions[0]), (
-        f"{UV_VERSION_FILE} names uv as {' '.join(versions)!r}: write one exact X.Y.Z. "
-        f"Anything else -- `latest`, a range, a `v` prefix -- installs whatever matches on "
-        f"the day of the tag, which is what this file exists to stop (#341)."
-    )
-    return versions[0]
+        value = _strip_comment(match.group("value") or "").strip()
+        if not BLOCK_SCALAR.match(value):
+            scripts.append(value)
+            continue
+        body = []
+        for following in range(index + 1, len(lines)):
+            if following not in inside_a_script:
+                break
+            # Leading indentation only: a line ending in `\ ` is an escaped space, not a
+            # continuation, and `command_at` must not read it as one.
+            body.append(lines[following].lstrip())
+        while body and not body[-1].strip():
+            body.pop()
+        scripts.append("\n".join(body))
+    return scripts
 
 
-def check_setup_uv_reads_the_version_file(name: str, text: str) -> None:
-    """Assert every setup-uv step in a workflow installs the uv ``.tool-versions`` names."""
+def command_at(script: str, position: int) -> str:
+    """The whole command on the line holding ``position``, backslash continuations joined
+    in both directions, exactly as written."""
+    start = script.rfind("\n", 0, position) + 1
+    while start > 1 and script[start - 2] == "\\":
+        start = script.rfind("\n", 0, start - 1) + 1
+    end = position
+    while (newline := script.find("\n", end)) != -1 and script[newline - 1] == "\\":
+        end = newline + 1
+    return script[start:] if newline == -1 else script[start:newline]
+
+
+def commands_matching(scripts: list[str], pattern: re.Pattern[str]) -> list[str]:
+    """Every command any match of ``pattern`` falls in, once per match."""
+    return [
+        command_at(script, match.start())
+        for script in scripts
+        for match in pattern.finditer(script)
+    ]
+
+
+def words(command: str) -> str:
+    """``command`` with its continuations and runs of whitespace collapsed to one space,
+    padded, so `` --flag `` finds a flag as a whole word and never inside a longer one."""
+    return " " + " ".join(command.replace("\\\n", " ").split()) + " "
+
+
+def locked_command_problems(what: str, scripts: list[str]) -> list[str]:
+    """Why the scripts do not run exactly one ``what``, exactly as ``LOCKED_COMMANDS`` says."""
+    pattern, expected = LOCKED_COMMANDS[what]
+    found = commands_matching(scripts, pattern)
+    if len(found) != 1:
+        return [f"expected exactly one {what}, found {found}"]
+    if words(found[0]) != words(expected):
+        return [
+            f"the {what} is not the locked one.\n    runs:   {found[0]!r}\n    locked: {expected!r}"
+        ]
+    return []
+
+
+def _requirement_name(requirement: str) -> str:
+    match = REQUIREMENT_NAME.match(requirement)
+    assert match, f"cannot read a package name from {requirement!r}"
+    # PEP 503's normalization, the one uv.lock records names in.
+    return re.sub(r"[-_.]+", "-", match.group(1)).lower()
+
+
+def locked_uv_version(lock_text: str) -> str:
+    """The one exact uv the lock holds: what setup-uv and the build both install."""
+    lock = _toml(lock_text)
+    try:
+        version = str(locked_package(lock, "uv")["version"])
+    except ValueError as error:
+        raise AssertionError(
+            f"{UV_VERSION_FILE} must hold exactly one `uv`, from PyPI, with a sha256 for "
+            f"every file: the build installs it by those hashes, and setup-uv reads its "
+            f"version (#346). {error}"
+        ) from error
+    assert EXACT_UV_VERSION.match(version), (
+        f"{UV_VERSION_FILE} holds uv {version!r}: setup-uv installs only an X.Y.Z exactly."
+    )
+    return version
+
+
+def check_setup_uv_reads_the_lock(name: str, text: str) -> None:
+    """Assert every setup-uv step in a workflow installs the uv ``uv.lock`` holds."""
     wrong = []
     for line, step in steps_using(text, SETUP_UV):
         files = [value.strip("\"'") for value in step_values(step, "version-file")]
         if files != [UV_VERSION_FILE]:
             wrong.append(f"{name}:{line}: version-file is {files or 'unset'}")
         if step_values(step, "version"):
-            wrong.append(f"{name}:{line}: a `version:` input overrides the file")
+            wrong.append(f"{name}:{line}: a `version:` input overrides the lock")
     assert not wrong, (
         f"every setup-uv step must read `version-file: {UV_VERSION_FILE}` and set no "
-        f"`version:`, so CI and the release build install the same uv, and a bump is one "
-        f"line in one file (#341). Without the file, setup-uv installs the latest:\n"
+        f"`version:`, so CI installs the uv the release build does, and Dependabot's bump "
+        f"of the lock moves both (#346). Without the file, setup-uv installs the latest:\n"
         + "\n".join(wrong)
     )
 
 
-def check_build_backend_is_pinned_exactly(pyproject_text: str) -> None:
-    """Assert every ``[build-system].requires`` entry is one ``name==X.Y.Z``.
-
-    Read with ``tomllib``, as this file's other pyproject readers are, so the 3.10 leg
-    skips it and the five newer legs hold it.
-    """
-    tomllib = pytest.importorskip("tomllib", reason="tomllib is standard library from 3.11")
-    requires = tomllib.loads(pyproject_text).get("build-system", {}).get("requires")
+def check_build_requirements_are_locked(pyproject_text: str, lock_text: str) -> None:
+    """Assert the ``build`` group holds uv and every ``[build-system].requires`` entry,
+    each with the same specifier, and the lock holds each with its hashes."""
+    pyproject = _toml(pyproject_text)
+    lock = _toml(lock_text)
+    requires = pyproject.get("build-system", {}).get("requires")
     assert requires, "[build-system].requires is missing or empty: the backend comes from nowhere"
-    loose = [entry for entry in requires if not EXACT_REQUIREMENT.match(entry)]
-    assert not loose, (
-        f"[build-system].requires must pin each entry to one release, `name==<version>`: "
-        f"`uv build` resolves it from PyPI on every tag, outside uv.lock, so a range builds "
-        f"each release with whatever was newest that day (#341). Dependabot's uv entry moves "
-        f"an exact pin. Not exact: {loose}"
+    group = pyproject.get("dependency-groups", {}).get("build")
+    assert group, (
+        "pyproject.toml has no `build` dependency group: nothing puts the build toolchain "
+        "in uv.lock, so it resolves fresh on every tag (#346)"
     )
+    declared = {_requirement_name(entry): entry for entry in group}
+    wrong = []
+    if "uv" not in declared:
+        wrong.append("uv is not in the `build` group, so the lock holds no uv to install")
+    for entry in requires:
+        name = _requirement_name(entry)
+        if name not in declared:
+            wrong.append(f"`{entry}` is a build requirement the `build` group does not declare")
+            continue
+        if declared[name].replace(" ", "") != entry.replace(" ", ""):
+            wrong.append(
+                f"the `build` group's `{declared[name]}` and [build-system]'s `{entry}` are "
+                f"two statements of one requirement, and only one of them is locked"
+            )
+        try:
+            locked_package(lock, name)
+        except ValueError as error:
+            wrong.append(str(error))
+    assert not wrong, (
+        "every link of the build must be in uv.lock with its hashes, or `uv build` resolves "
+        "it fresh on the day of the tag (#346):\n" + "\n".join(wrong)
+    )
+
+
+def check_the_build_action_builds_from_the_lock(text: str) -> None:
+    """Assert the one build runs exactly the locked commands, and nothing it cannot read."""
+    lines = text.splitlines()
+    inside_a_script = block_scalar_line_numbers(lines)
+    scripts = run_scripts(text)
+    wrong = []
+    not_literal = [
+        line.strip()
+        for index, line in enumerate(lines)
+        if index not in inside_a_script
+        and (match := KEY_LINE.match(line))
+        and match.group("key") == "run"
+        and not _strip_comment(match.group("value") or "").strip().startswith("|")
+    ]
+    if not_literal:
+        wrong.append(
+            f"every run here must be a literal (`|`) block: YAML folds any other form, a "
+            f"plain multi-line value included, and no command is read through that folding "
+            f"here: {not_literal}"
+        )
+    bootstrap = commands_matching(scripts, re.compile(r"locked_requirement\.py"))
+    if [words(command) for command in bootstrap] != [words(LOCKED_BOOTSTRAP)]:
+        wrong.append(f"uv's requirement is not written by one `{LOCKED_BOOTSTRAP}`: {bootstrap}")
+    for what in LOCKED_COMMANDS:
+        wrong += locked_command_problems(what, scripts)
+    allowed = {words(c) for c in (*UV_HELPERS, *(e for _, e in LOCKED_COMMANDS.values()))}
+    others = [
+        command
+        for command in commands_matching(scripts, RUNS_UV_OR_PIP)
+        if not command.startswith("#") and words(command) not in allowed
+    ]
+    if others:
+        wrong.append(
+            f"a command runs uv or pip and is none of the locked ones (a global flag before "
+            f"the subcommand still runs it): {others}"
+        )
+    if TOOLCHAIN_ENVIRONMENT.search(text):
+        wrong.append(
+            "it sets a UV_ or PIP_ variable, or writes $GITHUB_ENV: either changes what an "
+            "exact command fetches or checks"
+        )
+    third_party = [r.action for r in uses_references(lines)]
+    if third_party:
+        wrong.append(
+            f"it uses {third_party}: Dependabot never reads .github/actions/, so a pin here "
+            f"would be left behind by every bump of the same action in the workflows"
+        )
+    assert not wrong, (
+        f"{BUILD_ACTION.name} must build only with what uv.lock holds (#346):\n" + "\n".join(wrong)
+    )
+
+
+def check_the_job_builds_with_the_action(name: str, text: str, job: str) -> None:
+    """Assert ``job`` runs the build action and installs no uv of its own."""
+    body = job_bodies(text).get(job)
+    assert body is not None, f"{name} has no `{job}` job"
+    actions = [r.action.split("@", 1)[0].lower() for r in uses_references(body)]
+    assert BUILD_ACTION_REF in actions, (
+        f"{name}'s `{job}` job does not run {BUILD_ACTION_REF}, the one build the lock holds "
+        f"(#346). Its uses: {actions}"
+    )
+    assert SETUP_UV not in actions, (
+        f"{name}'s `{job}` job runs setup-uv: the build installs the locked uv by its hashes, "
+        f"and setup-uv's checksum is fetched at run time for a uv newer than its table (#346)"
+    )
+    # Whether or not the workflow holds power: the build runs the backend's code in the
+    # checkout, and nothing in a build job pushes.
+    checkouts = steps_using("\n".join(body), CHECKOUT)
+    assert checkouts, f"{name}'s `{job}` job checks nothing out, so it has nothing to build"
+    keeping = [line for line, step in checkouts if not _drops_its_token(step)]
+    assert not keeping, (
+        f"{name}'s `{job}` job must check out with `persist-credentials: false`: the build "
+        f"runs the build backend's code in that tree, and nothing there pushes (#341, #346)"
+    )
+
+
+def check_nothing_else_builds(name: str, text: str) -> None:
+    """Assert no workflow builds a distribution outside the build action."""
+    builds = commands_matching(run_scripts(text), BUILDER)
+    assert not builds, (
+        f"{name} builds outside {BUILD_ACTION_REF}, where the lock's constraints do not "
+        f"reach (#346). Comments in a script count, so a build is never hidden in one: {builds}"
+    )
+
+
+def check_the_publish_path_installs_only_the_locked_uv(name: str, text: str) -> None:
+    """Assert the publish path's one install, if any, is the hash-checked uv bootstrap, and
+    nothing on it sets what uv or pip read from their environment."""
+    assert not TOOLCHAIN_ENVIRONMENT.search(text), (
+        f"{name} sets a UV_ or PIP_ variable, or writes $GITHUB_ENV, on the publish path: "
+        f"either changes what the build action's exact commands fetch or check (#346)"
+    )
+    installs = commands_matching(run_scripts(text), INSTALLER)
+    locked = words(LOCKED_COMMANDS["uv install"][1])
+    loose = installs if len(installs) > 1 or any(words(c) != locked for c in installs) else []
+    assert not loose, (
+        f"{name} installs something the lock does not hold by its hashes (#346). The one "
+        f"install allowed is the uv bootstrap's, exactly as LOCKED_COMMANDS has it; comments "
+        f"in a script count:\n" + "\n".join(loose)
+    )
+
+
+def _drops_its_token(step: list[str]) -> bool:
+    """Whether a checkout step says ``persist-credentials: false``. Quoted or not, and in
+    any case: checkout reads the input as a string, so every spelling of false is the same
+    false and is not worth a red CI."""
+    values = step_values(step, "persist-credentials")
+    return [value.strip("\"'").lower() for value in values] == ["false"]
 
 
 def check_checkouts_leave_no_token(name: str, text: str) -> None:
@@ -3398,11 +3674,8 @@ def check_checkouts_leave_no_token(name: str, text: str) -> None:
         return
     persisting = []
     for line, step in steps_using(text, CHECKOUT):
-        values = step_values(step, "persist-credentials")
-        # Quoted or not, and in any case: checkout reads the input as a string, so every
-        # spelling of false is the same false and is not worth a red CI.
-        if [value.strip("\"'").lower() for value in values] != ["false"]:
-            shown = values or "unset (true by default)"
+        if not _drops_its_token(step):
+            shown = step_values(step, "persist-credentials") or "unset (true by default)"
             persisting.append(f"{name}:{line}: persist-credentials is {shown}")
     assert not persisting, (
         f"{name} holds power, so every checkout in it must say `persist-credentials: false`. "
@@ -3412,24 +3685,53 @@ def check_checkouts_leave_no_token(name: str, text: str) -> None:
     )
 
 
-def test_tool_versions_names_one_exact_uv():
-    pinned_uv_version(TOOL_VERSIONS.read_text(encoding="utf-8"))
+def test_the_lock_holds_one_exact_uv():
+    locked_uv_version(LOCK.read_text(encoding="utf-8"))
 
 
-@pytest.mark.parametrize("name", ["ci.yml", "release.yml"])
-def test_the_setup_uv_scanner_finds_the_steps(name):
-    """Both workflows run uv, so a scan that finds no setup-uv step in either has gone
+def test_the_setup_uv_scanner_finds_the_steps():
+    """CI runs uv in four jobs, so a scan that finds no setup-uv step there has gone
     blind, and the check below passes on air."""
-    assert steps_using((WORKFLOWS / name).read_text(encoding="utf-8"), SETUP_UV), name
+    assert steps_using(CI_WORKFLOW.read_text(encoding="utf-8"), SETUP_UV)
 
 
 @pytest.mark.parametrize("workflow", OWNED_WORKFLOWS, ids=lambda path: path.name)
-def test_every_setup_uv_step_reads_the_version_file(workflow):
-    check_setup_uv_reads_the_version_file(workflow.name, workflow.read_text(encoding="utf-8"))
+def test_every_setup_uv_step_reads_the_lock(workflow):
+    check_setup_uv_reads_the_lock(workflow.name, workflow.read_text(encoding="utf-8"))
 
 
-def test_the_build_backend_is_pinned_exactly():
-    check_build_backend_is_pinned_exactly(PYPROJECT.read_text(encoding="utf-8"))
+def test_the_build_toolchain_is_locked():
+    check_build_requirements_are_locked(
+        PYPROJECT.read_text(encoding="utf-8"), LOCK.read_text(encoding="utf-8")
+    )
+
+
+def test_the_build_action_builds_from_the_lock():
+    check_the_build_action_builds_from_the_lock(BUILD_ACTION.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(("workflow", "job"), [(RELEASE_WORKFLOW, "build"), (CI_WORKFLOW, "build")])
+def test_the_release_and_ci_build_with_the_action(workflow, job):
+    """CI's job is also one the gate needs: test_the_gate_depends_on_every_job holds that."""
+    check_the_job_builds_with_the_action(workflow.name, workflow.read_text(encoding="utf-8"), job)
+
+
+@pytest.mark.parametrize("workflow", OWNED_WORKFLOWS, ids=lambda path: path.name)
+def test_nothing_else_builds(workflow):
+    check_nothing_else_builds(workflow.name, workflow.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("path", [RELEASE_WORKFLOW, BUILD_ACTION], ids=lambda path: path.name)
+def test_the_publish_path_installs_only_the_locked_uv(path):
+    check_the_publish_path_installs_only_the_locked_uv(path.name, path.read_text(encoding="utf-8"))
+
+
+def test_the_run_reader_reads_the_build_actions_scripts():
+    """All three ``run:`` steps: a reader that lost one would let every check above pass on
+    less than the build runs."""
+    scripts = run_scripts(BUILD_ACTION.read_text(encoding="utf-8"))
+    assert len(scripts) == 3
+    assert scripts[-1].startswith("uv build --build-constraints")
 
 
 @pytest.mark.parametrize("name", ["release.yml", "dependency-security-scan.yml"])
@@ -3440,6 +3742,18 @@ def test_the_checkout_scanner_finds_the_steps(name):
 @pytest.mark.parametrize("workflow", OWNED_WORKFLOWS, ids=lambda path: path.name)
 def test_a_workflow_that_holds_power_leaves_no_token_in_its_checkouts(workflow):
     check_checkouts_leave_no_token(workflow.name, workflow.read_text(encoding="utf-8"))
+
+
+def _locked(name: str, version: str = "1.0.0", **overrides: object) -> str:
+    """A ``uv.lock`` package entry in miniature, fabricated: one wheel, one sdist."""
+    entry = {
+        "source": '{ registry = "https://pypi.org/simple" }',
+        "sdist": '{ url = "https://example.com/a.tar.gz", hash = "sha256:' + "a" * 64 + '" }',
+        "wheels": '[{ url = "https://example.com/a.whl", hash = "sha256:' + "b" * 64 + '" }]',
+    }
+    entry.update({key: str(value) for key, value in overrides.items()})
+    body = "".join(f"{key} = {value}\n" for key, value in entry.items())
+    return f'[[package]]\nname = "{name}"\nversion = "{version}"\n{body}\n'
 
 
 class TestTheToolchainScannersThemselves:
@@ -3457,48 +3771,41 @@ class TestTheToolchainScannersThemselves:
 
     UV = "      - uses: astral-sh/setup-uv@v10.3.3\n"
     CO = "      - uses: actions/checkout@v7\n"
+    PYPROJECT = (
+        '[dependency-groups]\nbuild = ["uv>=0.13", "hatchling>=1.27"]\n'
+        '[build-system]\nrequires = ["hatchling>=1.27"]\n'
+    )
+    LOCK = _locked("hatchling", "1.33.0") + _locked("uv", "0.13.6")
+
+    def test_reads_one_exact_uv(self):
+        assert locked_uv_version(self.LOCK) == "0.13.6"
 
     @pytest.mark.parametrize(
-        "text",
+        ("lock", "reason"),
         [
-            "uv 0.13.6\n",
-            "# a comment\nuv 0.13.6  # trailing\n",
+            ("", "0 `uv` packages"),
+            (_locked("uv") + _locked("uv", "2.0.0"), "2 `uv` packages"),
+            (_locked("uv", source='{ git = "https://example.com/uv" }'), "not from PyPI"),
+            (_locked("uv", sdist='{ url = "u", hash = "md5:00" }'), "no sha256"),
+            (_locked("uv", "0.13"), "X.Y.Z"),
+            (_locked("uv", "0.14.0rc1"), "X.Y.Z"),
         ],
     )
-    def test_reads_one_exact_uv(self, text):
-        assert pinned_uv_version(text) == "0.13.6"
-
-    @pytest.mark.parametrize(
-        "text",
-        [
-            "",
-            "# uv 0.13.6\n",
-            "uv latest\n",
-            "uv >=0.13\n",
-            "uv v0.13.6\n",
-            "uv 0.13\n",
-            "uv 0.13.6 0.13.7\n",
-            "uv 0.13.6\nuv 0.13.7\n",
-            "uv\n",
-            "python 3.13.1\nuv 0.13.6\n",
-            "uv 0.13.6\nruff 0.16.8\n",
-        ],
-    )
-    def test_refuses_anything_but_one_exact_uv(self, text):
-        with pytest.raises(AssertionError, match=r"\.tool-versions"):
-            pinned_uv_version(text)
+    def test_refuses_a_lock_that_cannot_pin_uv(self, lock, reason):
+        with pytest.raises(AssertionError, match=re.escape(reason)):
+            locked_uv_version(lock)
 
     @pytest.mark.parametrize(
         "inputs",
         [
-            "          version-file: .tool-versions\n",
-            "          version-file: '.tool-versions'\n",
-            "          python-version: '3.13'\n          version-file: .tool-versions  # #341\n",
+            "          version-file: uv.lock\n",
+            "          version-file: 'uv.lock'\n",
+            "          python-version: '3.13'\n          version-file: uv.lock  # #346\n",
         ],
     )
-    def test_accepts_a_setup_uv_reading_the_file(self, inputs):
+    def test_accepts_a_setup_uv_reading_the_lock(self, inputs):
         text = self.workflow(self.UV + "        with:\n" + inputs)
-        check_setup_uv_reads_the_version_file("w.yml", text)
+        check_setup_uv_reads_the_lock("w.yml", text)
 
     @pytest.mark.parametrize(
         "step",
@@ -3506,22 +3813,22 @@ class TestTheToolchainScannersThemselves:
             UV,
             UV + "        with:\n          python-version: '3.13'\n",
             UV + "        with:\n          version-file: pyproject.toml\n",
-            UV
-            + "        with:\n          version-file: .tool-versions\n          version: latest\n",
+            UV + "        with:\n          version-file: .tool-versions\n",
+            UV + "        with:\n          version-file: uv.lock\n          version: latest\n",
             "      - uses: Astral-SH/Setup-UV@v10\n",
             "      - name: uv\n        uses: astral-sh/setup-uv@" + "a" * 40 + " # v10.3.3\n",
         ],
     )
     def test_refuses_a_setup_uv_that_picks_its_own_uv(self, step):
         with pytest.raises(AssertionError, match="setup-uv"):
-            check_setup_uv_reads_the_version_file("w.yml", self.workflow(step))
+            check_setup_uv_reads_the_lock("w.yml", self.workflow(step))
 
     @pytest.mark.parametrize(
         "inputs",
         [
-            "        with: {version-file: .tool-versions}\n",
-            "        with:\n          version-file:\n            .tool-versions\n",
-            "        with:\n          python-version-file: .tool-versions\n",
+            "        with: {version-file: uv.lock}\n",
+            "        with:\n          version-file:\n            uv.lock\n",
+            "        with:\n          python-version-file: uv.lock\n",
         ],
     )
     def test_a_version_file_it_cannot_read_fails_closed(self, inputs):
@@ -3529,64 +3836,221 @@ class TestTheToolchainScannersThemselves:
         the file, so any shape it cannot read is a step that fails it, never one that
         slips past it."""
         with pytest.raises(AssertionError, match="setup-uv"):
-            check_setup_uv_reads_the_version_file("w.yml", self.workflow(self.UV + inputs))
+            check_setup_uv_reads_the_lock("w.yml", self.workflow(self.UV + inputs))
 
     def test_a_neighbours_version_file_does_not_vouch_for_a_step(self):
         text = self.workflow(
             self.UV,
-            "      - uses: other/action@v1\n        with:\n          version-file: .tool-versions\n",
+            "      - uses: other/action@v1\n        with:\n          version-file: uv.lock\n",
         )
         with pytest.raises(AssertionError, match="version-file is unset"):
-            check_setup_uv_reads_the_version_file("w.yml", text)
+            check_setup_uv_reads_the_lock("w.yml", text)
 
     def test_a_setup_uv_named_only_in_a_script_is_not_a_step(self):
         text = self.workflow("      - run: |\n          echo 'uses: astral-sh/setup-uv@v1'\n")
         assert steps_using(text, SETUP_UV) == []
 
     @pytest.mark.parametrize(
-        "requires",
-        [
-            'requires = ["hatchling==1.33.0"]',
-            "requires = ['hatchling==1.33.0']",
-            'requires = [\n    "hatchling==1.33.0",\n    "hatch-vcs==0.5.0",\n]',
-            'requires = ["hatchling==1.34.0.post1"]',
-            'requires = ["hatchling==2.0.0rc1"]',
-        ],
-    )
-    def test_accepts_an_exact_build_backend(self, requires):
-        check_build_backend_is_pinned_exactly(f"[build-system]\n{requires}\n")
-
-    @pytest.mark.parametrize(
-        "requires",
-        [
-            'requires = ["hatchling>=1.32.0"]',
-            'requires = ["hatchling"]',
-            'requires = ["hatchling~=1.33"]',
-            'requires = ["hatchling==1.*"]',
-            'requires = ["hatchling===1.33.0"]',
-            'requires = ["hatchling== 1.33.0"]',
-            'requires = ["hatchling==1.33.0,<2"]',
-            "requires = [\"hatchling==1.33.0; python_version>='3.10'\"]",
-            'requires = ["hatchling[x]==1.33.0"]',
-            'requires = ["hatchling==1.33.0", "hatch-vcs"]',
-            'requires = [" hatchling==1.33.0"]',
-        ],
-    )
-    def test_refuses_a_build_backend_that_moves(self, requires):
-        with pytest.raises(AssertionError, match="Not exact"):
-            check_build_backend_is_pinned_exactly(f"[build-system]\n{requires}\n")
-
-    @pytest.mark.parametrize(
         "pyproject",
         [
-            '[project]\nrequires = ["hatchling==1.33.0"]\n',
-            '[build-system]\nbuild-backend = "hatchling.build"\n[tool.x]\nrequires = ["a==1"]\n',
-            "[build-system]\nrequires = []\n",
+            PYPROJECT,
+            PYPROJECT.replace('"hatchling>=1.27"', '"hatchling >= 1.27"'),
+            PYPROJECT.replace('"hatchling>=1.27"', '"Hatchling>=1.27"'),
         ],
     )
-    def test_refuses_a_build_system_with_no_requirements(self, pyproject):
-        with pytest.raises(AssertionError, match=r"\[build-system\]"):
-            check_build_backend_is_pinned_exactly(pyproject)
+    def test_accepts_a_locked_build_toolchain(self, pyproject):
+        check_build_requirements_are_locked(pyproject, self.LOCK)
+
+    @pytest.mark.parametrize(
+        ("pyproject", "reason"),
+        [
+            ('[build-system]\nrequires = ["hatchling>=1.27"]\n', "no `build` dependency group"),
+            ('[dependency-groups]\nbuild = ["uv"]\n', r"\[build-system\]"),
+            ("[dependency-groups]\nbuild = []\n[build-system]\nrequires = []\n", "build-system"),
+            (
+                (
+                    '[dependency-groups]\nbuild = ["hatchling>=1.27"]\n'
+                    '[build-system]\nrequires = ["hatchling>=1.27"]\n'
+                ),
+                "uv is not in the `build` group",
+            ),
+            (
+                '[dependency-groups]\nbuild = ["uv"]\n[build-system]\nrequires = ["hatchling"]\n',
+                "does not declare",
+            ),
+            (
+                (
+                    '[dependency-groups]\nbuild = ["uv", "hatchling>=1.30"]\n'
+                    '[build-system]\nrequires = ["hatchling>=1.27"]\n'
+                ),
+                "two statements of one requirement",
+            ),
+            (
+                (
+                    '[dependency-groups]\nbuild = ["uv", "hatchling>=1.27", "hatch-vcs"]\n'
+                    '[build-system]\nrequires = ["hatchling>=1.27", "hatch-vcs"]\n'
+                ),
+                "0 `hatch-vcs` packages",
+            ),
+        ],
+    )
+    def test_refuses_a_build_toolchain_the_lock_does_not_hold(self, pyproject, reason):
+        with pytest.raises(AssertionError, match=reason):
+            check_build_requirements_are_locked(pyproject, self.LOCK)
+
+    @pytest.mark.parametrize(
+        ("written", "normalized"),
+        [
+            ("hatchling>=1.27", "hatchling"),
+            ("Hatch_Fancy__PyPI.Readme>=1", "hatch-fancy-pypi-readme"),
+            ("zope.interface", "zope-interface"),
+        ],
+    )
+    def test_names_are_normalized_as_uv_lock_records_them(self, written, normalized):
+        assert _requirement_name(written) == normalized
+
+    def test_refuses_a_locked_backend_with_no_hashes(self):
+        lock = _locked("hatchling", sdist='{ url = "u" }', wheels="[]") + _locked("uv")
+        with pytest.raises(AssertionError, match="no sha256"):
+            check_build_requirements_are_locked(self.PYPROJECT, lock)
+
+    @pytest.mark.parametrize("header", ["|", "|-", "|+", ">", ">-", ">2", "|2-", "| # note"])
+    def test_the_run_reader_reads_every_block_scalar(self, header):
+        """Line by line, a folded block included: it is not folded here."""
+        text = f"    - run: {header}\n        a --x\n        # y\n          --z\n\n    - run: ls\n"
+        assert run_scripts(text) == ["a --x\n# y\n--z", "ls"]
+
+    def test_the_run_reader_skips_a_commented_out_run(self):
+        assert run_scripts("      # - run: uv build\n      - run: ls\n") == ["ls"]
+
+    def test_the_run_reader_skips_a_run_inside_a_script(self):
+        text = "      - run: |\n          cat <<EOF\n          run: uv build\n          EOF\n"
+        assert run_scripts(text) == ["cat <<EOF\nrun: uv build\nEOF"]
+
+    SCRIPT = "set -e\nfirst --x \\\n  --y \\\n  --z\n# pip install q\nlast"
+
+    @pytest.mark.parametrize("at", ["first", "--y", "--z"])
+    def test_a_command_is_read_whole_across_its_continuations(self, at):
+        whole = "first --x \\\n  --y \\\n  --z"
+        assert command_at(self.SCRIPT, self.SCRIPT.index(at)) == whole
+
+    def test_a_command_is_one_line_without_a_continuation(self):
+        assert command_at(self.SCRIPT, self.SCRIPT.index("last")) == "last"
+        assert command_at(self.SCRIPT, 0) == "set -e"
+
+    def test_an_install_in_a_comment_is_found(self):
+        """Absence is read with comments in: it errs toward finding one."""
+        assert commands_matching([self.SCRIPT], INSTALLER) == ["# pip install q"]
+
+    def test_a_flag_is_a_whole_word(self):
+        assert " --no-cache " not in words("uv build --no-cache-dir")
+        assert " --no-cache " in words("uv build \\\n  --no-cache")
+
+    @pytest.mark.parametrize(
+        "suffix",
+        [
+            " # note",
+            "; pip install q",
+            " & pip install q",
+            " | tee log",
+            " -r extra.txt",
+            " --x <(echo y)",
+            " \\ --x",
+        ],
+    )
+    def test_anything_added_to_a_locked_command_is_refused(self, suffix):
+        expected = LOCKED_COMMANDS["build"][1]
+        (problem,) = locked_command_problems("build", [expected + suffix])
+        assert "is not the locked one" in problem
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "uv build",
+            "uv --quiet build",
+            '"$RUNNER_TEMP/uv-venv/bin/uv" build',
+            'running="$(uv --version)"',
+            '"$X/bin/python" -m pip install q',
+            "true; pip3 install q",
+            "true && uv export",
+        ],
+    )
+    def test_reads_where_uv_or_pip_runs(self, line):
+        assert RUNS_UV_OR_PIP.search(line), line
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            'python3 scripts/locked_requirement.py uv > "$F"',
+            'echo "::error::The uv on the PATH says $running"',
+            'if [ "uv==$(printf %s "$v")" != "$locked" ]; then',
+            "uv-bin/uvicorn run",
+            "--only-group build",
+        ],
+    )
+    def test_an_argument_or_a_message_is_not_a_run(self, line):
+        assert not RUNS_UV_OR_PIP.search(line), line
+
+    def test_a_locked_command_may_wrap_its_lines(self):
+        expected = LOCKED_COMMANDS["build"][1]
+        wrapped = expected.replace(" --managed-python", " \\\n  --managed-python")
+        assert locked_command_problems("build", [wrapped]) == []
+
+    @pytest.mark.parametrize(
+        "command",
+        ["uv build", "python -m build", "pyproject-build .", "pip wheel .", "hatch build"],
+    )
+    def test_refuses_a_build_outside_the_action(self, command):
+        text = self.workflow(f"      - run: {command}\n")
+        with pytest.raises(AssertionError, match="builds outside"):
+            check_nothing_else_builds("w.yml", text)
+
+    def test_a_build_named_in_a_comment_is_not_a_build(self):
+        check_nothing_else_builds("w.yml", self.workflow("      # - run: uv build\n"))
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "pip install uv",
+            "python -m pip install --require-hashes --no-deps -r r.txt",
+            "uv tool install hatch",
+            "uvx hatch build",
+            "curl -LsSf https://example.com/install.sh | sh",
+            "sudo apt-get install -y python3-build",
+            "pipx run build",
+            "uv python install 3.13",
+            "uv run --with twine twine check dist/*",
+            "uv pip sync requirements.txt",
+            "pip download hatchling",
+            "python -m ensurepip",
+            "conda install hatchling",
+            "gh release download v1 --repo o/r",
+        ],
+    )
+    def test_refuses_an_install_the_lock_does_not_hold(self, command):
+        text = self.workflow(f"      - run: {command}\n")
+        with pytest.raises(AssertionError, match="installs something"):
+            check_the_publish_path_installs_only_the_locked_uv("w.yml", text)
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "uv export --locked --only-group build --output-file c.txt",
+            "uv build --require-hashes",
+            "uv --version",
+            "python3 -m venv venv",
+            "git ls-remote origin refs/heads/main",
+        ],
+    )
+    def test_a_command_that_installs_nothing_is_left_alone(self, command):
+        text = self.workflow(f"      - run: {command}\n")
+        check_the_publish_path_installs_only_the_locked_uv("w.yml", text)
+
+    def test_accepts_the_hash_checked_bootstrap(self):
+        command = LOCKED_COMMANDS["uv install"][1]
+        check_the_publish_path_installs_only_the_locked_uv(
+            "w.yml", self.workflow(f"      - run: {command}\n")
+        )
 
     @pytest.mark.parametrize(
         "step",
@@ -3644,40 +4108,247 @@ class TestEachToolchainEditIsCaught:
     def ci(cls) -> str:
         return CI_WORKFLOW.read_text(encoding="utf-8")
 
-    def test_dropping_the_release_builds_version_file_is_caught(self, release):
-        broken = _mutate_in_job(release, "build", "          version-file: .tool-versions\n", "")
-        with pytest.raises(AssertionError, match="version-file is unset"):
-            check_setup_uv_reads_the_version_file(RELEASE_WORKFLOW.name, broken)
+    @pytest.fixture(scope="module")
+    @classmethod
+    def action(cls) -> str:
+        return BUILD_ACTION.read_text(encoding="utf-8")
 
-    def test_overriding_the_release_builds_uv_is_caught(self, release):
-        broken = _mutate_in_job(
-            release,
-            "build",
-            "          version-file: .tool-versions\n",
-            "          version-file: .tool-versions\n          version: latest\n",
-        )
-        with pytest.raises(AssertionError, match="overrides the file"):
-            check_setup_uv_reads_the_version_file(RELEASE_WORKFLOW.name, broken)
+    @pytest.fixture(scope="module")
+    @classmethod
+    def pyproject(cls) -> str:
+        return PYPROJECT.read_text(encoding="utf-8")
+
+    @pytest.fixture(scope="module")
+    @classmethod
+    def lock(cls) -> str:
+        return LOCK.read_text(encoding="utf-8")
 
     def test_dropping_a_ci_jobs_version_file_is_caught(self, ci):
         """The test leg, whose setup-uv also sets a Python: the one most easily re-typed."""
-        broken = _mutate_in_job(ci, "test", "          version-file: .tool-versions\n", "")
+        broken = _mutate_in_job(ci, "test", "          version-file: uv.lock\n", "")
         with pytest.raises(AssertionError, match="version-file is unset"):
-            check_setup_uv_reads_the_version_file(CI_WORKFLOW.name, broken)
+            check_setup_uv_reads_the_lock(CI_WORKFLOW.name, broken)
 
-    def test_loosening_the_uv_pin_is_caught(self):
-        real = TOOL_VERSIONS.read_text(encoding="utf-8")
-        version = pinned_uv_version(real)
-        broken = _mutate(real, f"uv {version}\n", "uv latest\n")
-        with pytest.raises(AssertionError, match="one exact X.Y.Z"):
-            pinned_uv_version(broken)
+    def test_overriding_a_ci_jobs_uv_is_caught(self, ci):
+        broken = _mutate_in_job(
+            ci,
+            "types",
+            "          version-file: uv.lock\n",
+            "          version-file: uv.lock\n          version: latest\n",
+        )
+        with pytest.raises(AssertionError, match="overrides the lock"):
+            check_setup_uv_reads_the_lock(CI_WORKFLOW.name, broken)
 
-    @pytest.mark.parametrize("loose", [">=", "~="])
-    def test_loosening_the_build_backend_is_caught(self, loose):
-        real = PYPROJECT.read_text(encoding="utf-8")
-        broken = _mutate(real, '"hatchling==', f'"hatchling{loose}')
-        with pytest.raises(AssertionError, match="Not exact"):
-            check_build_backend_is_pinned_exactly(broken)
+    def test_building_the_release_with_setup_uv_again_is_caught(self, release):
+        broken = _mutate_in_job(
+            release,
+            "build",
+            f"      - uses: {BUILD_ACTION_REF}\n",
+            "      - uses: astral-sh/setup-uv@v10.3.3\n      - run: uv build\n",
+        )
+        with pytest.raises(AssertionError, match="does not run"):
+            check_the_job_builds_with_the_action(RELEASE_WORKFLOW.name, broken, "build")
+        with pytest.raises(AssertionError, match="builds outside"):
+            check_nothing_else_builds(RELEASE_WORKFLOW.name, broken)
+
+    def test_adding_setup_uv_beside_the_action_is_caught(self, release):
+        old = f"      - uses: {BUILD_ACTION_REF}\n"
+        broken = _mutate_in_job(
+            release, "build", old, "      - uses: astral-sh/setup-uv@v10.3.3\n" + old
+        )
+        with pytest.raises(AssertionError, match="runs setup-uv"):
+            check_the_job_builds_with_the_action(RELEASE_WORKFLOW.name, broken, "build")
+
+    def test_dropping_cis_build_job_is_caught(self, ci):
+        broken = _mutate_in_job(ci, "build", f"      - uses: {BUILD_ACTION_REF}\n", "")
+        with pytest.raises(AssertionError, match="does not run"):
+            check_the_job_builds_with_the_action(CI_WORKFLOW.name, broken, "build")
+
+    def test_ungating_cis_build_job_is_caught(self, ci):
+        """test_the_gate_depends_on_every_job is what holds a CI build that blocks nothing:
+        dropped from the gate's needs, the job is one it reads as a job and not a need."""
+        broken = _mutate(ci, "drift, build, trailers", "drift, trailers")
+        assert set(ci_job_names(broken)) - {GATE_JOB} - set(gate_needs(broken) or []) == {"build"}
+
+    @pytest.mark.parametrize(
+        ("old", "new"),
+        [
+            ('uv build --build-constraints "$RUNNER_TEMP/build-constraints.txt" ', "uv build "),
+            ('constraints.txt" --require-hashes \\\n', 'constraints.txt" \\\n'),
+            ("--managed-python --no-cache\n", "--no-cache\n"),
+            ("--managed-python --no-cache\n", "--managed-python\n"),
+            (
+                '--build-constraints "$RUNNER_TEMP/build-constraints.txt"',
+                "--build-constraints constraints/hand.txt",
+            ),
+        ],
+        ids=["constraints", "require-hashes", "managed-python", "no-cache", "other-file"],
+    )
+    def test_changing_the_build_is_caught(self, action, old, new):
+        broken = _mutate(action, old, new)
+        with pytest.raises(AssertionError, match="the build is not the locked one"):
+            check_the_build_action_builds_from_the_lock(broken)
+
+    #: The uv install's flags, as the action writes them.
+    PIP_FLAGS = "--require-hashes --no-deps --only-binary :all: -r"
+
+    @pytest.mark.parametrize("flag", LOCKED_PIP)
+    def test_dropping_a_hash_check_from_the_uv_install_is_caught(self, action, flag):
+        broken = _mutate(action, self.PIP_FLAGS, self.PIP_FLAGS.replace(f"{flag} ", ""))
+        with pytest.raises(AssertionError, match="uv install is not the locked one"):
+            check_the_build_action_builds_from_the_lock(broken)
+        with pytest.raises(AssertionError, match="installs something"):
+            check_the_publish_path_installs_only_the_locked_uv(BUILD_ACTION.name, broken)
+
+    def test_a_second_requirement_file_is_caught(self, action):
+        old = '-r "$RUNNER_TEMP/uv-requirement.txt"\n'
+        broken = _mutate(action, old, '-r "$RUNNER_TEMP/uv-requirement.txt" -r extra.txt\n')
+        with pytest.raises(AssertionError, match="installs something"):
+            check_the_publish_path_installs_only_the_locked_uv(BUILD_ACTION.name, broken)
+
+    def test_a_plain_multi_line_run_is_caught(self, action):
+        """YAML folds a plain value's continuation lines too: `&& pip install q` would run."""
+        old = "      run: |\n        uv build"
+        broken = _mutate(action, old, "      run: uv build")
+        broken = _mutate(
+            broken,
+            "          --managed-python --no-cache\n",
+            "          --managed-python --no-cache\n          && pip install q\n",
+        )
+        with pytest.raises(AssertionError, match="literal"):
+            check_the_build_action_builds_from_the_lock(broken)
+
+    @pytest.mark.parametrize(
+        "second",
+        [
+            "uv --quiet build --no-build-isolation",
+            'uv --no-cache export --frozen --output-file "$RUNNER_TEMP/build-constraints.txt"',
+            '"$RUNNER_TEMP/uv-venv/bin/python" -m pip --isolated install uv',
+        ],
+    )
+    def test_a_second_toolchain_command_behind_a_global_flag_is_caught(self, action, second):
+        old = "          --managed-python --no-cache\n"
+        broken = _mutate(action, old, old + f"        {second}\n")
+        with pytest.raises(AssertionError, match="none of the locked ones"):
+            check_the_build_action_builds_from_the_lock(broken)
+
+    @pytest.mark.parametrize(
+        "addition",
+        [
+            "      env:\n        UV_INDEX_URL: https://example.com/simple\n",
+            "      env:\n        PIP_INDEX_URL: https://example.com/simple\n",
+        ],
+    )
+    def test_a_toolchain_environment_on_the_build_step_is_caught(self, action, addition):
+        old = "    - name: Build the wheel and sdist\n      shell: bash\n"
+        broken = _mutate(action, old, old + addition)
+        with pytest.raises(AssertionError, match="UV_ or PIP_"):
+            check_the_build_action_builds_from_the_lock(broken)
+
+    def test_writing_the_jobs_environment_is_caught(self, action):
+        old = '        echo "$RUNNER_TEMP/uv-bin" >> "$GITHUB_PATH"\n'
+        broken = _mutate(
+            action, old, old + '        echo "UV_CONSTRAINT=/tmp/x" >> "$GITHUB_ENV"\n'
+        )
+        with pytest.raises(AssertionError, match="GITHUB_ENV"):
+            check_the_build_action_builds_from_the_lock(broken)
+
+    def test_a_toolchain_environment_in_the_release_is_caught(self, release):
+        old = "    runs-on: ubuntu-latest\n    steps:\n"
+        broken = _mutate_in_job(
+            release,
+            "build",
+            old,
+            "    runs-on: ubuntu-latest\n    env:\n      UV_NO_VERIFY_HASHES: '1'\n    steps:\n",
+        )
+        with pytest.raises(AssertionError, match="UV_ or PIP_"):
+            check_the_publish_path_installs_only_the_locked_uv(RELEASE_WORKFLOW.name, broken)
+
+    def test_an_escaped_space_is_not_a_continuation(self, action):
+        old = 'constraints.txt" --require-hashes \\\n'
+        broken = _mutate(action, old, 'constraints.txt" --require-hashes \\ \n')
+        with pytest.raises(AssertionError, match="build"):
+            check_the_build_action_builds_from_the_lock(broken)
+
+    def test_a_folded_build_step_is_caught(self, action):
+        broken = _mutate(
+            action, "      run: |\n        uv build", "      run: >-\n        uv build"
+        )
+        with pytest.raises(AssertionError, match="literal"):
+            check_the_build_action_builds_from_the_lock(broken)
+
+    def test_a_second_install_beside_the_locked_one_is_caught(self, action):
+        old = '          --require-hashes --no-deps --only-binary :all: -r "$RUNNER_TEMP/uv-requirement.txt"\n'
+        broken = _mutate(action, old, old + "        pip install hatchling\n")
+        with pytest.raises(AssertionError, match="installs something"):
+            check_the_publish_path_installs_only_the_locked_uv(BUILD_ACTION.name, broken)
+
+    def test_an_install_chained_after_the_locked_one_is_caught(self, action):
+        old = '-r "$RUNNER_TEMP/uv-requirement.txt"\n'
+        broken = _mutate(action, old, '-r "$RUNNER_TEMP/uv-requirement.txt" & pip install q\n')
+        with pytest.raises(AssertionError, match="installs something"):
+            check_the_publish_path_installs_only_the_locked_uv(BUILD_ACTION.name, broken)
+
+    def test_an_install_from_another_file_is_caught(self, action):
+        old = '-r "$RUNNER_TEMP/uv-requirement.txt"\n'
+        broken = _mutate(action, old, '-r "$RUNNER_TEMP/other.txt"\n')
+        with pytest.raises(AssertionError, match="uv install is not the locked one"):
+            check_the_build_action_builds_from_the_lock(broken)
+
+    def test_an_install_after_a_quoted_hash_in_the_release_is_caught(self, release):
+        old = "      - uses: ./.github/actions/build-distributions\n"
+        script = '      - run: |\n          echo "see #346"; pip install q\n'
+        broken = _mutate(release, old, old + script)
+        with pytest.raises(AssertionError, match="installs something"):
+            check_the_publish_path_installs_only_the_locked_uv(RELEASE_WORKFLOW.name, broken)
+
+    def test_a_flag_left_only_in_a_comment_is_caught(self, action):
+        old = 'constraints.txt" --require-hashes \\\n'
+        broken = _mutate(action, old, 'constraints.txt" \\\n          # --require-hashes\n')
+        with pytest.raises(AssertionError, match="the build is not the locked one"):
+            check_the_build_action_builds_from_the_lock(broken)
+
+    def test_dropping_cis_build_checkout_guard_is_caught(self, ci):
+        broken = _mutate_in_job(
+            ci, "build", "        with:\n          persist-credentials: false\n", ""
+        )
+        with pytest.raises(AssertionError, match="persist-credentials: false"):
+            check_the_job_builds_with_the_action(CI_WORKFLOW.name, broken, "build")
+
+    def test_exporting_through_the_cache_is_caught(self, action):
+        broken = _mutate(action, "uv export --no-cache ", "uv export ")
+        with pytest.raises(AssertionError, match="toolchain export is not the locked one"):
+            check_the_build_action_builds_from_the_lock(broken)
+
+    def test_exporting_the_wrong_group_is_caught(self, action):
+        broken = _mutate(action, "--only-group build", "--only-group dev")
+        with pytest.raises(AssertionError, match="toolchain export is not the locked one"):
+            check_the_build_action_builds_from_the_lock(broken)
+
+    def test_a_third_party_action_in_the_build_is_caught(self, action):
+        broken = action + "    - uses: astral-sh/setup-uv@v10.3.3\n"
+        with pytest.raises(AssertionError, match="Dependabot never reads"):
+            check_the_build_action_builds_from_the_lock(broken)
+
+    @pytest.mark.parametrize("loose", ["hatchling", "hatchling>=1.30"])
+    def test_moving_one_statement_of_the_backend_is_caught(self, pyproject, lock, loose):
+        broken = _mutate(pyproject, 'requires = ["hatchling>=1.27"]', f'requires = ["{loose}"]')
+        with pytest.raises(AssertionError, match="two statements"):
+            check_build_requirements_are_locked(broken, lock)
+
+    def test_a_second_build_requirement_the_group_lacks_is_caught(self, pyproject, lock):
+        broken = _mutate(
+            pyproject,
+            'requires = ["hatchling>=1.27"]',
+            'requires = ["hatchling>=1.27", "hatch-vcs"]',
+        )
+        with pytest.raises(AssertionError, match="does not declare"):
+            check_build_requirements_are_locked(broken, lock)
+
+    def test_dropping_uv_from_the_group_is_caught(self, pyproject, lock):
+        broken = _mutate(pyproject, 'build = ["uv>=0.13.6", ', "build = [")
+        with pytest.raises(AssertionError, match="uv is not in the `build` group"):
+            check_build_requirements_are_locked(broken, lock)
 
     @pytest.mark.parametrize(("value", "reported"), [("true", "is ['true']"), ("", "unset")])
     def test_letting_the_release_build_keep_its_token_is_caught(self, release, value, reported):
@@ -3699,6 +4370,147 @@ class TestEachToolchainEditIsCaught:
         broken = _mutate(scan, "          persist-credentials: false\n", "")
         with pytest.raises(AssertionError, match="unset"):
             check_checkouts_leave_no_token("dependency-security-scan.yml", broken)
+
+
+# --- The locked uv is one setup-uv carries a checksum for (live) ------------------------
+#
+# The release installs uv by the lock's own sha256s, so setup-uv is off the publish path.
+# CI's setup-uv steps still install the uv the lock holds, and setup-uv checks the archive
+# it downloads against the checksum table built into its own code only when that table
+# holds the version: for a newer uv it trusts a checksum fetched at run time from the host
+# that served the archive. #341 asked for a uv the table holds and nothing checked it; once
+# the lock moved uv into Dependabot's hands, nothing would have held it at all (#346). The
+# table lives in setup-uv's repository, so the check needs the network and runs in the
+# drift-guard job, which runs on the 3.10 the repository pins: the lock is read here by a
+# narrow pattern, and an offline test holds that pattern to tomllib's reading.
+
+SETUP_UV_CHECKSUM_TABLE = "src/download/checksum/known-checksums.json"
+
+#: ``ubuntu-latest``'s target, the platform half of the table's ``<target>-<version>`` keys.
+RUNNER_TARGET = "x86_64-unknown-linux-gnu"
+
+#: ``uv.lock``'s uv entry: the header, then its ``name`` and ``version`` lines.
+LOCKED_UV_ENTRY = re.compile(r'^\[\[package\]\]\nname = "uv"\nversion = "([^"\n]*)"$', re.MULTILINE)
+
+
+def locked_uv_version_by_pattern(lock_text: str) -> str:
+    """The lock's one uv version, without ``tomllib`` (the drift-guard runs on 3.10)."""
+    versions = LOCKED_UV_ENTRY.findall(lock_text)
+    assert len(versions) == 1, (
+        f"{UV_VERSION_FILE} has {len(versions)} entries this pattern reads as uv's, not one: "
+        f"uv.lock's layout changed, so re-read it and fix LOCKED_UV_ENTRY"
+    )
+    return versions[0]
+
+
+def setup_uv_ref(texts: dict[str, str]) -> str:
+    """The one ref every setup-uv step names: one action, one table to check against."""
+    refs = {
+        f"{ref.action.split('@', 1)[1] if '@' in ref.action else ''}"
+        for text in texts.values()
+        for ref in uses_references(text.splitlines())
+        if ref.action.split("@", 1)[0].lower() == SETUP_UV
+    }
+    assert len(refs) == 1 and "" not in refs, (
+        f"every setup-uv step must name the same ref, so one checksum table is the one to "
+        f"check the locked uv against; found {sorted(refs)}"
+    )
+    return refs.pop()
+
+
+def check_the_table_holds_the_locked_uv(version: str, table: dict[str, str], ref: str) -> None:
+    key = f"{RUNNER_TARGET}-{version}"
+    assert key in table, (
+        f"uv.lock holds uv {version}, and setup-uv@{ref}'s checksum table has no `{key}`, so "
+        f"CI would install that uv checked only against a checksum fetched from the host "
+        f"that served it (#346). Dependabot opens the uv bump and the setup-uv bump as separate "
+        f"pull requests: leave the uv bump red until a setup-uv release whose table carries "
+        f"uv {version} has merged, then update its branch and it re-runs green."
+    )
+
+
+def fetch_checksum_table(ref: str) -> dict[str, str]:
+    """setup-uv's table at ``ref``, anonymously, retried as ``ls_remote_tags`` is."""
+    url = f"https://raw.githubusercontent.com/{SETUP_UV}/{ref}/{SETUP_UV_CHECKSUM_TABLE}"
+    failure = ""
+    for attempt in (1, 2, 3):
+        try:
+            with urllib.request.urlopen(url, timeout=60) as response:
+                table = json.load(response)
+        except (OSError, ValueError) as error:
+            failure = str(error)
+        else:
+            assert isinstance(table, dict) and table, f"{url} is not a checksum table"
+            return table
+        if attempt < 3:
+            time.sleep(attempt * 5)
+    raise AssertionError(
+        f"fetching {url} failed three times, so whether setup-uv knows the locked uv's "
+        f"checksum is unknown. Last failure: {failure}"
+    )
+
+
+@pytest.mark.live
+def test_the_locked_uv_is_one_setup_uv_has_a_checksum_for():
+    ref = setup_uv_ref({w.name: w.read_text(encoding="utf-8") for w in OWNED_WORKFLOWS})
+    version = locked_uv_version_by_pattern(LOCK.read_text(encoding="utf-8"))
+    check_the_table_holds_the_locked_uv(version, fetch_checksum_table(ref), ref)
+
+
+class TestTheChecksumTableCheckItself:
+    """The offline half of the live check, on fabricated tables."""
+
+    def test_the_pattern_reads_the_lock_as_tomllib_does(self):
+        text = LOCK.read_text(encoding="utf-8")
+        assert locked_uv_version_by_pattern(text) == locked_uv_version(text)
+
+    @pytest.mark.parametrize(
+        "lock",
+        [
+            "",
+            _locked("uv") + _locked("uv", "2.0.0"),
+            _locked("uvicorn"),
+            '[[package]]\nversion = "1.0.0"\nname = "uv"\n',
+        ],
+    )
+    def test_a_lock_the_pattern_cannot_read_as_one_uv_fails(self, lock):
+        with pytest.raises(AssertionError, match="LOCKED_UV_ENTRY"):
+            locked_uv_version_by_pattern(lock)
+
+    def test_reads_the_one_setup_uv_ref(self):
+        texts = {
+            "a.yml": "jobs:\n  a:\n    steps:\n      - uses: astral-sh/setup-uv@v10.3.3\n",
+            "b.yml": "jobs:\n  b:\n    steps:\n      - uses: Astral-SH/Setup-UV@v10.3.3\n",
+        }
+        assert setup_uv_ref(texts) == "v10.3.3"
+
+    @pytest.mark.parametrize(
+        "second",
+        ["      - uses: astral-sh/setup-uv@v10.4.0\n", "      - uses: astral-sh/setup-uv\n"],
+    )
+    def test_two_setup_uv_refs_or_none_fail(self, second):
+        texts = {
+            "a.yml": "jobs:\n  a:\n    steps:\n      - uses: astral-sh/setup-uv@v10.3.3\n",
+            "b.yml": "jobs:\n  b:\n    steps:\n" + second,
+        }
+        with pytest.raises(AssertionError, match="same ref"):
+            setup_uv_ref(texts)
+
+    def test_a_table_holding_the_version_passes(self):
+        table = {f"{RUNNER_TARGET}-0.13.6": "a" * 64}
+        check_the_table_holds_the_locked_uv("0.13.6", table, "v10.3.3")
+
+    @pytest.mark.parametrize(
+        "table",
+        [
+            {f"{RUNNER_TARGET}-0.13.5": "a" * 64},
+            {"aarch64-unknown-linux-gnu-0.13.6": "a" * 64},
+            {f"{RUNNER_TARGET}-0.13.60": "a" * 64},
+        ],
+    )
+    def test_a_table_without_the_version_fails(self, table):
+        with pytest.raises(AssertionError, match="no `x86_64-unknown-linux-gnu-0.13.6`"):
+            check_the_table_holds_the_locked_uv("0.13.6", table, "v10.3.3")
 
 
 # --- The pin comment names the pinned commit (live) -------------------------------------
@@ -3932,17 +4744,25 @@ class TestEachPinCommentEditIsCaught:
 
     def test_the_real_file_agrees_with_a_remote_built_from_it(self, release, remote):
         pins = action_pins(RELEASE_WORKFLOW.name, release)
-        assert {pin.repository for pin in pins} >= {"actions/checkout", "astral-sh/setup-uv"}
+        assert {pin.repository for pin in pins} >= {
+            "actions/checkout",
+            "actions/upload-artifact",
+            "pypa/gh-action-pypi-publish",
+        }
         assert pin_comment_mismatches(pins, remote) == []
 
     def test_a_comment_naming_another_version_is_caught(self, release, remote):
-        pin = next(p for p in action_pins("r", release) if p.repository == "astral-sh/setup-uv")
+        pin = next(
+            p for p in action_pins("r", release) if p.repository == "actions/upload-artifact"
+        )
         broken = _mutate(release, f"{pin.sha} # {pin.tag}", f"{pin.sha} # v0.0.1")
         mismatches = pin_comment_mismatches(action_pins("r", broken), remote)
         assert any("# v0.0.1" in m and "no such tag" in m for m in mismatches), mismatches
 
     def test_a_sha_moved_without_its_comment_is_caught(self, release, remote):
-        pin = next(p for p in action_pins("r", release) if p.repository == "astral-sh/setup-uv")
+        pin = next(
+            p for p in action_pins("r", release) if p.repository == "actions/upload-artifact"
+        )
         broken = _mutate(release, f"{pin.sha} # {pin.tag}", f"{'d' * 40} # {pin.tag}")
         mismatches = pin_comment_mismatches(action_pins("r", broken), remote)
         assert any("not the pinned" in m for m in mismatches), mismatches

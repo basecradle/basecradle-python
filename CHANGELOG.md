@@ -8,6 +8,22 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 ## [Unreleased]
 
+### Security
+
+- **The release build is held by `uv.lock`, all of it** (#346). 0.17.0 pinned uv and
+  hatchling, but hatchling's own dependencies (`packaging`, `pathspec`, `pluggy`, `tomlkit`,
+  `trove-classifiers`, and `tomli` on Python 3.10) still resolved fresh from PyPI on every
+  tag, with no hash check. A new `build` dependency group puts uv, hatchling and everything
+  hatchling imports in the lock, with their hashes. The release installs that uv by its
+  hashes and builds with `--require-hashes` against the lock's versions, on a uv-managed
+  Python, so every package in the build environment is the locked, hash-checked one. CI
+  runs the same build on every pull request, so a toolchain bump from Dependabot is built
+  before it merges, not on the next tag. `.tool-versions` is gone: the uv version lives in
+  the lock, which Dependabot moves. `[build-system].requires` is a range again
+  (`hatchling>=1.27`), so rebuilding the sdist without build isolation no longer needs one
+  exact hatchling. Measured when this landed: the wheel the locked build makes is
+  byte-identical to the one the old, unlocked toolchain builds from the same tree.
+
 ## [0.17.0] - 2026-11-16
 
 A minor release, for one addition: `UnsendableRequestError`, a new typed error. It closes

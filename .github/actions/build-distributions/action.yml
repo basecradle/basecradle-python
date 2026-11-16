@@ -1,0 +1,66 @@
+# The one build of this package's wheel and sdist (#346): the release builds with it, and
+# CI's `build` job builds with it on every pull request, so a bump to anything below is
+# built before it merges, and the release never builds with a toolchain CI did not.
+# The shape is basecradle-harness's (basecradle-harness#916).
+#
+# #339 pinned the actions and #341 pinned uv and hatchling, but hatchling's own
+# dependencies still resolved fresh on every tag. Now every link that makes the published
+# bytes is held by uv.lock, where Dependabot moves it as a reviewable diff and the daily
+# dependency scan (#315) reads it:
+#
+#   * uv is the wheel the lock holds (the `build` group in pyproject.toml), installed by pip
+#     in hash-checking mode from the lock's own sha256s (scripts/locked_requirement.py).
+#     Not astral-sh/setup-uv: it downloads uv's release archive, and for a uv newer than
+#     the action's built-in checksum table it trusts a checksum fetched at run time from
+#     the same host.
+#   * The build backend and everything it imports resolve inside `uv build`'s isolated
+#     environment, which reads only [build-system].requires (a range) and would take the
+#     newest of each. The lock's versions and hashes are exported as build
+#     constraints, and `--require-hashes` refuses any build requirement without a trusted
+#     hash, a missing one included.
+#   * The interpreter is a uv-managed CPython (`--managed-python`): the newest release of
+#     the .python-version series the pinned uv knows, checked against the checksum built
+#     into it, never whatever the runner image ships.
+#
+# What is left is the runner: its image, and the python3 and pip that check uv's hashes.
+# No cache: a restored cache would supply build requirements this run did not download.
+# Dependabot does not read composite actions, so this file names no third-party action.
+# tests/test_workflows.py holds that, and holds the pip install, the export and the build to
+# the exact commands below, so a change to one is a change to its table too; every block is
+# `|`, never `>`, so no command is read through YAML's folding.
+name: Build the Distributions
+description: Build the wheel and sdist into dist/ with the toolchain uv.lock pins.
+
+runs:
+  using: composite
+  steps:
+    - name: Install the locked uv from the lock's hashes
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 scripts/locked_requirement.py uv > "$RUNNER_TEMP/uv-requirement.txt"
+        python3 -m venv "$RUNNER_TEMP/uv-venv"
+        "$RUNNER_TEMP/uv-venv/bin/python" -m pip install --quiet --disable-pip-version-check \
+          --require-hashes --no-deps --only-binary :all: -r "$RUNNER_TEMP/uv-requirement.txt"
+        # Only uv on the PATH, never the bootstrap venv's python.
+        mkdir -p "$RUNNER_TEMP/uv-bin"
+        ln -sf "$RUNNER_TEMP/uv-venv/bin/uv" "$RUNNER_TEMP/uv-bin/uv"
+        echo "$RUNNER_TEMP/uv-bin" >> "$GITHUB_PATH"
+    - name: Export the locked build toolchain as hashed constraints
+      shell: bash
+      run: |
+        set -euo pipefail
+        # The uv on the PATH is the one just installed, at the version the lock holds.
+        locked="$(cut -d' ' -f1 "$RUNNER_TEMP/uv-requirement.txt")"
+        running="$(uv --version)"
+        if [ "uv==$(printf '%s' "$running" | cut -d' ' -f2)" != "$locked" ]; then
+          echo "::error::The uv on the PATH says '$running', but uv.lock holds $locked. The build must run the uv the lock pins; nothing was built."
+          exit 1
+        fi
+        uv export --no-cache --quiet --locked --only-group build --no-emit-project \
+          --format requirements.txt --output-file "$RUNNER_TEMP/build-constraints.txt"
+    - name: Build the wheel and sdist
+      shell: bash
+      run: |
+        uv build --build-constraints "$RUNNER_TEMP/build-constraints.txt" --require-hashes \
+          --managed-python --no-cache
