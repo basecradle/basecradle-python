@@ -17,9 +17,9 @@ on:
   # so it is only for proving the filing path, and its issue is closed after.
   workflow_dispatch:
 
-# Actions pinned to a full commit SHA, version in the comment (#339): this job hands the
-# basecradle-ai App's private key to create-github-app-token, so a moved tag would run
-# someone else's code holding the capital bot's key. Dependabot bumps a pin with its comment
+# Actions pinned to a full commit SHA, version in the comment (#339): this job hands a
+# GitHub App's private key to create-github-app-token, so a moved tag would run someone
+# else's code holding a fleet bot's key. Dependabot bumps a pin with its comment
 # (and the shared auto-merge policy merges a patch or minor bump on green).
 
 permissions:
@@ -39,7 +39,7 @@ jobs:
 
     steps:
       # No token left in .git/config (#341): nothing here pushes, and this job also holds
-      # the basecradle-ai App's key, so it carries no credential it does not use.
+      # a GitHub App's key, so it carries no credential it does not use.
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -64,19 +64,28 @@ jobs:
           chmod +x "$RUNNER_TEMP/bin/osv-scanner"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
-      # The issue and its label must come from the basecradle-ai App, never GITHUB_TOKEN:
-      # GitHub starts no workflow for an event GITHUB_TOKEN caused, so a needs-human label
-      # it applied would page nobody. Scoped to issues.
-      - name: Mint basecradle-ai App token
+      # The issue and its label must come from a GitHub App, never GITHUB_TOKEN: GitHub
+      # starts no workflow for an event GITHUB_TOKEN caused, so a needs-human label it
+      # applied would page nobody. Scoped to issues.
+      #
+      # WHOSE TOKEN (basecradle#870): this repository's own bot, basecradle-python-ai[bot].
+      # FLEET_BOT_CLIENT_ID and FLEET_BOT_APP_PRIVATE_KEY hold this repository's captain's
+      # App, so the capital's key is needed nowhere here. The `|| secrets.BASECRADLE_AI_*`
+      # fallback is a bridge for the days before that pair is placed: it mints the
+      # capital's basecradle-ai[bot], as before. The capital removes it in its later
+      # handoff, in the same change that deletes the organization-level copies; that
+      # change also drops the capital's bot from the script's SCAN_AUTHORS.
+      - name: Mint this repository's bot token
         id: app-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ secrets.BASECRADLE_AI_APP_ID }}
-          private-key: ${{ secrets.BASECRADLE_AI_APP_PRIVATE_KEY }}
+          client-id: ${{ secrets.FLEET_BOT_CLIENT_ID || secrets.BASECRADLE_AI_CLIENT_ID }}
+          private-key: ${{ secrets.FLEET_BOT_APP_PRIVATE_KEY || secrets.BASECRADLE_AI_APP_PRIVATE_KEY }}
           permission-issues: write
 
       # With their authors: this repository is public, so an issue carrying the scan's
-      # title is the scan's only if basecradle-ai[bot] wrote it (the script's SCAN_AUTHOR).
+      # title is the scan's only if one of its identities wrote it, this repository's bot
+      # or, from before basecradle#870, the capital's (the script's SCAN_AUTHORS).
       - name: Read the open issues
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
