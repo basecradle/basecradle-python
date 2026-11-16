@@ -8,19 +8,12 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 ## [Unreleased]
 
-### Security
+## [0.16.2] - 2026-11-16
 
-- **The release build's toolchain is pinned too** (#341). 0.16.1 pinned the actions the
-  release workflow runs, but not what they fetched: the build installed the newest uv on
-  the day of the tag and resolved the newest hatchling from PyPI. Every workflow now
-  installs the uv named in `.tool-versions` (0.13.6, which the release workflow's pinned
-  `setup-uv` checks against a checksum built into its own code), and the build backend is
-  pinned to `hatchling==1.33.0`, which Dependabot keeps current. The release build's
-  checkout no longer leaves its token in the tree the build runs in. Measured when this
-  landed: the wheel the pinned toolchain builds is byte-identical to the one the old
-  toolchain built that day. Hatchling's own dependencies still resolve fresh on each tag.
-  The exact pin ships in the sdist's `pyproject.toml`, so rebuilding the sdist without
-  build isolation now needs that exact hatchling.
+A patch release. It adds nothing to the SDK's API. It fixes one bug: a whitespace-only
+`idempotency_key` failed the create inside the SDK. It is also the first release built with
+uv and the build backend pinned to known versions. The build backend's own dependencies
+are not pinned yet.
 
 ### Fixed
 
@@ -34,7 +27,23 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
   (space, tab, newline, vertical tab, form feed, carriage return). `request()` still sends
   the headers it is given exactly as given, but its retry gate no longer counts a blank
   `Idempotency-Key` as a key. basecradle-ruby makes the same change, so the two SDKs
-  agree on what counts as a key.
+  agree on what counts as a key, with one exception: a key made only of NUL characters
+  (`"\0"`). Ruby's `strip` removes NUL, so Ruby sends that create unkeyed. Here it is
+  still a key, and the create fails inside the SDK as above.
+
+### Security
+
+- **The release build's toolchain is pinned too** (#341). 0.16.1 pinned the actions the
+  release workflow runs, but not what they fetched: the build installed the newest uv on
+  the day of the tag and resolved the newest hatchling from PyPI. Every workflow now
+  installs the uv named in `.tool-versions` (0.13.6, which the release workflow's pinned
+  `setup-uv` checks against a checksum built into its own code), and the build backend is
+  pinned to `hatchling==1.33.0`, which Dependabot keeps current. The release build's
+  checkout no longer leaves its token in the tree the build runs in. Measured when this
+  landed: the wheel the pinned toolchain builds is byte-identical to the one the old
+  toolchain built that day. Hatchling's own dependencies still resolve fresh on each tag.
+  The exact pin ships in the sdist's `pyproject.toml`, so rebuilding the sdist without
+  build isolation now needs that exact hatchling.
 
 ## [0.16.1] - 2026-11-16
 
@@ -806,6 +815,7 @@ The first release: complete coverage of the BaseCradle API, for humans and AI pe
 - **The spec drift-guard** — CI fails if the live API ever has endpoints this SDK doesn't
   cover.
 
+[0.16.2]: https://github.com/basecradle/basecradle-python/releases/tag/v0.16.2
 [0.16.1]: https://github.com/basecradle/basecradle-python/releases/tag/v0.16.1
 [0.16.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.16.0
 [0.15.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.15.0
