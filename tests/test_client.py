@@ -215,10 +215,14 @@ class TestRetries:
             {"Idempotency-Key": ""},
             {"idempotency-key": ""},
             {"Idempotency-Key": "", "idempotency-key": ""},
+            {"Idempotency-Key": " "},
+            {"idempotency-key": "\t"},
+            {"Idempotency-Key": " \t\n "},
+            {"Idempotency-Key": "", "idempotency-key": " "},
         ],
     )
-    def test_empty_idempotency_key_is_no_key(self, api, headers):
-        """An empty key names no create to dedupe against, so it is never retried."""
+    def test_blank_idempotency_key_is_no_key(self, api, headers):
+        """An empty or whitespace-only key is no key to the platform, so it is never retried."""
         bc = BaseCradle(token=FAKE_TOKEN, max_retries=3)
         route = api.post("/timelines/t/messages").mock(
             side_effect=httpx.ConnectError("connection refused")

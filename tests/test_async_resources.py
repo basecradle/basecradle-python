@@ -284,12 +284,13 @@ class TestAsyncItems:
 
         assert route.calls.last.request.headers["Idempotency-Key"] == "019f5e48-async"
 
-    async def test_empty_key_sends_no_header(self, abc, api, timeline):
+    @pytest.mark.parametrize("key", ["", " ", "\t", " \t\n "])
+    async def test_blank_key_sends_no_header(self, abc, api, timeline, key):
         route = api.post(f"/timelines/{TIMELINE_UUID}/messages").respond(
             201, json={"message": message_payload()}
         )
 
-        await timeline.messages.create(body="hi", idempotency_key="")
+        await timeline.messages.create(body="hi", idempotency_key=key)
 
         assert "Idempotency-Key" not in route.calls.last.request.headers
 
@@ -352,7 +353,8 @@ class TestAsyncRetries:
         assert route.call_count == 2
         await abc.aclose()
 
-    async def test_empty_idempotency_key_is_no_key(self, api, monkeypatch):
+    @pytest.mark.parametrize("key", ["", " ", "\t", " \t\n "])
+    async def test_blank_idempotency_key_is_no_key(self, api, monkeypatch, key):
         from basecradle import APIConnectionError, AsyncBaseCradle
         from tests.conftest import FAKE_TOKEN
 
@@ -364,7 +366,7 @@ class TestAsyncRetries:
 
         with pytest.raises(APIConnectionError):
             await abc.request(
-                "POST", "/timelines/t/messages", json={}, headers={"Idempotency-Key": ""}
+                "POST", "/timelines/t/messages", json={}, headers={"Idempotency-Key": key}
             )
 
         assert route.call_count == 1
@@ -393,12 +395,13 @@ class TestAsyncWebhooks:
         )
         return await timeline.webhook_endpoints.create(description="CI deploys")
 
-    async def test_create_with_empty_idempotency_key_sends_no_header(self, abc, api, timeline):
+    @pytest.mark.parametrize("key", ["", " ", "\t", " \t\n "])
+    async def test_create_with_blank_idempotency_key_sends_no_header(self, abc, api, timeline, key):
         route = api.post(f"/timelines/{TIMELINE_UUID}/webhook_endpoints").respond(
             201, json={"webhook_endpoint": webhook_endpoint_payload()}
         )
 
-        await timeline.webhook_endpoints.create(description="CI deploys", idempotency_key="")
+        await timeline.webhook_endpoints.create(description="CI deploys", idempotency_key=key)
 
         assert "Idempotency-Key" not in route.calls.last.request.headers
 
