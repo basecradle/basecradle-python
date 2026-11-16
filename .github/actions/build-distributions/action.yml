@@ -14,8 +14,8 @@
 #     the action's built-in checksum table it trusts a checksum fetched at run time from
 #     the same host.
 #   * The build backend and everything it imports resolve inside `uv build`'s isolated
-#     environment, which reads only [build-system].requires (`hatchling>=1.27`) and would
-#     take the newest of each. The lock's versions and hashes are exported as build
+#     environment, which reads only [build-system].requires (a range) and would take the
+#     newest of each. The lock's versions and hashes are exported as build
 #     constraints, and `--require-hashes` refuses any build requirement without a trusted
 #     hash, a missing one included.
 #   * The interpreter is a uv-managed CPython (`--managed-python`): the newest release of
@@ -50,9 +50,13 @@ runs:
         set -euo pipefail
         # The uv on the PATH is the one just installed, at the version the lock holds.
         locked="$(cut -d' ' -f1 "$RUNNER_TEMP/uv-requirement.txt")"
-        test "uv==$(uv --version | cut -d' ' -f2)" = "$locked"
-        uv export --quiet --locked --only-group build --no-emit-project --format requirements.txt \
-          --output-file "$RUNNER_TEMP/build-constraints.txt"
+        running="$(uv --version)"
+        if [ "uv==$(printf '%s' "$running" | cut -d' ' -f2)" != "$locked" ]; then
+          echo "::error::The uv on the PATH says '$running', but uv.lock holds $locked. The build must run the uv the lock pins; nothing was built."
+          exit 1
+        fi
+        uv export --no-cache --quiet --locked --only-group build --no-emit-project \
+          --format requirements.txt --output-file "$RUNNER_TEMP/build-constraints.txt"
     - name: Build the wheel and sdist
       shell: bash
       run: >-

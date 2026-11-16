@@ -3,7 +3,7 @@ gate that cannot fail open, a release pipeline that publishes what it says it do
 matrix that runs exactly the Python versions the package declares, with a
 ``requires-python`` floor at the oldest of them (#336, #338), an action
 pinned to a commit SHA in every workflow that holds a secret or a write grant (#339), and a
-build toolchain that is fixed rather than fetched fresh on each tag (#341). The last three
+build toolchain held by uv.lock rather than fetched fresh on each tag (#341, #346). The last three
 carry their reasons beside their code, at the end of this file.
 
 ``constitution.md`` → How We Build: whatever a build leaves behind has a named owner, a
@@ -73,10 +73,12 @@ rules, so the release ships before the ``pypi`` gate is ever actuated; and job-l
 be undone.
 """
 
+import json
 import os
 import re
 import subprocess
 import time
+import urllib.request
 from pathlib import Path
 from typing import NamedTuple
 
@@ -2496,6 +2498,14 @@ class TestEachReleaseEditIsCaught:
 # that reads ``ci.yml`` alone runs on every leg, 3.10 included.
 
 PYPROJECT = WORKFLOWS.parent.parent / "pyproject.toml"
+
+
+def _toml(text: str) -> dict:
+    """``text`` parsed, or the test skipped on 3.10, where ``tomllib`` is not standard."""
+    tomllib = pytest.importorskip("tomllib", reason="tomllib is standard library from 3.11")
+    return tomllib.loads(text)
+
+
 TEST_JOB = "test"
 
 #: A version classifier, matched whole: ``Programming Language :: Python :: 3`` and
@@ -2513,8 +2523,7 @@ MATRIX_VERSION_EXPRESSION = "${{matrix.python-version}}"
 
 def declared_python_versions(pyproject_text: str) -> set[str]:
     """The ``3.N`` versions ``pyproject.toml``'s classifiers declare."""
-    tomllib = pytest.importorskip("tomllib", reason="tomllib is standard library from 3.11")
-    classifiers = tomllib.loads(pyproject_text)["project"]["classifiers"]
+    classifiers = _toml(pyproject_text)["project"]["classifiers"]
     return {m.group("version") for c in classifiers if (m := VERSION_CLASSIFIER.fullmatch(c))}
 
 
@@ -2651,8 +2660,7 @@ def oldest_declared_python_version(pyproject_text: str) -> str:
 
 
 def check_requires_python_floor_is_the_oldest_declared(pyproject_text: str) -> None:
-    tomllib = pytest.importorskip("tomllib", reason="tomllib is standard library from 3.11")
-    requires = tomllib.loads(pyproject_text)["project"].get("requires-python")
+    requires = _toml(pyproject_text)["project"].get("requires-python")
     assert requires is not None, (
         "pyproject.toml has no requires-python, so pip installs the SDK on any Python; "
         'it must be ">=" followed by the oldest declared version'
@@ -3325,15 +3333,11 @@ BUILDER = re.compile(r"\buv build\b|-m build\b|\bpyproject-build\b|\bpip wheel\b
 #: Anything that installs or fetches a tool. On the publish path the one install allowed is
 #: the uv bootstrap: pip, by the lock's hashes, no dependencies, no source builds.
 INSTALLER = re.compile(
-    r"\b(?:pip3? install|uv (?:tool |pip )?install|uvx|curl|wget|apt(?:-get)?|npm|npx)\b"
+    r"\b(?:pip3? (?:install|download)|pipx|uv (?:tool |pip |python )?install|uv pip\b|uvx"
+    r"|uv run\b[^;&|]*--with|ensurepip|conda|mamba|curl|wget|apt(?:-get)?|npm|npx"
+    r"|gh release download)\b"
 )
 LOCKED_PIP = ("--require-hashes", "--no-deps", "--only-binary :all:")
-
-
-def _toml(text: str) -> dict:
-    """``text`` parsed, or the test skipped on 3.10, where ``tomllib`` is not standard."""
-    tomllib = pytest.importorskip("tomllib", reason="tomllib is standard library from 3.11")
-    return tomllib.loads(text)
 
 
 def steps_using(text: str, action: str) -> list[tuple[int, list[str]]]:
@@ -3467,7 +3471,13 @@ def check_the_build_action_builds_from_the_lock(text: str) -> None:
     exports = [c for c in commands if "uv export" in c]
     if len(exports) != 1 or not all(
         flag in exports[0]
-        for flag in ("--locked", "--only-group build", "--no-emit-project", "--output-file")
+        for flag in (
+            "--locked",
+            "--only-group build",
+            "--no-emit-project",
+            "--no-cache",
+            "--output-file",
+        )
     ):
         wrong.append(f"the toolchain is not exported from the lock's `build` group: {exports}")
     builds = [c for c in commands if BUILDER.search(c)]
@@ -3796,12 +3806,34 @@ class TestTheToolchainScannersThemselves:
             "uvx hatch build",
             "curl -LsSf https://example.com/install.sh | sh",
             "sudo apt-get install -y python3-build",
+            "pipx run build",
+            "uv python install 3.13",
+            "uv run --with twine twine check dist/*",
+            "uv pip sync requirements.txt",
+            "pip download hatchling",
+            "python -m ensurepip",
+            "conda install hatchling",
+            "gh release download v1 --repo o/r",
         ],
     )
     def test_refuses_an_install_the_lock_does_not_hold(self, command):
         text = self.workflow(f"      - run: {command}\n")
         with pytest.raises(AssertionError, match="installs something"):
             check_the_publish_path_installs_only_the_locked_uv("w.yml", text)
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "uv export --locked --only-group build --output-file c.txt",
+            "uv build --require-hashes",
+            "uv --version",
+            "python3 -m venv venv",
+            "git ls-remote origin refs/heads/main",
+        ],
+    )
+    def test_a_command_that_installs_nothing_is_left_alone(self, command):
+        text = self.workflow(f"      - run: {command}\n")
+        check_the_publish_path_installs_only_the_locked_uv("w.yml", text)
 
     def test_accepts_the_hash_checked_bootstrap(self):
         command = "python -m pip install --require-hashes --no-deps --only-binary :all: -r r"
@@ -3956,6 +3988,11 @@ class TestEachToolchainEditIsCaught:
         with pytest.raises(AssertionError, match="installs something"):
             check_the_publish_path_installs_only_the_locked_uv(BUILD_ACTION.name, broken)
 
+    def test_exporting_through_the_cache_is_caught(self, action):
+        broken = _mutate(action, "uv export --no-cache ", "uv export ")
+        with pytest.raises(AssertionError, match="not exported"):
+            check_the_build_action_builds_from_the_lock(broken)
+
     def test_exporting_the_wrong_group_is_caught(self, action):
         broken = _mutate(action, "--only-group build", "--only-group dev")
         with pytest.raises(AssertionError, match="not exported"):
@@ -4006,6 +4043,147 @@ class TestEachToolchainEditIsCaught:
         broken = _mutate(scan, "          persist-credentials: false\n", "")
         with pytest.raises(AssertionError, match="unset"):
             check_checkouts_leave_no_token("dependency-security-scan.yml", broken)
+
+
+# --- The locked uv is one setup-uv carries a checksum for (live) ------------------------
+#
+# The release installs uv by the lock's own sha256s, so setup-uv is off the publish path.
+# CI's setup-uv steps still install the uv the lock holds, and setup-uv checks the archive
+# it downloads against the checksum table built into its own code only when that table
+# holds the version: for a newer uv it trusts a checksum fetched at run time from the host
+# that served the archive. #341 asked for a uv the table holds and nothing checked it; once
+# the lock moved uv into Dependabot's hands, nothing would have held it at all (#346). The
+# table lives in setup-uv's repository, so the check needs the network and runs in the
+# drift-guard job, which runs on the 3.10 the repository pins: the lock is read here by a
+# narrow pattern, and an offline test holds that pattern to tomllib's reading.
+
+SETUP_UV_CHECKSUM_TABLE = "src/download/checksum/known-checksums.json"
+
+#: ``ubuntu-latest``'s target, the platform half of the table's ``<target>-<version>`` keys.
+RUNNER_TARGET = "x86_64-unknown-linux-gnu"
+
+#: ``uv.lock``'s uv entry: the header, then its ``name`` and ``version`` lines.
+LOCKED_UV_ENTRY = re.compile(r'^\[\[package\]\]\nname = "uv"\nversion = "([^"\n]*)"$', re.MULTILINE)
+
+
+def locked_uv_version_by_pattern(lock_text: str) -> str:
+    """The lock's one uv version, without ``tomllib`` (the drift-guard runs on 3.10)."""
+    versions = LOCKED_UV_ENTRY.findall(lock_text)
+    assert len(versions) == 1, (
+        f"{UV_VERSION_FILE} has {len(versions)} entries this pattern reads as uv's, not one: "
+        f"uv.lock's layout changed, so re-read it and fix LOCKED_UV_ENTRY"
+    )
+    return versions[0]
+
+
+def setup_uv_ref(texts: dict[str, str]) -> str:
+    """The one ref every setup-uv step names: one action, one table to check against."""
+    refs = {
+        f"{ref.action.split('@', 1)[1] if '@' in ref.action else ''}"
+        for text in texts.values()
+        for ref in uses_references(text.splitlines())
+        if ref.action.split("@", 1)[0].lower() == SETUP_UV
+    }
+    assert len(refs) == 1 and "" not in refs, (
+        f"every setup-uv step must name the same ref, so one checksum table is the one to "
+        f"check the locked uv against; found {sorted(refs)}"
+    )
+    return refs.pop()
+
+
+def check_the_table_holds_the_locked_uv(version: str, table: dict[str, str], ref: str) -> None:
+    key = f"{RUNNER_TARGET}-{version}"
+    assert key in table, (
+        f"uv.lock holds uv {version}, and setup-uv@{ref}'s checksum table has no `{key}`, so "
+        f"CI would install that uv checked only against a checksum fetched from the host "
+        f"that served it (#346). Hold uv at a version the table holds until a setup-uv "
+        f"release carries it (Dependabot's github-actions group moves setup-uv), then bump "
+        f"both in one pull request."
+    )
+
+
+def fetch_checksum_table(ref: str) -> dict[str, str]:
+    """setup-uv's table at ``ref``, anonymously, retried as ``ls_remote_tags`` is."""
+    url = f"https://raw.githubusercontent.com/{SETUP_UV}/{ref}/{SETUP_UV_CHECKSUM_TABLE}"
+    failure = ""
+    for attempt in (1, 2, 3):
+        try:
+            with urllib.request.urlopen(url, timeout=60) as response:
+                table = json.load(response)
+        except (OSError, ValueError) as error:
+            failure = str(error)
+        else:
+            assert isinstance(table, dict) and table, f"{url} is not a checksum table"
+            return table
+        if attempt < 3:
+            time.sleep(attempt * 5)
+    raise AssertionError(
+        f"fetching {url} failed three times, so whether setup-uv knows the locked uv's "
+        f"checksum is unknown. Last failure: {failure}"
+    )
+
+
+@pytest.mark.live
+def test_the_locked_uv_is_one_setup_uv_has_a_checksum_for():
+    ref = setup_uv_ref({w.name: w.read_text(encoding="utf-8") for w in OWNED_WORKFLOWS})
+    version = locked_uv_version_by_pattern(LOCK.read_text(encoding="utf-8"))
+    check_the_table_holds_the_locked_uv(version, fetch_checksum_table(ref), ref)
+
+
+class TestTheChecksumTableCheckItself:
+    """The offline half of the live check, on fabricated tables."""
+
+    def test_the_pattern_reads_the_lock_as_tomllib_does(self):
+        text = LOCK.read_text(encoding="utf-8")
+        assert locked_uv_version_by_pattern(text) == locked_uv_version(text)
+
+    @pytest.mark.parametrize(
+        "lock",
+        [
+            "",
+            _locked("uv") + _locked("uv", "2.0.0"),
+            _locked("uvicorn"),
+            '[[package]]\nversion = "1.0.0"\nname = "uv"\n',
+        ],
+    )
+    def test_a_lock_the_pattern_cannot_read_as_one_uv_fails(self, lock):
+        with pytest.raises(AssertionError, match="LOCKED_UV_ENTRY"):
+            locked_uv_version_by_pattern(lock)
+
+    def test_reads_the_one_setup_uv_ref(self):
+        texts = {
+            "a.yml": "jobs:\n  a:\n    steps:\n      - uses: astral-sh/setup-uv@v10.3.3\n",
+            "b.yml": "jobs:\n  b:\n    steps:\n      - uses: Astral-SH/Setup-UV@v10.3.3\n",
+        }
+        assert setup_uv_ref(texts) == "v10.3.3"
+
+    @pytest.mark.parametrize(
+        "second",
+        ["      - uses: astral-sh/setup-uv@v10.4.0\n", "      - uses: astral-sh/setup-uv\n"],
+    )
+    def test_two_setup_uv_refs_or_none_fail(self, second):
+        texts = {
+            "a.yml": "jobs:\n  a:\n    steps:\n      - uses: astral-sh/setup-uv@v10.3.3\n",
+            "b.yml": "jobs:\n  b:\n    steps:\n" + second,
+        }
+        with pytest.raises(AssertionError, match="same ref"):
+            setup_uv_ref(texts)
+
+    def test_a_table_holding_the_version_passes(self):
+        table = {f"{RUNNER_TARGET}-0.13.6": "a" * 64}
+        check_the_table_holds_the_locked_uv("0.13.6", table, "v10.3.3")
+
+    @pytest.mark.parametrize(
+        "table",
+        [
+            {f"{RUNNER_TARGET}-0.13.5": "a" * 64},
+            {"aarch64-unknown-linux-gnu-0.13.6": "a" * 64},
+            {f"{RUNNER_TARGET}-0.13.60": "a" * 64},
+        ],
+    )
+    def test_a_table_without_the_version_fails(self, table):
+        with pytest.raises(AssertionError, match="no `x86_64-unknown-linux-gnu-0.13.6`"):
+            check_the_table_holds_the_locked_uv("0.13.6", table, "v10.3.3")
 
 
 # --- The pin comment names the pinned commit (live) -------------------------------------

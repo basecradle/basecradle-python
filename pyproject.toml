@@ -46,7 +46,9 @@ build = ["uv>=0.13.6", "hatchling>=1.27"]
 # A range, not a pin: this table ships in the sdist, and an exact pin here would bind anyone
 # who rebuilds the sdist without build isolation to one hatchling (#346). The release build
 # is held by uv.lock instead (the `build` group above). 1.27 is the first hatchling that
-# reads PEP 639's `license` and `license-files`, which [project] uses.
+# reads PEP 639's `license` and `license-files`, which [project] uses. Dependabot has raised
+# this floor before (#146); a raise moves the `build` group's statement in the same change,
+# or tests/test_workflows.py fails it.
 [build-system]
 requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
@@ -112,5 +114,5 @@ ignore = ["PYI034", "RUF022"]
 testpaths = ["tests"]
 addopts = "-m 'not live'"
 markers = [
-    "live: reaches the network (the spec drift-guard, and the action-pin comment check); excluded from the default run",
+    "live: reaches the network (the spec drift-guard, the action-pin comment check, and the setup-uv checksum check); excluded from the default run",
 ]
