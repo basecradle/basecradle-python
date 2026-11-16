@@ -1,12 +1,30 @@
 version: 2
+# The one-week trial @origin approved (basecradle#874): Dependabot proposes a version
+# update only once the release is seven days old, so a release pulled or found compromised
+# in its first week never arrives here as a Dependabot version-update pull request.
+# Seven days is safe because a cooldown never delays a security update: Dependabot's
+# security updates are exempt, and the daily osv-scanner scan of uv.lock (#315), which
+# reads no cooldown, catches what Dependabot misses (it never moved the transitive pins in
+# #316). The other half of the trial is the capital's, in the shared auto-merge: a pull
+# request that moves a publish-path tool is not auto-merged and goes to the capital.
+# The capital owns the trial's outcome; the handoff that settles it rewrites this comment.
 updates:
 - package-ecosystem: uv
   directory: "/"
   schedule:
     interval: weekly
+  cooldown:
+    default-days: 7
   open-pull-requests-limit: 10
 - package-ecosystem: github-actions
   directory: "/"
   schedule:
     interval: weekly
+  cooldown:
+    default-days: 7
+  # A week's action bumps arrive as one pull request.
+  groups:
+    github-actions:
+      patterns:
+      - "*"
   open-pull-requests-limit: 10
