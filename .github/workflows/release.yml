@@ -15,10 +15,17 @@
 # stops a ref being moved under us, not a bad new release being adopted.
 # tests/test_workflows.py fails on any action here that is not SHA-pinned.
 #
-# What an action pin cannot reach. gh-action-pypi-publish runs its upload in the container
+# The build's own toolchain is pinned too (#341), because whatever makes the published
+# bytes is as powerful as whatever uploads them: the uv setup-uv installs is the one
+# .tool-versions names, and the build backend is the exact hatchling in pyproject.toml's
+# [build-system].requires, which Dependabot's uv entry moves. tests/test_workflows.py
+# holds both, and its live check holds every pin's version comment to the commit it names.
+#
+# What a pin here cannot reach. gh-action-pypi-publish runs its upload in the container
 # ghcr.io/pypa/gh-action-pypi-publish:<the pinned sha>, and a registry tag is pypa's to
-# move; the action offers no digest input. And the build's own toolchain -- the uv that
-# setup-uv installs, the hatchling `uv build` resolves -- is fetched fresh on each tag.
+# move; the action offers no digest input. And hatchling's own dependencies (packaging,
+# pathspec, pluggy, tomlkit, trove-classifiers) still resolve fresh on each tag: an exact
+# hatchling pin does not reach them.
 name: Release
 
 on:
@@ -33,7 +40,12 @@ jobs:
     name: build
     runs-on: ubuntu-latest
     steps:
+      # No token left in .git/config (#341): `uv build` runs the build backend's code
+      # in this tree, and nothing in this job pushes. The tip guard's `git ls-remote`
+      # reads a public repository, so it needs no credentials.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # #214 asserts the tag names the version the tree builds, and #216 derives the
       # tag from that tree -- which between them removed the tag's only independent
       # cross-check. A derived tag on a checkout one commit behind main is the RIGHT
@@ -96,9 +108,19 @@ jobs:
       # run can read the default branch's caches, so a restored cache is a way for an
       # action this workflow never ran to reach the bytes it publishes. setup-uv's own
       # default ("auto") already skips tag pushes; this keeps that true across its bumps.
+      #
+      # The uv is the one .tool-versions names, the file ci.yml's setup-uv steps read too,
+      # so the release builds with the uv CI tested (#341). Given an explicit version-file,
+      # setup-uv fails when it cannot read a version there, rather than falling back to
+      # the latest. Without that file it would install whatever uv is newest on the day of
+      # the tag, and anything newer than setup-uv's built-in checksum table is checked
+      # only against a manifest fetched from the same place as the binary. So bump uv only
+      # to a version this pin's table holds: x86_64-unknown-linux-gnu-<version> in
+      # src/download/checksum/known-checksums.json, at this commit of astral-sh/setup-uv.
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           enable-cache: false
+          version-file: .tool-versions
       - name: Build the wheel and sdist
         run: uv build
       # The tag is only a trigger: `uv build` derives the version from

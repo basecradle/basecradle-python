@@ -32,8 +32,12 @@ Issues = "https://github.com/basecradle/basecradle-python/issues"
 [dependency-groups]
 dev = ["mypy>=1.18", "pytest>=8", "respx>=0.22", "ruff>=0.16.8"]
 
+# Exact, because this is the code that makes the bytes published to PyPI (#341): `uv build`
+# resolves it fresh from PyPI on every tag, outside uv.lock, so a range would build each
+# release with whatever was newest that day. Dependabot's uv entry reads this table and
+# moves the pin. tests/test_workflows.py refuses anything but `==X.Y.Z` here.
 [build-system]
-requires = ["hatchling>=1.32.0"]
+requires = ["hatchling==1.33.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.version]
@@ -97,5 +101,5 @@ ignore = ["PYI034", "RUF022"]
 testpaths = ["tests"]
 addopts = "-m 'not live'"
 markers = [
-    "live: hits the live API over the network (the spec drift-guard); excluded from the default run",
+    "live: reaches the network (the spec drift-guard, and the action-pin comment check); excluded from the default run",
 ]
