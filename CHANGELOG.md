@@ -8,6 +8,33 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 ## [Unreleased]
 
+### Added
+
+- **`UnsendableRequestError`**, a subclass of `APIConnectionError`. It is raised when the
+  HTTP client refuses to send a request because it is not valid HTTP (#351). See Security.
+
+### Security
+
+- **A request the HTTP client refuses no longer puts the token in the error, and no
+  longer says "Could not reach"** (#351). When a header value is one HTTP cannot carry,
+  h11 refuses it before a byte is sent. The usual case is a token read from a file or an
+  environment variable with its trailing newline. Until now that failed every request as
+  `APIConnectionError: Could not reach <base_url>: Illegal header value b'Bearer
+  bc_uat_…'`: the whole bearer token was in the message and in the chained httpx error,
+  so anything that logged the exception wrote the credential down, and it blamed a
+  network that was fine. A non-ASCII value passed in `request(headers=...)` escaped as a
+  bare `UnicodeEncodeError`. Both now raise `UnsendableRequestError`, from requests and
+  from `login()` alike. It names the base URL and says the platform never received the
+  request. It never shows the refused value, and the refusal is neither its cause nor its
+  context, so no traceback or crash reporter finds the token through it. It is not
+  retried, because it would fail the same way. Code that catches `APIConnectionError`
+  still catches it. A body or query that cannot be encoded (a lone surrogate) is the
+  caller's own data, and its `UnicodeEncodeError` still reaches them unchanged.
+- **A non-ASCII token no longer carries itself in its error** (#351). It already failed
+  when the client was built, as a `UnicodeEncodeError` from httpx whose `repr` held the
+  whole `Authorization` value. It is still a `ValueError` at the same moment, now saying
+  the token is not ASCII and not showing it.
+
 ### Changed
 
 - **An `idempotency_key` HTTP cannot carry exactly as given raises `ValueError` before

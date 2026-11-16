@@ -49,6 +49,7 @@ from basecradle._exceptions import (
     TaskNotPendingError,
     TimelineLockedError,
     UnauthorizedError,
+    UnsendableRequestError,
     ValidationError,
 )
 from basecradle._headers import RequestHeaders
@@ -161,6 +162,7 @@ __all__ = [
     "BaseCradleError",
     "MissingTokenError",
     "APIConnectionError",
+    "UnsendableRequestError",
     "AuthenticationError",
     "UnauthorizedError",
     "InvalidCredentialsError",
