@@ -84,7 +84,7 @@ from typing import NamedTuple
 
 import pytest
 
-from scripts.locked_requirement import requirement
+from scripts.locked_requirement import locked_package
 
 WORKFLOWS = Path(__file__).parent.parent / ".github" / "workflows"
 
@@ -3339,6 +3339,13 @@ INSTALLER = re.compile(
 )
 LOCKED_PIP = ("--require-hashes", "--no-deps", "--only-binary :all:")
 
+#: Where the bootstrap writes uv's hashed requirement, and pip must read it.
+UV_REQUIREMENT = '"$RUNNER_TEMP/uv-requirement.txt"'
+
+#: What makes one command more than one, or hides part of it: a comment, a separator, a
+#: pipe, a background, a substitution. A locked command carries none of them.
+SHELL_CONTROL = re.compile(r"[#;&|`]|\$\(")
+
 
 def steps_using(text: str, action: str) -> list[tuple[int, list[str]]]:
     """Every step whose ``uses:`` names ``action`` (``owner/repo``), with the step's lines.
@@ -3354,56 +3361,83 @@ def steps_using(text: str, action: str) -> list[tuple[int, list[str]]]:
     ]
 
 
-#: Where one shell command ends and the next begins on a line.
-COMMAND_SEPARATOR = re.compile(r"&&|\|\||;|\|")
+def run_scripts(text: str) -> list[str]:
+    """Each ``run:`` step's script in a workflow or action, as the shell receives it.
 
-
-def run_commands(text: str) -> list[str]:
-    """Every shell command the ``run:`` steps of a workflow or action run, one per entry.
-
-    Read command by command, never a step's script as one string: a check for a flag
-    must find it on the command that needs it, and a second install beside the locked
-    one is a second command, not more text in one that passes. A literal block (``|``)
-    is split into its lines, a backslash continuation joining a line to the next; a
-    folded block (``>``) is one line, as YAML folds it. Each line is then split at
-    ``&&``, ``||``, ``;`` and ``|``. Comments are dropped, whole-line and trailing, so a
-    flag named only in a comment is not on the command. The scalar is bounded the way
-    ``block_scalar_line_numbers`` bounds it, and a ``run:`` inside another script's text
-    is not a step. A heredoc's body is read as commands too: that errs toward finding
-    an install or a build that is not there, never toward missing one that is.
+    Raw: comments, quotes and separators are left in, because nothing here parses shell.
+    A check that something is absent reads the whole script, comments included, which
+    errs toward finding an install or a build that is not there and never misses one
+    that is. A check that a command is right takes it with ``command_at`` and refuses it
+    if any shell control is in it. A literal block (``|``) keeps its lines; a folded one
+    (``>``) is folded as YAML folds it, every line joined with a space, a line starting
+    ``#`` included, because YAML does not read that as a comment and the shell does. The
+    scalar is bounded the way ``block_scalar_line_numbers`` bounds it, so a ``run:``
+    inside another script's text is not a step.
     """
     lines = text.splitlines()
     inside_a_script = block_scalar_line_numbers(lines)
-    found = []
+    scripts = []
     for index, line in enumerate(lines):
         match = KEY_LINE.match(line)
         if index in inside_a_script or not match or match.group("key") != "run":
             continue
         value = _strip_comment(match.group("value") or "").strip()
-        script = [value]
-        if BLOCK_SCALAR.match(value):
-            body = []
-            for following in range(index + 1, len(lines)):
-                if following not in inside_a_script:
-                    break
-                body.append(lines[following].strip())
-            body = [part for part in body if part and not part.startswith("#")]
-            if value.startswith(">"):
-                body = [" ".join(body)]
-            script = []
-            for part in body:
-                if script and script[-1].endswith("\\"):
-                    script[-1] = script[-1].removesuffix("\\").rstrip() + " " + part
-                else:
-                    script.append(part)
-        for command_line in script:
-            command_line = re.split(r"\s#", command_line, maxsplit=1)[0]
-            found.extend(
-                command.strip().replace(" \\ ", " ").removesuffix("\\").strip()
-                for command in COMMAND_SEPARATOR.split(command_line)
-                if command.strip()
-            )
-    return found
+        if not BLOCK_SCALAR.match(value):
+            scripts.append(value)
+            continue
+        body = []
+        for following in range(index + 1, len(lines)):
+            if following not in inside_a_script:
+                break
+            body.append(lines[following].strip())
+        while body and not body[-1]:
+            body.pop()
+        if value.startswith(">"):
+            scripts.append(" ".join(part for part in body if part))
+        else:
+            scripts.append("\n".join(body))
+    return scripts
+
+
+def command_at(script: str, position: int) -> str:
+    """The whole command on the line holding ``position``, backslash continuations joined
+    in both directions, exactly as written."""
+    start = script.rfind("\n", 0, position) + 1
+    while start > 1 and script[start - 2] == "\\":
+        start = script.rfind("\n", 0, start - 1) + 1
+    end = position
+    while (newline := script.find("\n", end)) != -1 and script[newline - 1] == "\\":
+        end = newline + 1
+    return script[start:] if newline == -1 else script[start:newline]
+
+
+def commands_matching(scripts: list[str], pattern: re.Pattern[str]) -> list[str]:
+    """Every command any match of ``pattern`` falls in, once per match."""
+    return [
+        command_at(script, match.start())
+        for script in scripts
+        for match in pattern.finditer(script)
+    ]
+
+
+def words(command: str) -> str:
+    """``command`` with its continuations and runs of whitespace collapsed to one space,
+    padded, so `` --flag `` finds a flag as a whole word and never inside a longer one."""
+    return " " + " ".join(command.replace("\\\n", " ").split()) + " "
+
+
+def plain_command_problems(what: str, commands: list[str], flags: tuple[str, ...]) -> list[str]:
+    """Why ``commands`` is not exactly one plain command carrying every flag, or nothing."""
+    if len(commands) != 1:
+        return [f"expected exactly one {what}, found {commands}"]
+    (command,) = commands
+    problems = [f"the {what} lost `{flag}`" for flag in flags if f" {flag} " not in words(command)]
+    if SHELL_CONTROL.search(command):
+        problems.append(
+            f"the {what} must be one plain command, with no comment, separator, pipe, "
+            f"background or substitution in it: {command!r}"
+        )
+    return problems
 
 
 def _requirement_name(requirement: str) -> str:
@@ -3417,14 +3451,13 @@ def locked_uv_version(lock_text: str) -> str:
     """The one exact uv the lock holds: what setup-uv and the build both install."""
     lock = _toml(lock_text)
     try:
-        pinned = requirement(lock, "uv")
+        version = str(locked_package(lock, "uv")["version"])
     except ValueError as error:
         raise AssertionError(
             f"{UV_VERSION_FILE} must hold exactly one `uv`, from PyPI, with a sha256 for "
             f"every file: the build installs it by those hashes, and setup-uv reads its "
             f"version (#346). {error}"
         ) from error
-    version = pinned.split()[0].removeprefix("uv==")
     assert EXACT_UV_VERSION.match(version), (
         f"{UV_VERSION_FILE} holds uv {version!r}: setup-uv installs only an X.Y.Z exactly."
     )
@@ -3475,7 +3508,7 @@ def check_build_requirements_are_locked(pyproject_text: str, lock_text: str) -> 
                 f"two statements of one requirement, and only one of them is locked"
             )
         try:
-            requirement(lock, name)
+            locked_package(lock, name)
         except ValueError as error:
             wrong.append(str(error))
     assert not wrong, (
@@ -3486,36 +3519,21 @@ def check_build_requirements_are_locked(pyproject_text: str, lock_text: str) -> 
 
 def check_the_build_action_builds_from_the_lock(text: str) -> None:
     """Assert the one build installs uv by its hashes and builds under hashed constraints."""
-    commands = run_commands(text)
+    scripts = run_scripts(text)
     wrong = []
-    bootstrap = [c for c in commands if c.startswith("python3 scripts/locked_requirement.py uv >")]
-    installs = [c for c in commands if re.search(r"-m pip install\b", c)]
-    if len(bootstrap) != 1 or len(installs) != 1 or " -r " not in installs[0]:
-        wrong.append(
-            f"uv is not installed by one pip command from what `scripts/locked_requirement.py "
-            f"uv` wrote: {bootstrap + installs}"
-        )
-    for flag in LOCKED_PIP:
-        if not all(flag in c for c in installs):
-            wrong.append(f"the uv install lost `{flag}`")
-    exports = [c for c in commands if "uv export" in c]
-    if len(exports) != 1 or not all(
-        flag in exports[0]
-        for flag in (
-            "--locked",
-            "--only-group build",
-            "--no-emit-project",
-            "--no-cache",
-            "--output-file",
-        )
-    ):
-        wrong.append(f"the toolchain is not exported from the lock's `build` group: {exports}")
-    builds = [c for c in commands if BUILDER.search(c)]
-    if len(builds) != 1:
-        wrong.append(f"expected exactly one `uv build`, found {builds}")
-    for flag in ("--build-constraints", "--require-hashes", "--managed-python", "--no-cache"):
-        if not all(flag in c for c in builds):
-            wrong.append(f"the build lost `{flag}`")
+    bootstrap = commands_matching(scripts, re.compile(r"locked_requirement\.py"))
+    expected = f" python3 scripts/locked_requirement.py uv > {UV_REQUIREMENT} "
+    if [words(command) for command in bootstrap] != [expected]:
+        wrong.append(f"uv's requirement is not written by one `{expected.strip()}`: {bootstrap}")
+    installs = commands_matching(scripts, INSTALLER)
+    install_flags = ("-m pip install", *LOCKED_PIP, f"-r {UV_REQUIREMENT}")
+    wrong += plain_command_problems("uv install", installs, install_flags)
+    exports = commands_matching(scripts, re.compile(r"\buv export\b"))
+    export_flags = ("--no-cache", "--locked", "--only-group build", "--no-emit-project")
+    wrong += plain_command_problems("toolchain export", exports, (*export_flags, "--output-file"))
+    builds = commands_matching(scripts, BUILDER)
+    build_flags = ("--build-constraints", "--require-hashes", "--managed-python", "--no-cache")
+    wrong += plain_command_problems("build", builds, build_flags)
     third_party = [r.action for r in uses_references(text.splitlines())]
     if third_party:
         wrong.append(
@@ -3543,12 +3561,9 @@ def check_the_job_builds_with_the_action(name: str, text: str, job: str) -> None
     # Whether or not the workflow holds power: the build runs the backend's code in the
     # checkout, and nothing in a build job pushes.
     checkouts = steps_using("\n".join(body), CHECKOUT)
-    keeping = [
-        line
-        for line, step in checkouts
-        if [v.strip("\"'").lower() for v in step_values(step, "persist-credentials")] != ["false"]
-    ]
-    assert checkouts and not keeping, (
+    assert checkouts, f"{name}'s `{job}` job checks nothing out, so it has nothing to build"
+    keeping = [line for line, step in checkouts if not _drops_its_token(step)]
+    assert not keeping, (
         f"{name}'s `{job}` job must check out with `persist-credentials: false`: the build "
         f"runs the build backend's code in that tree, and nothing there pushes (#341, #346)"
     )
@@ -3556,25 +3571,31 @@ def check_the_job_builds_with_the_action(name: str, text: str, job: str) -> None
 
 def check_nothing_else_builds(name: str, text: str) -> None:
     """Assert no workflow builds a distribution outside the build action."""
-    builds = [c for c in run_commands(text) if BUILDER.search(c)]
+    builds = commands_matching(run_scripts(text), BUILDER)
     assert not builds, (
         f"{name} builds outside {BUILD_ACTION_REF}, where the lock's constraints do not "
-        f"reach (#346): {builds}"
+        f"reach (#346). Comments in a script count, so a build is never hidden in one: {builds}"
     )
 
 
 def check_the_publish_path_installs_only_the_locked_uv(name: str, text: str) -> None:
-    """Assert every install on the publish path is pip, by hashes, with no dependencies."""
-    loose = [
-        c
-        for c in run_commands(text)
-        if INSTALLER.search(c)
-        and not (re.search(r"-m pip install\b", c) and all(flag in c for flag in LOCKED_PIP))
-    ]
+    """Assert the publish path's one install, if any, is the hash-checked uv bootstrap."""
+    installs = commands_matching(run_scripts(text), INSTALLER)
+    flags = ("-m pip install", *LOCKED_PIP, f"-r {UV_REQUIREMENT}")
+    loose = installs if installs and plain_command_problems("install", installs, flags) else []
     assert not loose, (
         f"{name} installs something the lock does not hold by its hashes (#346). The one "
-        f"install allowed is pip with {' '.join(LOCKED_PIP)}:\n" + "\n".join(loose)
+        f"install allowed is pip with {' '.join(LOCKED_PIP)} reading {UV_REQUIREMENT}, as "
+        f"one plain command; comments in a script count:\n" + "\n".join(loose)
     )
+
+
+def _drops_its_token(step: list[str]) -> bool:
+    """Whether a checkout step says ``persist-credentials: false``. Quoted or not, and in
+    any case: checkout reads the input as a string, so every spelling of false is the same
+    false and is not worth a red CI."""
+    values = step_values(step, "persist-credentials")
+    return [value.strip("\"'").lower() for value in values] == ["false"]
 
 
 def check_checkouts_leave_no_token(name: str, text: str) -> None:
@@ -3583,11 +3604,8 @@ def check_checkouts_leave_no_token(name: str, text: str) -> None:
         return
     persisting = []
     for line, step in steps_using(text, CHECKOUT):
-        values = step_values(step, "persist-credentials")
-        # Quoted or not, and in any case: checkout reads the input as a string, so every
-        # spelling of false is the same false and is not worth a red CI.
-        if [value.strip("\"'").lower() for value in values] != ["false"]:
-            shown = values or "unset (true by default)"
+        if not _drops_its_token(step):
+            shown = step_values(step, "persist-credentials") or "unset (true by default)"
             persisting.append(f"{name}:{line}: persist-credentials is {shown}")
     assert not persisting, (
         f"{name} holds power, so every checkout in it must say `persist-credentials: false`. "
@@ -3638,13 +3656,12 @@ def test_the_publish_path_installs_only_the_locked_uv(path):
     check_the_publish_path_installs_only_the_locked_uv(path.name, path.read_text(encoding="utf-8"))
 
 
-def test_the_run_reader_reads_the_build_actions_commands():
+def test_the_run_reader_reads_the_build_actions_scripts():
     """All three ``run:`` steps, the folded (``>-``) one included: a reader that lost one
-    would let every check above pass on fewer commands than the build runs."""
-    commands = run_commands(BUILD_ACTION.read_text(encoding="utf-8"))
-    assert any(c.startswith("python3 -m venv") for c in commands)
-    assert any(c.startswith("uv export --no-cache") for c in commands)
-    assert commands[-1].startswith("uv build --build-constraints")
+    would let every check above pass on less than the build runs."""
+    scripts = run_scripts(BUILD_ACTION.read_text(encoding="utf-8"))
+    assert len(scripts) == 3
+    assert scripts[-1].startswith("uv build --build-constraints")
 
 
 @pytest.mark.parametrize("name", ["release.yml", "dependency-security-scan.yml"])
@@ -3829,27 +3846,54 @@ class TestTheToolchainScannersThemselves:
 
     @pytest.mark.parametrize("header", ["|", "|-", "|+", ">", ">-", ">2", "|2-", "| # note"])
     def test_the_run_reader_reads_every_block_scalar(self, header):
-        text = f"    - run: {header}\n        uv build \\\n          --flag\n\n    - run: ls\n"
-        assert run_commands(text) == ["uv build --flag", "ls"]
+        text = f"    - run: {header}\n        a --x\n        # y\n          --z\n\n    - run: ls\n"
+        folded = header.startswith(">")
+        assert run_scripts(text) == ["a --x # y --z" if folded else "a --x\n# y\n--z", "ls"]
 
     def test_the_run_reader_skips_a_commented_out_run(self):
-        assert run_commands("      # - run: uv build\n      - run: ls\n") == ["ls"]
+        assert run_scripts("      # - run: uv build\n      - run: ls\n") == ["ls"]
 
     def test_the_run_reader_skips_a_run_inside_a_script(self):
-        """The heredoc's line is read as a command of the one step, never as a step."""
         text = "      - run: |\n          cat <<EOF\n          run: uv build\n          EOF\n"
-        assert run_commands(text) == ["cat <<EOF", "run: uv build", "EOF"]
+        assert run_scripts(text) == ["cat <<EOF\nrun: uv build\nEOF"]
 
-    def test_the_run_reader_reads_each_command_on_its_own(self):
-        text = (
-            "      - run: |\n"
-            "          set -e  # strict\n"
-            "          # pip install --require-hashes\n"
-            "          a --x && b; c || d | e\n"
-            "          f --y \\\n"
-            "            --z\n"
-        )
-        assert run_commands(text) == ["set -e", "a --x", "b", "c", "d", "e", "f --y --z"]
+    SCRIPT = "set -e\nfirst --x \\\n  --y \\\n  --z\n# pip install q\nlast"
+
+    @pytest.mark.parametrize("at", ["first", "--y", "--z"])
+    def test_a_command_is_read_whole_across_its_continuations(self, at):
+        whole = "first --x \\\n  --y \\\n  --z"
+        assert command_at(self.SCRIPT, self.SCRIPT.index(at)) == whole
+
+    def test_a_command_is_one_line_without_a_continuation(self):
+        assert command_at(self.SCRIPT, self.SCRIPT.index("last")) == "last"
+        assert command_at(self.SCRIPT, 0) == "set -e"
+
+    def test_an_install_in_a_comment_is_found(self):
+        """Absence is read with comments in: it errs toward finding one."""
+        assert commands_matching([self.SCRIPT], INSTALLER) == ["# pip install q"]
+
+    def test_a_flag_is_a_whole_word(self):
+        assert " --no-cache " not in words("uv build --no-cache-dir")
+        assert " --no-cache " in words("uv build \\\n  --no-cache")
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "uv build --x # note",
+            "uv build --x; pip install q",
+            "uv build --x && echo",
+            "uv build --x & pip install q",
+            "uv build --x | tee log",
+            "uv build --x $(echo --y)",
+            "uv build --x `echo --y`",
+        ],
+    )
+    def test_a_locked_command_with_shell_control_is_refused(self, command):
+        problems = plain_command_problems("build", [command], ("--x",))
+        assert any("one plain command" in problem for problem in problems), problems
+
+    def test_a_plain_locked_command_passes(self):
+        assert plain_command_problems("build", ["uv build \\\n  --x"], ("--x",)) == []
 
     @pytest.mark.parametrize(
         "command",
@@ -3902,7 +3946,7 @@ class TestTheToolchainScannersThemselves:
         check_the_publish_path_installs_only_the_locked_uv("w.yml", text)
 
     def test_accepts_the_hash_checked_bootstrap(self):
-        command = "python -m pip install --require-hashes --no-deps --only-binary :all: -r r"
+        command = f"python -m pip install {' '.join(LOCKED_PIP)} -r {UV_REQUIREMENT}"
         check_the_publish_path_installs_only_the_locked_uv(
             "w.yml", self.workflow(f"      - run: {command}\n")
         )
@@ -4060,10 +4104,40 @@ class TestEachToolchainEditIsCaught:
         with pytest.raises(AssertionError, match="installs something"):
             check_the_publish_path_installs_only_the_locked_uv(BUILD_ACTION.name, broken)
 
+    def test_an_install_chained_after_the_locked_one_is_caught(self, action):
+        old = '-r "$RUNNER_TEMP/uv-requirement.txt"\n'
+        broken = _mutate(action, old, '-r "$RUNNER_TEMP/uv-requirement.txt" & pip install q\n')
+        with pytest.raises(AssertionError, match="installs something"):
+            check_the_publish_path_installs_only_the_locked_uv(BUILD_ACTION.name, broken)
+
+    def test_an_install_from_another_file_is_caught(self, action):
+        old = '-r "$RUNNER_TEMP/uv-requirement.txt"\n'
+        broken = _mutate(action, old, '-r "$RUNNER_TEMP/other.txt"\n')
+        with pytest.raises(AssertionError, match="lost `-r"):
+            check_the_build_action_builds_from_the_lock(broken)
+
+    def test_a_comment_folded_into_the_build_is_caught(self, action):
+        """In a ``>`` block YAML folds a ``#`` line into the command, and the shell then
+        reads every flag after it as a comment."""
+        broken = _mutate(
+            action,
+            "--managed-python --no-cache\n",
+            "--managed-python\n        # x\n        --no-cache\n",
+        )
+        with pytest.raises(AssertionError, match="build must be one plain command"):
+            check_the_build_action_builds_from_the_lock(broken)
+
+    def test_an_install_after_a_quoted_hash_in_the_release_is_caught(self, release):
+        old = "      - uses: ./.github/actions/build-distributions\n"
+        script = '      - run: |\n          echo "see #346"; pip install q\n'
+        broken = _mutate(release, old, old + script)
+        with pytest.raises(AssertionError, match="installs something"):
+            check_the_publish_path_installs_only_the_locked_uv(RELEASE_WORKFLOW.name, broken)
+
     def test_a_flag_left_only_in_a_comment_is_caught(self, action):
         old = 'constraints.txt" --require-hashes\n'
         broken = _mutate(action, old, 'constraints.txt"  # --require-hashes\n')
-        with pytest.raises(AssertionError, match="lost `--require-hashes`"):
+        with pytest.raises(AssertionError, match="build must be one plain command"):
             check_the_build_action_builds_from_the_lock(broken)
 
     def test_dropping_cis_build_checkout_guard_is_caught(self, ci):
@@ -4075,12 +4149,12 @@ class TestEachToolchainEditIsCaught:
 
     def test_exporting_through_the_cache_is_caught(self, action):
         broken = _mutate(action, "uv export --no-cache ", "uv export ")
-        with pytest.raises(AssertionError, match="not exported"):
+        with pytest.raises(AssertionError, match="toolchain export lost `--no-cache`"):
             check_the_build_action_builds_from_the_lock(broken)
 
     def test_exporting_the_wrong_group_is_caught(self, action):
         broken = _mutate(action, "--only-group build", "--only-group dev")
-        with pytest.raises(AssertionError, match="not exported"):
+        with pytest.raises(AssertionError, match="toolchain export lost `--only-group build`"):
             check_the_build_action_builds_from_the_lock(broken)
 
     def test_a_third_party_action_in_the_build_is_caught(self, action):

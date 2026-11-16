@@ -29,9 +29,14 @@ LOCK = Path(__file__).resolve().parent.parent / "uv.lock"
 PYPI = {"registry": "https://pypi.org/simple"}
 
 
-def requirement(lock: dict[str, Any], name: str) -> str:
-    """``name==<locked version>`` with every hash the lock holds for it, or a ValueError."""
-    packages = [package for package in lock.get("package", []) if package.get("name") == name]
+def locked_package(lock: dict[str, Any], name: str) -> dict[str, Any]:
+    """The lock's one ``name`` entry, from PyPI, with a version and a sha256 for every file.
+
+    Anything else is a ValueError naming what is wrong.
+    """
+    packages: list[dict[str, Any]] = [
+        package for package in lock.get("package", []) if package.get("name") == name
+    ]
     if len(packages) != 1:
         raise ValueError(f"uv.lock holds {len(packages)} `{name}` packages, not one")
     (package,) = packages
@@ -40,11 +45,22 @@ def requirement(lock: dict[str, Any], name: str) -> str:
     version = package.get("version")
     if not isinstance(version, str) or not version:
         raise ValueError(f"uv.lock's `{name}` has no version: {version!r}")
-    files = [*package.get("wheels", []), *([package["sdist"]] if "sdist" in package else [])]
-    hashes = [str(file.get("hash", "")) for file in files]
+    hashes = _hashes(package)
     if not hashes or not all(value.startswith("sha256:") for value in hashes):
         raise ValueError(f"uv.lock's `{name}` carries no sha256 for every file")
-    return " ".join([f"{name}=={version}", *(f"--hash={value}" for value in hashes)])
+    return package
+
+
+def _hashes(package: dict[str, Any]) -> list[str]:
+    files = [*package.get("wheels", []), *([package["sdist"]] if "sdist" in package else [])]
+    return [str(file.get("hash", "")) for file in files]
+
+
+def requirement(lock: dict[str, Any], name: str) -> str:
+    """``name==<locked version>`` with every hash the lock holds for it, or a ValueError."""
+    package = locked_package(lock, name)
+    hashes = (f"--hash={value}" for value in _hashes(package))
+    return " ".join([f"{name}=={package['version']}", *hashes])
 
 
 def main(argv: list[str]) -> int:
