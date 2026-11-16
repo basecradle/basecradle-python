@@ -24,8 +24,10 @@
 #
 # What is left is the runner: its image, and the python3 and pip that check uv's hashes.
 # No cache: a restored cache would supply build requirements this run did not download.
-# Dependabot does not read composite actions, so this file names no third-party action
-# (tests/test_workflows.py holds that).
+# Dependabot does not read composite actions, so this file names no third-party action.
+# tests/test_workflows.py holds that, and holds the pip install, the export and the build to
+# the exact commands below, so a change to one is a change to its table too; every block is
+# `|`, never `>`, so no command is read through YAML's folding.
 name: Build the Distributions
 description: Build the wheel and sdist into dist/ with the toolchain uv.lock pins.
 
@@ -59,6 +61,6 @@ runs:
           --format requirements.txt --output-file "$RUNNER_TEMP/build-constraints.txt"
     - name: Build the wheel and sdist
       shell: bash
-      run: >-
-        uv build --build-constraints "$RUNNER_TEMP/build-constraints.txt" --require-hashes
-        --managed-python --no-cache
+      run: |
+        uv build --build-constraints "$RUNNER_TEMP/build-constraints.txt" --require-hashes \
+          --managed-python --no-cache
