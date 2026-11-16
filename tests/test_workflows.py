@@ -1,5 +1,7 @@
-"""Four workflow invariants: bounded artifact retention, a gate that covers every job, a
-gate that cannot fail open, and a release pipeline that publishes what it says it does.
+"""Five workflow invariants: bounded artifact retention, a gate that covers every job, a
+gate that cannot fail open, a release pipeline that publishes what it says it does, and a
+test matrix that runs exactly the Python versions the package declares (#336; its reasons
+sit beside its code, at the end of this file).
 
 ``constitution.md`` → How We Build: whatever a build leaves behind has a named owner, a
 fixed home, and a stated end, and nothing outlives 30 days without a written reason. A
@@ -2447,3 +2449,302 @@ class TestEachReleaseEditIsCaught:
         )
         with pytest.raises(AssertionError, match=f"{job} \\(column 8\\)"):
             check_no_release_job_continues_on_error(broken)
+
+
+# ---------------------------------------------------------------------------------------
+# #336: CI tests exactly the Python versions the package declares
+# ---------------------------------------------------------------------------------------
+
+# ``pyproject.toml``'s ``Programming Language :: Python :: 3.N`` classifiers and the
+# ``test`` job's ``python-version`` matrix are two hand-kept copies of one list, and every
+# version change edits both. Update one and not the other and CI stays green while the
+# package claims a version nothing tests, or tests one it never declares. They had already
+# drifted once: 3.15 was released on 2026-10-09 and was in neither until #334. A matrix is
+# only half of it, too: the job's setup step must hand each leg its version, or every leg
+# runs one interpreter under the matrix's names.
+#
+# The classifiers are read with ``tomllib``, standard library from 3.11. The 3.10 leg skips
+# the comparison rather than add ``tomli`` for one test ("every dependency is debt"): the
+# two files are identical on every leg, so the other legs read them for it. Everything
+# that reads ``ci.yml`` alone runs on every leg, 3.10 included.
+
+PYPROJECT = WORKFLOWS.parent.parent / "pyproject.toml"
+TEST_JOB = "test"
+
+#: A version classifier, matched whole: ``Programming Language :: Python :: 3`` and
+#: ``… :: 3 :: Only`` name no version CI could test, so they are not part of the list.
+VERSION_CLASSIFIER = re.compile(r"Programming Language :: Python :: (?P<version>3\.\d+)")
+
+#: One quoted matrix entry. Quoted, because YAML reads a bare ``3.10`` as the float
+#: ``3.1``: the text would still say 3.10 while CI set up 3.1, and a check that read the
+#: text would vouch for it.
+QUOTED_VERSION = re.compile(r"""^(?P<quote>["'])(?P<version>[^"']+)(?P=quote)$""")
+
+#: What the setup step's ``python-version:`` must say, spaces removed before comparing.
+MATRIX_VERSION_EXPRESSION = "${{matrix.python-version}}"
+
+
+def declared_python_versions(pyproject_text: str) -> set[str]:
+    """The ``3.N`` versions ``pyproject.toml``'s classifiers declare."""
+    tomllib = pytest.importorskip("tomllib", reason="tomllib is standard library from 3.11")
+    classifiers = tomllib.loads(pyproject_text)["project"]["classifiers"]
+    return {m.group("version") for c in classifiers if (m := VERSION_CLASSIFIER.fullmatch(c))}
+
+
+def _block(lines: list[str], key: str, level: int) -> list[str]:
+    """The lines nested under ``key:`` at exactly ``level``, or ``[]`` when it is absent.
+
+    The block ends where a structural line dedents back to ``level``. A comment or blank
+    line can sit at any column, so neither ends it.
+    """
+    for index, line in enumerate(lines):
+        match = KEY_LINE.match(line)
+        if match and match.group("key") == key and _key_indent(line) == level:
+            block: list[str] = []
+            for nested in lines[index + 1 :]:
+                if _is_structural(nested) and _key_indent(nested) <= level:
+                    break
+                block.append(nested)
+            return block
+    return []
+
+
+def _test_job_body(ci_text: str) -> list[str]:
+    body = job_bodies(ci_text).get(TEST_JOB)
+    assert body is not None, f"ci.yml has no {TEST_JOB!r} job — the matrix moved"
+    return body
+
+
+def matrix_python_versions(ci_text: str) -> list[str]:
+    """The ``test`` job's ``strategy.matrix.python-version`` entries, as written.
+
+    Scoped to the job's own ``strategy:`` block, so a ``python-version:`` anywhere else
+    (the setup step's ``with:`` passes one on) is never read as the matrix. A shape this
+    reader cannot see through fails with the reason rather than reading as some list:
+    ``include:``/``exclude:`` can add or remove versions the inline list does not show, an
+    expression is only known at run time, and an unquoted entry may not be the version it
+    reads as.
+    """
+    strategy = _block(_test_job_body(ci_text), "strategy", JOB_LEVEL)
+    matrix = level_mapping(strategy, "matrix", JOB_LEVEL + 2)
+    assert matrix is not None, (
+        f"the {TEST_JOB!r} job has no strategy.matrix mapping this check can read. It "
+        f"reads one written in block style with every value on its key's line: no "
+        f"expression for the whole matrix, and no list written as - entries beneath a key "
+        f'(python-version: ["3.10", "3.11"], never python-version: then - "3.10")'
+    )
+
+    rewriters = sorted({"include", "exclude"} & matrix.keys())
+    assert not rewriters, (
+        f"the {TEST_JOB!r} matrix has {rewriters}, which can change the versions CI runs "
+        f"without touching the python-version list this check reads. Keep the versions in "
+        f"that one inline list, or teach this check to read the new shape."
+    )
+    value = matrix.get("python-version", "")
+    assert value.startswith("[") and value.endswith("]"), (
+        f"the {TEST_JOB!r} matrix's python-version is {value!r}; this check reads only a "
+        f'one-line inline list, written python-version: ["3.10", "3.11"]'
+    )
+
+    versions: list[str] = []
+    for entry in (entry.strip() for entry in value[1:-1].split(",") if entry.strip()):
+        quoted = QUOTED_VERSION.match(entry)
+        assert quoted, (
+            f"matrix entry {entry} is unquoted. YAML reads a bare 3.10 as the float 3.1, "
+            f'so CI would set up a version the text does not say. Quote it: "{entry}"'
+        )
+        versions.append(quoted.group("version"))
+
+    repeated = sorted({version for version in versions if versions.count(version) > 1})
+    assert not repeated, (
+        f"the {TEST_JOB!r} matrix lists {repeated} more than once: a copy-paste slip, and "
+        f"most likely a different version was meant"
+    )
+    return versions
+
+
+def check_each_leg_sets_up_its_matrix_version(ci_text: str) -> None:
+    """The ``test`` job's steps pass ``matrix.python-version`` on, once, and nothing else.
+
+    Read from the ``steps:`` block alone, so the matrix's own ``python-version:`` is not
+    counted. Without it, setup-uv falls back to ``.python-version`` and every leg tests
+    that one interpreter while the matrix and the classifiers agree perfectly.
+    """
+    steps = _block(_test_job_body(ci_text), "steps", JOB_LEVEL)
+    values = [value.strip("\"'").replace(" ", "") for value in step_values(steps, "python-version")]
+    assert values == [MATRIX_VERSION_EXPRESSION], (
+        f"the {TEST_JOB!r} job's steps must set up ${{{{ matrix.python-version }}}} exactly "
+        f"once, as the setup step's python-version input; they set {values}"
+    )
+
+
+def check_ci_tests_the_declared_python_versions(ci_text: str, pyproject_text: str) -> None:
+    # The matrix first: its shape checks need no TOML, so they still run on the 3.10 leg,
+    # where reading the classifiers skips.
+    tested = set(matrix_python_versions(ci_text))
+    declared = declared_python_versions(pyproject_text)
+    assert declared, "pyproject.toml declares no Programming Language :: Python :: 3.N"
+
+    untested = sorted(declared - tested)
+    undeclared = sorted(tested - declared)
+    assert not untested and not undeclared, (
+        f"pyproject.toml's classifiers and ci.yml's {TEST_JOB!r} matrix must name the same "
+        f"Python versions. Declared but never tested: {untested}. Tested but never "
+        f"declared: {undeclared}. A version change edits both lists."
+    )
+
+
+def test_ci_tests_exactly_the_declared_python_versions():
+    check_ci_tests_the_declared_python_versions(
+        CI_WORKFLOW.read_text(encoding="utf-8"), PYPROJECT.read_text(encoding="utf-8")
+    )
+
+
+def test_each_test_leg_sets_up_its_matrix_version():
+    check_each_leg_sets_up_its_matrix_version(CI_WORKFLOW.read_text(encoding="utf-8"))
+
+
+#: The test job's matrix line, found rather than pinned, so the probes below survive the
+#: very version changes the check above polices.
+MATRIX_LINE = re.compile(r"^ {8}python-version: \[.*\]\n", re.MULTILINE)
+
+#: A version no classifier or matrix will name in this SDK's lifetime: the probes' drift.
+PROBE_VERSION = "3.99"
+
+
+class TestEachPythonVersionDriftIsCaught:
+    """One probe per way the two lists, or the matrix and its consumer, can come apart.
+
+    Each probe edits the real files, and finds what it edits rather than naming today's
+    versions, so dropping 3.10 or adding 3.16 changes no probe.
+    """
+
+    @pytest.fixture(scope="module")
+    @classmethod
+    def ci(cls):
+        return CI_WORKFLOW.read_text(encoding="utf-8")
+
+    @pytest.fixture(scope="module")
+    @classmethod
+    def pyproject(cls):
+        return PYPROJECT.read_text(encoding="utf-8")
+
+    @pytest.fixture(scope="module")
+    @classmethod
+    def matrix_line(cls, ci):
+        lines = MATRIX_LINE.findall(ci)
+        assert len(lines) == 1, f"expected one matrix python-version line, found {lines}"
+        return lines[0]
+
+    @pytest.fixture(scope="module")
+    @classmethod
+    def oldest(cls, ci):
+        """The first version the matrix lists — the one the probes drop or unquote."""
+        return matrix_python_versions(ci)[0]
+
+    def _classifier(self, version: str) -> str:
+        return f'    "Programming Language :: Python :: {version}",\n'
+
+    def _with_matrix(self, ci: str, matrix_line: str, replacement: str) -> str:
+        return _mutate_in_job(ci, TEST_JOB, matrix_line, replacement)
+
+    def test_a_version_added_to_the_matrix_alone_is_caught(self, ci, pyproject, matrix_line):
+        broken = self._with_matrix(
+            ci, matrix_line, matrix_line.replace("]\n", f', "{PROBE_VERSION}"]\n')
+        )
+        with pytest.raises(
+            AssertionError, match=rf"never declared: \['{re.escape(PROBE_VERSION)}'\]"
+        ):
+            check_ci_tests_the_declared_python_versions(broken, pyproject)
+
+    def test_a_version_added_to_the_classifiers_alone_is_caught(self, ci, pyproject, oldest):
+        anchor = self._classifier(oldest)
+        broken = _mutate(pyproject, anchor, anchor + self._classifier(PROBE_VERSION))
+        with pytest.raises(
+            AssertionError, match=rf"never tested: \['{re.escape(PROBE_VERSION)}'\]"
+        ):
+            check_ci_tests_the_declared_python_versions(ci, broken)
+
+    def test_a_version_dropped_from_the_matrix_alone_is_caught(
+        self, ci, pyproject, matrix_line, oldest
+    ):
+        broken = self._with_matrix(ci, matrix_line, matrix_line.replace(f'"{oldest}", ', ""))
+        with pytest.raises(AssertionError, match=rf"never tested: \['{re.escape(oldest)}'\]"):
+            check_ci_tests_the_declared_python_versions(broken, pyproject)
+
+    def test_a_version_dropped_from_the_classifiers_alone_is_caught(self, ci, pyproject, oldest):
+        broken = _mutate(pyproject, self._classifier(oldest), "")
+        with pytest.raises(AssertionError, match=rf"never declared: \['{re.escape(oldest)}'\]"):
+            check_ci_tests_the_declared_python_versions(ci, broken)
+
+    def test_an_unquoted_matrix_entry_is_refused(self, ci, pyproject, matrix_line, oldest):
+        broken = self._with_matrix(ci, matrix_line, matrix_line.replace(f'"{oldest}"', oldest))
+        with pytest.raises(AssertionError, match="unquoted"):
+            check_ci_tests_the_declared_python_versions(broken, pyproject)
+
+    def test_a_repeated_matrix_entry_is_refused(self, ci, pyproject, matrix_line, oldest):
+        broken = self._with_matrix(
+            ci, matrix_line, matrix_line.replace(f'"{oldest}"', f'"{oldest}", "{oldest}"')
+        )
+        with pytest.raises(AssertionError, match="more than once"):
+            check_ci_tests_the_declared_python_versions(broken, pyproject)
+
+    @pytest.mark.parametrize("rewriter", ["include", "exclude"])
+    @pytest.mark.parametrize(
+        ("spelling", "expected_error"),
+        [
+            ('{rewriter}:\n          - python-version: "{probe}"\n', "no strategy.matrix"),
+            ('{rewriter}: [{{python-version: "{probe}"}}]\n', r"\['{rewriter}'\]"),
+        ],
+        ids=["block-list", "inline"],
+    )
+    def test_a_matrix_include_or_exclude_is_refused(
+        self, ci, pyproject, matrix_line, rewriter, spelling, expected_error
+    ):
+        added = "        " + spelling.format(rewriter=rewriter, probe=PROBE_VERSION)
+        broken = self._with_matrix(ci, matrix_line, matrix_line + added)
+        with pytest.raises(AssertionError, match=expected_error.format(rewriter=rewriter)):
+            check_ci_tests_the_declared_python_versions(broken, pyproject)
+
+    def test_a_block_list_python_version_is_refused(self, ci, pyproject, matrix_line, oldest):
+        broken = self._with_matrix(
+            ci, matrix_line, f'        python-version:\n          - "{oldest}"\n'
+        )
+        with pytest.raises(AssertionError, match="no strategy.matrix"):
+            check_ci_tests_the_declared_python_versions(broken, pyproject)
+
+    def test_a_matrix_from_an_expression_is_refused(self, ci, pyproject, matrix_line):
+        broken = self._with_matrix(
+            ci, matrix_line, "        python-version: ${{ fromJSON(vars.PYTHONS) }}\n"
+        )
+        with pytest.raises(AssertionError, match="one-line inline list"):
+            check_ci_tests_the_declared_python_versions(broken, pyproject)
+
+    def test_the_setup_steps_python_version_is_not_read_as_the_matrix(
+        self, ci, pyproject, matrix_line
+    ):
+        """Delete the matrix's list and the step's ``with: python-version:`` is the only
+        one left in the job; reading it would compare the classifiers to an expression."""
+        broken = self._with_matrix(ci, matrix_line, "        os: [ubuntu-latest]\n")
+        with pytest.raises(AssertionError, match="python-version is ''"):
+            check_ci_tests_the_declared_python_versions(broken, pyproject)
+
+    @pytest.mark.parametrize(
+        ("old", "new"),
+        [
+            # A pinned version: one interpreter on every leg.
+            ("python-version: ${{ matrix.python-version }}", 'python-version: "3.12"'),
+            # No input at all: setup-uv falls back to .python-version. The matrix's own
+            # python-version: sits at a step's depth, so this is also the probe that it
+            # is never counted as the setup.
+            (
+                "        with:\n          python-version: ${{ matrix.python-version }}\n",
+                "",
+            ),
+        ],
+        ids=["pinned", "removed"],
+    )
+    def test_a_setup_step_that_ignores_the_matrix_is_caught(self, ci, old, new):
+        broken = _mutate_in_job(ci, TEST_JOB, old, new)
+        with pytest.raises(AssertionError, match="exactly once"):
+            check_each_leg_sets_up_its_matrix_version(broken)
