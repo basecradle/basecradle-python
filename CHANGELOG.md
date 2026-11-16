@@ -8,6 +8,20 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 ## [Unreleased]
 
+### Security
+
+- **The release build's toolchain is pinned too** (#341). 0.16.1 pinned the actions the
+  release workflow runs, but not what they fetched: the build installed the newest uv on
+  the day of the tag and resolved the newest hatchling from PyPI. Every workflow now
+  installs the uv named in `.tool-versions` (0.13.6, which the release workflow's pinned
+  `setup-uv` checks against a checksum built into its own code), and the build backend is
+  pinned to `hatchling==1.33.0`, which Dependabot keeps current. The release build's
+  checkout no longer leaves its token in the tree the build runs in. Measured when this
+  landed: the wheel the pinned toolchain builds is byte-identical to the one the old
+  toolchain built that day. Hatchling's own dependencies still resolve fresh on each tag.
+  The exact pin ships in the sdist's `pyproject.toml`, so rebuilding the sdist without
+  build isolation now needs that exact hatchling.
+
 ## [0.16.1] - 2026-11-16
 
 A patch release. Nothing in the SDK's API or behaviour changed: it declares Python 3.15,

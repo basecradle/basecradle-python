@@ -1,9 +1,10 @@
-"""Six workflow invariants: bounded artifact retention, a gate that covers every job, a
+"""Seven workflow invariants: bounded artifact retention, a gate that covers every job, a
 gate that cannot fail open, a release pipeline that publishes what it says it does, a test
 matrix that runs exactly the Python versions the package declares, with a
-``requires-python`` floor at the oldest of them (#336, #338), and an action
-pinned to a commit SHA in every workflow that holds a secret or a write grant (#339). The
-last two carry their reasons beside their code, at the end of this file.
+``requires-python`` floor at the oldest of them (#336, #338), an action
+pinned to a commit SHA in every workflow that holds a secret or a write grant (#339), and a
+build toolchain that is fixed rather than fetched fresh on each tag (#341). The last three
+carry their reasons beside their code, at the end of this file.
 
 ``constitution.md`` → How We Build: whatever a build leaves behind has a named owner, a
 fixed home, and a stated end, and nothing outlives 30 days without a written reason. A
@@ -72,7 +73,10 @@ rules, so the release ships before the ``pypi`` gate is ever actuated; and job-l
 be undone.
 """
 
+import os
 import re
+import subprocess
+import time
 from pathlib import Path
 from typing import NamedTuple
 
@@ -2804,10 +2808,9 @@ class TestEachPythonVersionDriftIsCaught:
             # No input at all: setup-uv falls back to .python-version. The matrix's own
             # python-version: sits at a step's depth, so this is also the probe that it
             # is never counted as the setup.
-            (
-                "        with:\n          python-version: ${{ matrix.python-version }}\n",
-                "",
-            ),
+            # The input alone, not its `with:`: the step reads its uv from
+            # .tool-versions through the same block (#341).
+            ("          python-version: ${{ matrix.python-version }}\n", ""),
         ],
         ids=["pinned", "removed"],
     )
@@ -2988,18 +2991,27 @@ def privilege_reasons(text: str) -> list[str]:
     return reasons
 
 
-def unpinned_actions(name: str, text: str) -> list[str]:
-    """Every ``uses:`` in a workflow that is not a SHA pin carrying its version comment.
+class UsesReference(NamedTuple):
+    """One ``uses:`` in a workflow: where it is, what it names, and its trailing comment."""
+
+    index: int  # 0-indexed line
+    line: str
+    action: str  # the reference, quotes dropped
+    comment: str  # the trailing YAML comment, ``#`` included, or ""
+
+
+def uses_references(lines: list[str]) -> list[UsesReference]:
+    """Every ``uses:`` in a workflow's lines -- the one reader of them in this module.
 
     Steps and job-level reusable-workflow calls alike, both of which run someone's code
     with the job's power. ``run:`` scripts are skipped, as every reader here skips them:
     a ``uses:`` in shell is text, not an action. A ``uses:`` this cannot read at all is
-    ``unreadable_key_lines``' to report, not this one's to pass.
+    ``unreadable_key_lines``' to report. The pin rule, the toolchain rule and the live
+    pin-comment check all read through here, so they cannot disagree about which actions
+    a workflow uses.
     """
-    lines = text.splitlines()
     inside_a_script = block_scalar_line_numbers(lines)
-
-    unpinned = []
+    references = []
     for index, line in enumerate(lines):
         match = KEY_LINE.match(line)
         if index in inside_a_script or not match or match.group("key") != "uses":
@@ -3007,16 +3019,23 @@ def unpinned_actions(name: str, text: str) -> list[str]:
         raw = match.group("value") or ""
         reference = _strip_comment(raw)
         comment = raw[len(reference) :].strip()
-        action = reference.strip("\"'")
-        if not action or action.startswith(LOCAL_ACTION_PREFIX):
+        references.append(UsesReference(index, line, reference.strip("\"'"), comment))
+    return references
+
+
+def unpinned_actions(name: str, text: str) -> list[str]:
+    """Every ``uses:`` in a workflow that is not a SHA pin carrying its version comment."""
+    unpinned = []
+    for ref in uses_references(text.splitlines()):
+        if not ref.action or ref.action.startswith(LOCAL_ACTION_PREFIX):
             continue
-        where = f"{name}:{index + 1}: {line.strip()}"
-        if not (SHA_PINNED.match(action) or DIGEST_PINNED.match(action)):
+        where = f"{name}:{ref.index + 1}: {ref.line.strip()}"
+        if not (SHA_PINNED.match(ref.action) or DIGEST_PINNED.match(ref.action)):
             unpinned.append(
                 f"{where} -- not pinned to a full 40-character commit SHA "
                 f"(or, for a docker:// image, a sha256 digest)"
             )
-        elif not VERSION_COMMENT.match(comment):
+        elif not VERSION_COMMENT.match(ref.comment):
             unpinned.append(f"{where} -- pinned, but no `# vX.Y.Z` comment names the version")
     return unpinned
 
@@ -3245,3 +3264,685 @@ class TestEachPinEditIsCaught:
         )
         with pytest.raises(AssertionError, match=r"reads a secret(.|\n)*actions/probe@v1"):
             check_privileged_actions_are_pinned(CI_WORKFLOW.name, broken)
+
+
+# ---------------------------------------------------------------------------------------
+# The seventh invariant (#341): the toolchain that builds the published bytes is fixed, not
+# fetched fresh on each tag. #339 pinned which *actions* run in `release.yml`; it did not
+# pin what those actions fetch. Whatever builds the bytes is as powerful as whatever uploads
+# them, and three links still moved:
+#
+# - **uv.** setup-uv given no version installs the newest uv on the day of the tag. Every
+#   setup-uv step now reads `.tool-versions` through `version-file:`, so CI and the release
+#   build run one uv, and the file names it exactly. Not `[tool.uv] required-version`: uv
+#   enforces that on every contributor's every local command, so an exact pin there
+#   breaks anyone whose uv differs, the fleet box's NOC-managed one included. A
+#   `.tool-versions` binds only a contributor who uses asdf or mise, which read it and
+#   hand them CI's uv; that is what those tools are for.
+# - **The build backend.** `uv build` resolves `[build-system].requires` from PyPI on every
+#   tag, outside uv.lock. It is pinned to an exact version, which Dependabot's uv entry
+#   reads and moves.
+# - **The checkout's token.** actions/checkout leaves `GITHUB_TOKEN` in `.git/config`
+#   unless told not to, while `uv build` runs the backend's code in that tree. Every
+#   checkout in a workflow that holds power -- the pin rule's scope -- says
+#   `persist-credentials: false`.
+#
+# And one gap in #339's guard: it checked that each pin *carries* a `# vX.Y.Z` comment,
+# not that the comment *names* the pinned commit. A comment that lies tells a reviewer of
+# the next Dependabot bump the wrong starting point. That check needs the network, so it
+# is marked `live` and runs in the drift-guard job.
+
+TOOL_VERSIONS = WORKFLOWS.parent.parent / ".tool-versions"
+UV_VERSION_FILE = TOOL_VERSIONS.name
+SETUP_UV = "astral-sh/setup-uv"
+CHECKOUT = "actions/checkout"
+
+#: A version setup-uv installs as exactly itself: no range, no ``latest``, no ``v``.
+EXACT_UV_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
+
+#: One requirement pinned to exactly one release: ``name==<version>``, nothing after it.
+#: The version is any PEP 440 one -- ``1.33.0``, ``1.34.0.post1``, ``2.0.0rc1`` -- but never
+#: a wildcard, a second clause, a marker or an extra, each of which admits more than one.
+EXACT_REQUIREMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*==[0-9][0-9A-Za-z.!+-]*$")
+
+
+def steps_using(text: str, action: str) -> list[tuple[int, list[str]]]:
+    """Every step whose ``uses:`` names ``action`` (``owner/repo``), with the step's lines.
+
+    Any ref, and case-insensitive, because Actions resolves ``Astral-SH/Setup-UV`` to the
+    same repository: a rule that one capital letter steps around is no rule.
+    """
+    lines = text.splitlines()
+    return [
+        (ref.index + 1, _step_containing(lines, ref.index))
+        for ref in uses_references(lines)
+        if ref.action.split("@", 1)[0].lower() == action.lower()
+    ]
+
+
+def pinned_uv_version(tool_versions: str) -> str:
+    """The one exact uv version ``.tool-versions`` names, read the way setup-uv reads it.
+
+    setup-uv drops everything from a ``#``, splits on whitespace, and takes the first line
+    whose first word is ``uv``. This is stricter on purpose: a second ``uv`` line, which
+    setup-uv would silently ignore, or a version it would resolve as a range, is refused.
+
+    So is any other tool. setup-uv also reads a ``python`` line from this file, and sets
+    that interpreter for every step that names none of its own: one added line would move
+    lint, types, the drift-guard and the release build off ``.python-version`` with no
+    diff in any workflow.
+    """
+    entries = []
+    for line in tool_versions.splitlines():
+        content = line.split("#", 1)[0].strip()
+        if not content:
+            continue
+        tool, *versions = content.split()
+        assert tool == "uv", (
+            f"{UV_VERSION_FILE} names {tool!r}: it holds uv and nothing else. setup-uv reads "
+            f"a `python` line from it too, and would set that interpreter for every step "
+            f"that names none of its own, the release build included (#341)."
+        )
+        entries.append(versions)
+    assert len(entries) == 1, (
+        f"{UV_VERSION_FILE} must name uv on exactly one line, found {len(entries)}. "
+        f"setup-uv reads only the first, so a second is a version that looks pinned and is not."
+    )
+    (versions,) = entries
+    assert len(versions) == 1 and EXACT_UV_VERSION.match(versions[0]), (
+        f"{UV_VERSION_FILE} names uv as {' '.join(versions)!r}: write one exact X.Y.Z. "
+        f"Anything else -- `latest`, a range, a `v` prefix -- installs whatever matches on "
+        f"the day of the tag, which is what this file exists to stop (#341)."
+    )
+    return versions[0]
+
+
+def check_setup_uv_reads_the_version_file(name: str, text: str) -> None:
+    """Assert every setup-uv step in a workflow installs the uv ``.tool-versions`` names."""
+    wrong = []
+    for line, step in steps_using(text, SETUP_UV):
+        files = [value.strip("\"'") for value in step_values(step, "version-file")]
+        if files != [UV_VERSION_FILE]:
+            wrong.append(f"{name}:{line}: version-file is {files or 'unset'}")
+        if step_values(step, "version"):
+            wrong.append(f"{name}:{line}: a `version:` input overrides the file")
+    assert not wrong, (
+        f"every setup-uv step must read `version-file: {UV_VERSION_FILE}` and set no "
+        f"`version:`, so CI and the release build install the same uv, and a bump is one "
+        f"line in one file (#341). Without the file, setup-uv installs the latest:\n"
+        + "\n".join(wrong)
+    )
+
+
+def check_build_backend_is_pinned_exactly(pyproject_text: str) -> None:
+    """Assert every ``[build-system].requires`` entry is one ``name==X.Y.Z``.
+
+    Read with ``tomllib``, as this file's other pyproject readers are, so the 3.10 leg
+    skips it and the five newer legs hold it.
+    """
+    tomllib = pytest.importorskip("tomllib", reason="tomllib is standard library from 3.11")
+    requires = tomllib.loads(pyproject_text).get("build-system", {}).get("requires")
+    assert requires, "[build-system].requires is missing or empty: the backend comes from nowhere"
+    loose = [entry for entry in requires if not EXACT_REQUIREMENT.match(entry)]
+    assert not loose, (
+        f"[build-system].requires must pin each entry to one release, `name==<version>`: "
+        f"`uv build` resolves it from PyPI on every tag, outside uv.lock, so a range builds "
+        f"each release with whatever was newest that day (#341). Dependabot's uv entry moves "
+        f"an exact pin. Not exact: {loose}"
+    )
+
+
+def check_checkouts_leave_no_token(name: str, text: str) -> None:
+    """Assert a workflow holding power checks out without persisting its token."""
+    if not privilege_reasons(text):
+        return
+    persisting = []
+    for line, step in steps_using(text, CHECKOUT):
+        values = step_values(step, "persist-credentials")
+        # Quoted or not, and in any case: checkout reads the input as a string, so every
+        # spelling of false is the same false and is not worth a red CI.
+        if [value.strip("\"'").lower() for value in values] != ["false"]:
+            shown = values or "unset (true by default)"
+            persisting.append(f"{name}:{line}: persist-credentials is {shown}")
+    assert not persisting, (
+        f"{name} holds power, so every checkout in it must say `persist-credentials: false`. "
+        f"Otherwise actions/checkout leaves the job's GITHUB_TOKEN in .git/config for every "
+        f"later step to read, including whatever code the build runs (#341):\n"
+        + "\n".join(persisting)
+    )
+
+
+def test_tool_versions_names_one_exact_uv():
+    pinned_uv_version(TOOL_VERSIONS.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("name", ["ci.yml", "release.yml"])
+def test_the_setup_uv_scanner_finds_the_steps(name):
+    """Both workflows run uv, so a scan that finds no setup-uv step in either has gone
+    blind, and the check below passes on air."""
+    assert steps_using((WORKFLOWS / name).read_text(encoding="utf-8"), SETUP_UV), name
+
+
+@pytest.mark.parametrize("workflow", OWNED_WORKFLOWS, ids=lambda path: path.name)
+def test_every_setup_uv_step_reads_the_version_file(workflow):
+    check_setup_uv_reads_the_version_file(workflow.name, workflow.read_text(encoding="utf-8"))
+
+
+def test_the_build_backend_is_pinned_exactly():
+    check_build_backend_is_pinned_exactly(PYPROJECT.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("name", ["release.yml", "dependency-security-scan.yml"])
+def test_the_checkout_scanner_finds_the_steps(name):
+    assert steps_using((WORKFLOWS / name).read_text(encoding="utf-8"), CHECKOUT), name
+
+
+@pytest.mark.parametrize("workflow", OWNED_WORKFLOWS, ids=lambda path: path.name)
+def test_a_workflow_that_holds_power_leaves_no_token_in_its_checkouts(workflow):
+    check_checkouts_leave_no_token(workflow.name, workflow.read_text(encoding="utf-8"))
+
+
+class TestTheToolchainScannersThemselves:
+    """Where the toolchain readers fire and where they do not, on fabricated inputs."""
+
+    @staticmethod
+    def workflow(*steps: str, power: bool = False) -> str:
+        grant = "    permissions:\n      id-token: write\n" if power else ""
+        return (
+            "permissions:\n  contents: read\njobs:\n  a:\n"
+            + grant
+            + "    steps:\n"
+            + "".join(steps)
+        )
+
+    UV = "      - uses: astral-sh/setup-uv@v10.3.3\n"
+    CO = "      - uses: actions/checkout@v7\n"
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "uv 0.13.6\n",
+            "# a comment\nuv 0.13.6  # trailing\n",
+        ],
+    )
+    def test_reads_one_exact_uv(self, text):
+        assert pinned_uv_version(text) == "0.13.6"
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "",
+            "# uv 0.13.6\n",
+            "uv latest\n",
+            "uv >=0.13\n",
+            "uv v0.13.6\n",
+            "uv 0.13\n",
+            "uv 0.13.6 0.13.7\n",
+            "uv 0.13.6\nuv 0.13.7\n",
+            "uv\n",
+            "python 3.13.1\nuv 0.13.6\n",
+            "uv 0.13.6\nruff 0.16.8\n",
+        ],
+    )
+    def test_refuses_anything_but_one_exact_uv(self, text):
+        with pytest.raises(AssertionError, match=r"\.tool-versions"):
+            pinned_uv_version(text)
+
+    @pytest.mark.parametrize(
+        "inputs",
+        [
+            "          version-file: .tool-versions\n",
+            "          version-file: '.tool-versions'\n",
+            "          python-version: '3.13'\n          version-file: .tool-versions  # #341\n",
+        ],
+    )
+    def test_accepts_a_setup_uv_reading_the_file(self, inputs):
+        text = self.workflow(self.UV + "        with:\n" + inputs)
+        check_setup_uv_reads_the_version_file("w.yml", text)
+
+    @pytest.mark.parametrize(
+        "step",
+        [
+            UV,
+            UV + "        with:\n          python-version: '3.13'\n",
+            UV + "        with:\n          version-file: pyproject.toml\n",
+            UV
+            + "        with:\n          version-file: .tool-versions\n          version: latest\n",
+            "      - uses: Astral-SH/Setup-UV@v10\n",
+            "      - name: uv\n        uses: astral-sh/setup-uv@" + "a" * 40 + " # v10.3.3\n",
+        ],
+    )
+    def test_refuses_a_setup_uv_that_picks_its_own_uv(self, step):
+        with pytest.raises(AssertionError, match="setup-uv"):
+            check_setup_uv_reads_the_version_file("w.yml", self.workflow(step))
+
+    @pytest.mark.parametrize(
+        "inputs",
+        [
+            "        with: {version-file: .tool-versions}\n",
+            "        with:\n          version-file:\n            .tool-versions\n",
+            "        with:\n          python-version-file: .tool-versions\n",
+        ],
+    )
+    def test_a_version_file_it_cannot_read_fails_closed(self, inputs):
+        """No blind-spot scan is needed here: the check demands a positive reading of
+        the file, so any shape it cannot read is a step that fails it, never one that
+        slips past it."""
+        with pytest.raises(AssertionError, match="setup-uv"):
+            check_setup_uv_reads_the_version_file("w.yml", self.workflow(self.UV + inputs))
+
+    def test_a_neighbours_version_file_does_not_vouch_for_a_step(self):
+        text = self.workflow(
+            self.UV,
+            "      - uses: other/action@v1\n        with:\n          version-file: .tool-versions\n",
+        )
+        with pytest.raises(AssertionError, match="version-file is unset"):
+            check_setup_uv_reads_the_version_file("w.yml", text)
+
+    def test_a_setup_uv_named_only_in_a_script_is_not_a_step(self):
+        text = self.workflow("      - run: |\n          echo 'uses: astral-sh/setup-uv@v1'\n")
+        assert steps_using(text, SETUP_UV) == []
+
+    @pytest.mark.parametrize(
+        "requires",
+        [
+            'requires = ["hatchling==1.33.0"]',
+            "requires = ['hatchling==1.33.0']",
+            'requires = [\n    "hatchling==1.33.0",\n    "hatch-vcs==0.5.0",\n]',
+            'requires = ["hatchling==1.34.0.post1"]',
+            'requires = ["hatchling==2.0.0rc1"]',
+        ],
+    )
+    def test_accepts_an_exact_build_backend(self, requires):
+        check_build_backend_is_pinned_exactly(f"[build-system]\n{requires}\n")
+
+    @pytest.mark.parametrize(
+        "requires",
+        [
+            'requires = ["hatchling>=1.32.0"]',
+            'requires = ["hatchling"]',
+            'requires = ["hatchling~=1.33"]',
+            'requires = ["hatchling==1.*"]',
+            'requires = ["hatchling===1.33.0"]',
+            'requires = ["hatchling== 1.33.0"]',
+            'requires = ["hatchling==1.33.0,<2"]',
+            "requires = [\"hatchling==1.33.0; python_version>='3.10'\"]",
+            'requires = ["hatchling[x]==1.33.0"]',
+            'requires = ["hatchling==1.33.0", "hatch-vcs"]',
+            'requires = [" hatchling==1.33.0"]',
+        ],
+    )
+    def test_refuses_a_build_backend_that_moves(self, requires):
+        with pytest.raises(AssertionError, match="Not exact"):
+            check_build_backend_is_pinned_exactly(f"[build-system]\n{requires}\n")
+
+    @pytest.mark.parametrize(
+        "pyproject",
+        [
+            '[project]\nrequires = ["hatchling==1.33.0"]\n',
+            '[build-system]\nbuild-backend = "hatchling.build"\n[tool.x]\nrequires = ["a==1"]\n',
+            "[build-system]\nrequires = []\n",
+        ],
+    )
+    def test_refuses_a_build_system_with_no_requirements(self, pyproject):
+        with pytest.raises(AssertionError, match=r"\[build-system\]"):
+            check_build_backend_is_pinned_exactly(pyproject)
+
+    @pytest.mark.parametrize(
+        "step",
+        [
+            CO,
+            CO + "        with:\n          persist-credentials: true\n",
+            CO + "        with:\n          persist-credentials: \n",
+            CO + "        with:\n          fetch-depth: 0\n",
+            "      - uses: Actions/Checkout@v7\n",
+        ],
+    )
+    def test_refuses_a_checkout_that_keeps_its_token_where_power_is_held(self, step):
+        with pytest.raises(AssertionError, match="persist-credentials"):
+            check_checkouts_leave_no_token("w.yml", self.workflow(step, power=True))
+
+    @pytest.mark.parametrize(
+        "inputs",
+        [
+            "        with: {persist-credentials: false}\n",
+            "        with:\n          persist-credentials:\n            false\n",
+        ],
+    )
+    def test_a_persist_credentials_it_cannot_read_fails_closed(self, inputs):
+        text = self.workflow(self.CO + inputs, power=True)
+        with pytest.raises(AssertionError, match="persist-credentials"):
+            check_checkouts_leave_no_token("w.yml", text)
+
+    def test_accepts_a_checkout_that_drops_its_token(self):
+        step = self.CO + "        with:\n          persist-credentials: false  # #341\n"
+        check_checkouts_leave_no_token("w.yml", self.workflow(step, power=True))
+
+    def test_a_workflow_holding_nothing_is_left_alone(self):
+        check_checkouts_leave_no_token("w.yml", self.workflow(self.CO))
+
+    def test_a_neighbours_persist_credentials_does_not_vouch_for_a_checkout(self):
+        text = self.workflow(
+            self.CO,
+            "      - uses: other/action@v1\n        with:\n          persist-credentials: false\n",
+            power=True,
+        )
+        with pytest.raises(AssertionError, match="unset"):
+            check_checkouts_leave_no_token("w.yml", text)
+
+
+class TestEachToolchainEditIsCaught:
+    """The edits that unpin the toolchain again, each made to the real files."""
+
+    @pytest.fixture(scope="module")
+    @classmethod
+    def release(cls) -> str:
+        return RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+    @pytest.fixture(scope="module")
+    @classmethod
+    def ci(cls) -> str:
+        return CI_WORKFLOW.read_text(encoding="utf-8")
+
+    def test_dropping_the_release_builds_version_file_is_caught(self, release):
+        broken = _mutate_in_job(release, "build", "          version-file: .tool-versions\n", "")
+        with pytest.raises(AssertionError, match="version-file is unset"):
+            check_setup_uv_reads_the_version_file(RELEASE_WORKFLOW.name, broken)
+
+    def test_overriding_the_release_builds_uv_is_caught(self, release):
+        broken = _mutate_in_job(
+            release,
+            "build",
+            "          version-file: .tool-versions\n",
+            "          version-file: .tool-versions\n          version: latest\n",
+        )
+        with pytest.raises(AssertionError, match="overrides the file"):
+            check_setup_uv_reads_the_version_file(RELEASE_WORKFLOW.name, broken)
+
+    def test_dropping_a_ci_jobs_version_file_is_caught(self, ci):
+        """The test leg, whose setup-uv also sets a Python: the one most easily re-typed."""
+        broken = _mutate_in_job(ci, "test", "          version-file: .tool-versions\n", "")
+        with pytest.raises(AssertionError, match="version-file is unset"):
+            check_setup_uv_reads_the_version_file(CI_WORKFLOW.name, broken)
+
+    def test_loosening_the_uv_pin_is_caught(self):
+        real = TOOL_VERSIONS.read_text(encoding="utf-8")
+        version = pinned_uv_version(real)
+        broken = _mutate(real, f"uv {version}\n", "uv latest\n")
+        with pytest.raises(AssertionError, match="one exact X.Y.Z"):
+            pinned_uv_version(broken)
+
+    @pytest.mark.parametrize("loose", [">=", "~="])
+    def test_loosening_the_build_backend_is_caught(self, loose):
+        real = PYPROJECT.read_text(encoding="utf-8")
+        broken = _mutate(real, '"hatchling==', f'"hatchling{loose}')
+        with pytest.raises(AssertionError, match="Not exact"):
+            check_build_backend_is_pinned_exactly(broken)
+
+    @pytest.mark.parametrize(("value", "reported"), [("true", "is ['true']"), ("", "unset")])
+    def test_letting_the_release_build_keep_its_token_is_caught(self, release, value, reported):
+        old = "          persist-credentials: false\n"
+        new = f"          persist-credentials: {value}\n" if value else ""
+        broken = _mutate_in_job(release, "build", old, new)
+        with pytest.raises(AssertionError, match=re.escape(reported)):
+            check_checkouts_leave_no_token(RELEASE_WORKFLOW.name, broken)
+
+    def test_a_quoted_false_is_not_read_as_keeping_the_token(self, release):
+        """Quoted, it is the string "false", which checkout also reads as off: the check
+        must not redden CI over a spelling that does what it says."""
+        old = "          persist-credentials: false\n"
+        broken = _mutate_in_job(release, "build", old, "          persist-credentials: 'false'\n")
+        check_checkouts_leave_no_token(RELEASE_WORKFLOW.name, broken)
+
+    def test_letting_the_scan_keep_its_token_is_caught(self):
+        scan = (WORKFLOWS / "dependency-security-scan.yml").read_text(encoding="utf-8")
+        broken = _mutate(scan, "          persist-credentials: false\n", "")
+        with pytest.raises(AssertionError, match="unset"):
+            check_checkouts_leave_no_token("dependency-security-scan.yml", broken)
+
+
+# --- The pin comment names the pinned commit (live) -------------------------------------
+
+
+class ActionPin(NamedTuple):
+    """One SHA-pinned ``uses:`` and the tag its version comment names."""
+
+    where: str  # workflow:line
+    repository: str  # owner/repo, where the tag lives
+    sha: str
+    tag: str
+
+
+def action_pins(name: str, text: str) -> list[ActionPin]:
+    """Every SHA pin in a workflow that carries a version comment, with that comment's tag.
+
+    The tag is the comment's first word, exactly as written: Dependabot writes the
+    action's own tag name there, so ``# 7.0.1`` against a repository that tags
+    ``v7.0.1`` is a comment naming a tag that does not exist, and is reported as one.
+    """
+    pins = []
+    for ref in uses_references(text.splitlines()):
+        if not SHA_PINNED.match(ref.action) or not VERSION_COMMENT.match(ref.comment):
+            continue
+        path, sha = ref.action.split("@")
+        tag = ref.comment.lstrip("#").split()[0]
+        repository = "/".join(path.split("/")[:2])
+        pins.append(ActionPin(f"{name}:{ref.index + 1}", repository, sha, tag))
+    return pins
+
+
+def resolved_tags(ls_remote_output: str) -> dict[str, str]:
+    """``git ls-remote`` output → each tag's commit, peeled through an annotated tag.
+
+    An annotated tag's ref names the tag *object*; the commit is on its ``^{}`` line, and
+    that commit is what a pin names. A lightweight tag has no ``^{}`` line, and its ref is
+    the commit itself. Read the object as the commit and every annotated pin looks wrong.
+    """
+    direct: dict[str, str] = {}
+    peeled: dict[str, str] = {}
+    for line in ls_remote_output.splitlines():
+        sha, _, ref = line.strip().partition("\t")
+        if not ref.startswith("refs/tags/"):
+            continue
+        tag = ref.removeprefix("refs/tags/")
+        if tag.endswith("^{}"):
+            peeled[tag.removesuffix("^{}")] = sha
+        else:
+            direct[tag] = sha
+    return {tag: peeled.get(tag, sha) for tag, sha in direct.items()}
+
+
+def pin_comment_mismatches(
+    pins: list[ActionPin], tags_by_repository: dict[str, dict[str, str]]
+) -> list[str]:
+    """Every pin whose comment's tag is not, today, the pinned commit."""
+    mismatches = []
+    for pin in pins:
+        commit = tags_by_repository.get(pin.repository, {}).get(pin.tag)
+        if commit is None:
+            mismatches.append(f"{pin.where}: # {pin.tag} -- {pin.repository} has no such tag")
+        elif commit != pin.sha:
+            mismatches.append(
+                f"{pin.where}: # {pin.tag} -- that tag is {commit}, not the pinned {pin.sha}"
+            )
+    return mismatches
+
+
+def ls_remote_tags(repository: str, tags: set[str], cwd: Path) -> str:
+    """One anonymous ``git ls-remote`` of these tags, both the ref and its peeled form.
+
+    Anonymous on purpose, and wholly: the repositories are public, and git over HTTPS
+    does not draw on the REST API's 60-an-hour allowance for unauthenticated callers. Run
+    from ``cwd``, an empty directory, rather than the checkout, because ci.yml's checkouts
+    persist the job's ``GITHUB_TOKEN`` into ``.git/config`` as an
+    ``http.https://github.com/.extraheader``, which git would send to every repository on
+    github.com. Global and system config are ignored too, so a credential helper on a
+    contributor's machine is never asked. ``GIT_TERMINAL_PROMPT=0`` because GitHub answers
+    a repository that does not exist with a credential prompt, which would hang the job
+    instead of failing it.
+
+    Three attempts, as ci.yml's actionlint pull makes, because this job gates every merge:
+    a blip on GitHub's side, an error or a stall, must not redden a PR that touched no
+    workflow. A comment that does not match its pin fails on the first answer; only a
+    failure to get one is retried.
+    """
+    patterns = [f"refs/tags/{tag}{suffix}" for tag in sorted(tags) for suffix in ("", "^{}")]
+    # The caller's environment minus everything that steers git to a credential or a
+    # repository: GIT_ASKPASS is asked before GIT_TERMINAL_PROMPT is consulted (an IDE
+    # terminal sets one), and GIT_DIR or GIT_CONFIG_* from a hook would bring a repo's own
+    # config back. Proxy settings and PATH stay, or git could not reach GitHub at all.
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("GIT_") and key != "SSH_ASKPASS"
+    }
+    env |= {
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        # And no repository above `cwd` is found either, wherever pytest's basetemp is.
+        "GIT_CEILING_DIRECTORIES": str(cwd.resolve().parent),
+    }
+    failure = ""
+    for attempt in (1, 2, 3):
+        try:
+            result = subprocess.run(
+                ["git", "ls-remote", f"https://github.com/{repository}.git", *patterns],
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+                env=env,
+            )
+        except subprocess.TimeoutExpired:
+            failure = "no answer within 60 s"
+        else:
+            if result.returncode == 0:
+                return result.stdout
+            failure = f"exit {result.returncode}: {result.stderr.strip()}"
+        if attempt < 3:
+            time.sleep(attempt * 5)
+    raise AssertionError(
+        f"`git ls-remote` of {repository} failed three times, so whether its pins' comments "
+        f"are true is unknown. Last failure: {failure}"
+    )
+
+
+@pytest.mark.live
+def test_every_pin_comment_names_the_pinned_commit(tmp_path):
+    """A pin's ``# vX.Y.Z`` is what a reviewer of its next bump reads as the starting
+    point, and #339's guard checked only that one is there. Read each tag off the action's
+    own repository and hold the comment to the commit."""
+    pins = [
+        pin
+        for workflow in OWNED_WORKFLOWS
+        for pin in action_pins(workflow.name, workflow.read_text(encoding="utf-8"))
+    ]
+    assert pins, "no SHA pins with version comments found: the reader has gone blind"
+    tags_by_repository = {
+        repository: resolved_tags(
+            ls_remote_tags(
+                repository, {pin.tag for pin in pins if pin.repository == repository}, tmp_path
+            )
+        )
+        for repository in sorted({pin.repository for pin in pins})
+    }
+    mismatches = pin_comment_mismatches(pins, tags_by_repository)
+    assert not mismatches, (
+        "a pin's version comment must name the tag whose commit it pins. Re-read the SHA "
+        "off the action's repository (`git ls-remote https://github.com/OWNER/REPO "
+        "'refs/tags/vX.Y.Z^{}'`, falling back to the bare tag for a lightweight one) and "
+        "fix whichever side is wrong (#341). If the comment was right when it landed, the "
+        "tag has moved upstream: what runs is still the pinned commit, but a moved release "
+        "tag is how a compromised action reaches its users, so find out why before editing "
+        "either side:\n" + "\n".join(mismatches)
+    )
+
+
+#: ``git ls-remote``'s answer in miniature: one lightweight tag, and one annotated (the tag
+#: object, then its peeled commit). The SHAs are the real ones for those two tags, so the
+#: fixture shows the very case that makes peeling necessary; nothing here reads them live.
+LS_REMOTE = (
+    "3d3c42e5aac5ba805825da76410c181273ba90b1\trefs/tags/v7.0.1\n"
+    "aef6c9b6e301dc803e1bc9133e9ce67ae9b0906b\trefs/tags/v1.14.3\n"
+    "7245906fb61fa33a13554f9d5fb856fe61758086\trefs/tags/v1.14.3^{}\n"
+)
+
+
+class TestThePinCommentCheckItself:
+    """The offline half of the live check: the parse and the comparison."""
+
+    def test_reads_the_pins_and_their_tags(self):
+        text = (
+            "jobs:\n  a:\n    steps:\n"
+            f"      - uses: {PINNED} # v7.0.1\n"
+            "      - uses: o/r/sub@" + "b" * 40 + "  # v2.0.0 (moved 2026-11-16)\n"
+            "      - uses: actions/checkout@v7\n"
+            f"      - uses: {PINNED}\n"
+            "      - run: |\n          echo 'uses: o/r@" + "c" * 40 + " # v9'\n"
+        )
+        assert action_pins("w.yml", text) == [
+            ActionPin("w.yml:4", "actions/checkout", PINNED.split("@")[1], "v7.0.1"),
+            ActionPin("w.yml:5", "o/r", "b" * 40, "v2.0.0"),
+        ]
+
+    def test_an_annotated_tag_is_peeled_to_its_commit(self):
+        tags = resolved_tags(LS_REMOTE)
+        assert tags == {
+            "v7.0.1": "3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "v1.14.3": "7245906fb61fa33a13554f9d5fb856fe61758086",
+        }
+
+    def test_a_true_comment_reports_nothing(self):
+        pin = ActionPin("w.yml:1", "o/r", "7245906fb61fa33a13554f9d5fb856fe61758086", "v1.14.3")
+        assert pin_comment_mismatches([pin], {"o/r": resolved_tags(LS_REMOTE)}) == []
+
+    def test_a_comment_naming_the_tag_object_rather_than_the_commit_is_caught(self):
+        pin = ActionPin("w.yml:1", "o/r", "aef6c9b6e301dc803e1bc9133e9ce67ae9b0906b", "v1.14.3")
+        (mismatch,) = pin_comment_mismatches([pin], {"o/r": resolved_tags(LS_REMOTE)})
+        assert "not the pinned" in mismatch
+
+    def test_a_comment_naming_a_missing_tag_is_caught(self):
+        pin = ActionPin("w.yml:1", "o/r", "3d3c42e5aac5ba805825da76410c181273ba90b1", "7.0.1")
+        (mismatch,) = pin_comment_mismatches([pin], {"o/r": resolved_tags(LS_REMOTE)})
+        assert "no such tag" in mismatch
+
+    def test_a_repository_that_returned_nothing_is_caught(self):
+        pin = ActionPin("w.yml:1", "o/r", "3d3c42e5aac5ba805825da76410c181273ba90b1", "v7.0.1")
+        assert pin_comment_mismatches([pin], {}) != []
+
+
+class TestEachPinCommentEditIsCaught:
+    """Edits to the real release.yml, checked against a remote that agrees with it today."""
+
+    @pytest.fixture(scope="module")
+    @classmethod
+    def release(cls) -> str:
+        return RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+    @pytest.fixture(scope="module")
+    @classmethod
+    def remote(cls, release) -> dict[str, dict[str, str]]:
+        """What the actions' repositories would say if every comment were true."""
+        tags: dict[str, dict[str, str]] = {}
+        for pin in action_pins(RELEASE_WORKFLOW.name, release):
+            tags.setdefault(pin.repository, {})[pin.tag] = pin.sha
+        return tags
+
+    def test_the_real_file_agrees_with_a_remote_built_from_it(self, release, remote):
+        pins = action_pins(RELEASE_WORKFLOW.name, release)
+        assert {pin.repository for pin in pins} >= {"actions/checkout", "astral-sh/setup-uv"}
+        assert pin_comment_mismatches(pins, remote) == []
+
+    def test_a_comment_naming_another_version_is_caught(self, release, remote):
+        pin = next(p for p in action_pins("r", release) if p.repository == "astral-sh/setup-uv")
+        broken = _mutate(release, f"{pin.sha} # {pin.tag}", f"{pin.sha} # v0.0.1")
+        mismatches = pin_comment_mismatches(action_pins("r", broken), remote)
+        assert any("# v0.0.1" in m and "no such tag" in m for m in mismatches), mismatches
+
+    def test_a_sha_moved_without_its_comment_is_caught(self, release, remote):
+        pin = next(p for p in action_pins("r", release) if p.repository == "astral-sh/setup-uv")
+        broken = _mutate(release, f"{pin.sha} # {pin.tag}", f"{'d' * 40} # {pin.tag}")
+        mismatches = pin_comment_mismatches(action_pins("r", broken), remote)
+        assert any("not the pinned" in m for m in mismatches), mismatches
