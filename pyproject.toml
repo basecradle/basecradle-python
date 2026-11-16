@@ -31,16 +31,24 @@ Issues = "https://github.com/basecradle/basecradle-python/issues"
 
 [dependency-groups]
 dev = ["mypy>=1.18", "pytest>=8", "respx>=0.22", "ruff>=0.16.8"]
+# The toolchain that makes the published bytes (#346), held here so uv.lock pins every
+# version and every hash of it, hatchling's own dependencies included, and Dependabot's uv
+# entry moves them as a reviewable diff the daily scan also reads. Nothing installs this
+# group: `uv sync` installs `dev` only. The one build, .github/actions/build-distributions,
+# which the release and CI's `build` job both run, installs the locked `uv` wheel by the
+# lock's own hashes and exports the rest as hashed constraints for `uv build
+# --require-hashes`; CI's setup-uv steps read the same uv version off the lock.
+# Every name in [build-system].requires is here with the same specifier, or it would never
+# reach the lock and would resolve fresh on every tag; tests/test_workflows.py fails
+# otherwise.
+build = ["uv>=0.13.6", "hatchling>=1.27"]
 
-# Exact, because this is the code that makes the bytes published to PyPI (#341): `uv build`
-# resolves it fresh from PyPI on every tag, outside uv.lock, so a range would build each
-# release with whatever was newest that day. Dependabot's uv entry reads this table and
-# moves the pin (it moved the old range here in #146). tests/test_workflows.py refuses
-# anything but one exact `==<version>` here.
-# The pin ships in the sdist too, so rebuilding the sdist without build isolation needs
-# this exact hatchling installed. That is the price of an exact pin here (#341).
+# A range, not a pin: this table ships in the sdist, and an exact pin here would bind anyone
+# who rebuilds the sdist without build isolation to one hatchling (#346). The release build
+# is held by uv.lock instead (the `build` group above). 1.27 is the first hatchling that
+# reads PEP 639's `license` and `license-files`, which [project] uses.
 [build-system]
-requires = ["hatchling==1.33.0"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [tool.hatch.version]

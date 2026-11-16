@@ -379,7 +379,8 @@ asyncio.run(main())
 
 ## Development
 
-Requires [uv](https://docs.astral.sh/uv/). CI installs the version `.tool-versions` names.
+Requires [uv](https://docs.astral.sh/uv/). CI installs the uv `uv.lock` holds (in the `build`
+dependency group), the same uv the release builds with.
 
 ```bash
 uv sync --locked         # install everything (creates .venv; fails if it drifts from uv.lock, as CI does)
