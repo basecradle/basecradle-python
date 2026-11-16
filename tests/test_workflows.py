@@ -1,7 +1,8 @@
-"""Five workflow invariants: bounded artifact retention, a gate that covers every job, a
-gate that cannot fail open, a release pipeline that publishes what it says it does, and a
-test matrix that runs exactly the Python versions the package declares (#336; its reasons
-sit beside its code, at the end of this file).
+"""Six workflow invariants: bounded artifact retention, a gate that covers every job, a
+gate that cannot fail open, a release pipeline that publishes what it says it does, a test
+matrix that runs exactly the Python versions the package declares (#336), and an action
+pinned to a commit SHA in every workflow that holds a secret or a write grant (#339). The
+last two carry their reasons beside their code, at the end of this file.
 
 ``constitution.md`` → How We Build: whatever a build leaves behind has a named owner, a
 fixed home, and a stated end, and nothing outlives 30 days without a written reason. A
@@ -2254,6 +2255,18 @@ class TestTheReleaseScannerItself:
         assert job_environment(job_bodies(text)["publish"]) == "pypi"
 
 
+def _publish_step_line(release: str) -> str:
+    """The real publish job's ``uses:`` line, read off the file, newline included.
+
+    Read rather than written out, because the line carries a SHA pin that Dependabot
+    rewrites (#339): spelled here, every bump would redden these tests and never merge.
+    """
+    steps = publish_steps(job_bodies(release)[PUBLISH_JOB])
+    assert len(steps) == 1, f"{PUBLISH_JOB!r} has {len(steps)} publish steps, not one"
+    (line,) = (line for line in steps[0] if PUBLISH_ACTION.match(line))
+    return line + "\n"
+
+
 class TestEachReleaseEditIsCaught:
     """Each fact this section pins, broken in the real ``release.yml`` and rejected by
     its own check — and beside each, the spellings that mean the same thing and must
@@ -2395,9 +2408,9 @@ class TestEachReleaseEditIsCaught:
         broken = _mutate_in_job(
             release,
             PUBLISH_JOB,
-            "      - uses: pypa/gh-action-pypi-publish@release/v1\n",
-            "      - uses: pypa/gh-action-pypi-publish@release/v1\n"
-            "        with:\n          repository-url: https://example.invalid/legacy/\n",
+            _publish_step_line(release),
+            _publish_step_line(release)
+            + "        with:\n          repository-url: https://example.invalid/legacy/\n",
         )
         with pytest.raises(AssertionError, match="names repository-url"):
             check_the_rehearsal_publishes_to_the_rehearsal_index(broken)
@@ -2421,9 +2434,9 @@ class TestEachReleaseEditIsCaught:
         broken = _mutate_in_job(
             release,
             PUBLISH_JOB,
-            "      - uses: pypa/gh-action-pypi-publish@release/v1\n",
-            "      - uses: pypa/gh-action-pypi-publish@release/v1\n"
-            "        with:\n          repository_url: https://example.invalid/legacy/\n",
+            _publish_step_line(release),
+            _publish_step_line(release)
+            + "        with:\n          repository_url: https://example.invalid/legacy/\n",
         )
         with pytest.raises(AssertionError, match="names repository-url"):
             check_the_rehearsal_publishes_to_the_rehearsal_index(broken)
@@ -2748,3 +2761,372 @@ class TestEachPythonVersionDriftIsCaught:
         broken = _mutate_in_job(ci, TEST_JOB, old, new)
         with pytest.raises(AssertionError, match="exactly once"):
             check_each_leg_sets_up_its_matrix_version(broken)
+
+
+# The sixth invariant (#339): wherever a workflow holds power, its actions are pinned to a
+# commit SHA. `release.yml` ran `pypa/gh-action-pypi-publish@release/v1` -- a branch -- in
+# the two jobs that hold `id-token: write`, so whatever its owner (or whoever took over its
+# owner's account) pushed there would run on our next tag with the power to publish this
+# package under our name. A tag moves the same way; only a full commit SHA does not.
+#
+# The scope is a workflow, not a job, and it is decided by reading the file rather than by
+# a list that has to be remembered: any secret, any write grant, or no top-level
+# `permissions:` at all (which inherits the repository's default, possibly write) puts
+# every action in the file under the rule. Whole-file on purpose: `release.yml`'s build
+# job holds nothing, but it makes the bytes the publish jobs upload. A workflow that holds
+# nothing -- `ci.yml` today -- is left alone; the day one of its jobs gains a secret, this
+# fails until its actions are pinned.
+#
+# The capital's shared stubs are out of scope: they call reusable workflows in
+# `basecradle/.github`, editing them here trips the NOC's drift-guard, and which files they
+# are is CLAUDE.md -> Propagation's to say -- read from there, the way ci.yml's actionlint
+# job reads it.
+
+CLAUDE_MD = WORKFLOWS.parent.parent / "CLAUDE.md"
+PROPAGATION_HEADING = "### Propagation"
+WORKFLOW_PATH = re.compile(r"\.github/workflows/(?P<name>[a-z-]+\.ya?ml)")
+
+#: ``owner/repo`` (and, for an action in a subdirectory or a reusable workflow, a path),
+#: then ``@`` and exactly forty lowercase hex digits. Seven is a short SHA, which GitHub
+#: refuses for actions; anything else is a tag or a branch, which moves.
+SHA_PINNED = re.compile(r"^[\w.-]+/[\w.-]+(?:/[^@\s]+)?@[0-9a-f]{40}$")
+
+#: The version, after the SHA, in the comment Dependabot reads and rewrites with it. A
+#: bare SHA works, but nobody reviewing a bump can tell what it moved from or to. The
+#: ``v`` is optional because the comment is the action's own tag name, whatever it is.
+VERSION_COMMENT = re.compile(r"^#\s*v?\d+(?:\.\d+)*(?:\s|$)")
+
+#: A container image by digest -- the other reference that cannot move.
+DIGEST_PINNED = re.compile(r"^docker://\S+@sha256:[0-9a-f]{64}$")
+
+#: Code in this repository, at the commit being run: nothing to pin.
+LOCAL_ACTION_PREFIX = "./"
+
+#: A secret read by name or index, or every secret handed on to a reusable workflow.
+SECRET_REFERENCE = re.compile(r"\bsecrets\s*(?:\.|\[|:\s*inherit\b)")
+
+TOP_LEVEL_PERMISSIONS = re.compile(r"^permissions:")
+
+
+def shared_stub_names(claude_md: str) -> set[str]:
+    """The workflow files CLAUDE.md -> Propagation names as the capital's.
+
+    The paragraph is found by its heading and read as the first non-empty line after it,
+    exactly as ci.yml's actionlint job reads it, so the two cannot disagree about which
+    files are shared.
+
+    Empty, never an exception, when the heading or its paragraph is gone: this runs at
+    import, where a raise would stop every invariant in the file from being collected.
+    An empty exclusion puts the stubs in scope, and
+    ``test_the_shared_stubs_are_read_from_claude_md`` says why.
+    """
+    lines = claude_md.splitlines()
+    if PROPAGATION_HEADING not in lines:
+        return set()
+    start = lines.index(PROPAGATION_HEADING) + 1
+    paragraph = next((line for line in lines[start:] if line.strip()), "")
+    return {match.group("name") for match in WORKFLOW_PATH.finditer(paragraph)}
+
+
+def owned_workflows() -> list[Path]:
+    """Every workflow in this repository that is this repository's to edit.
+
+    A missing CLAUDE.md reads as no exclusions, for ``shared_stub_names``' reason: this
+    runs at import.
+    """
+    claude_md = CLAUDE_MD.read_text(encoding="utf-8") if CLAUDE_MD.is_file() else ""
+    shared = shared_stub_names(claude_md)
+    return sorted(path for path in WORKFLOWS.glob("*.y*ml") if path.name not in shared)
+
+
+def privilege_reasons(text: str) -> list[str]:
+    """Why a workflow holds power -- empty if it holds none this reader can see.
+
+    It errs toward finding power: a false positive costs a pinned action, a false
+    negative an unpinned one in a job that can publish. So a secret is looked for in
+    every line but a YAML comment: inside a ``run:`` script a ``#`` line is shell, and
+    Actions substitutes ``${{ secrets.X }}`` into it before the shell ever sees the
+    ``#`` -- commented-out or not, the secret is in the script. A trailing YAML comment
+    that mentions one counts too. And any ``permissions:`` value naming ``write`` --
+    ``write-all``, or a flow mapping like ``{ id-token: write }`` that this module's
+    readers do not otherwise parse -- is a grant.
+    """
+    reasons = []
+    lines = text.splitlines()
+    if not any(TOP_LEVEL_PERMISSIONS.match(line) for line in lines):
+        reasons.append("no top-level permissions: it inherits the repository's default")
+
+    inside_a_script = block_scalar_line_numbers(lines)
+    for index, line in enumerate(lines):
+        if index not in inside_a_script and line.lstrip().startswith("#"):
+            continue
+        if SECRET_REFERENCE.search(line):
+            reasons.append(f"line {index + 1} reads a secret: {line.strip()}")
+
+    for index, line in enumerate(lines):
+        if index in inside_a_script or not (match := KEY_LINE.match(line)):
+            continue
+        value = _strip_comment(match.group("value") or "").strip("\"'")
+        if value == "write" or (match.group("key") == "permissions" and "write" in value):
+            reasons.append(f"line {index + 1} grants write: {line.strip()}")
+
+    return reasons
+
+
+def unpinned_actions(name: str, text: str) -> list[str]:
+    """Every ``uses:`` in a workflow that is not a SHA pin carrying its version comment.
+
+    Steps and job-level reusable-workflow calls alike, both of which run someone's code
+    with the job's power. ``run:`` scripts are skipped, as every reader here skips them:
+    a ``uses:`` in shell is text, not an action. A ``uses:`` this cannot read at all is
+    ``unreadable_key_lines``' to report, not this one's to pass.
+    """
+    lines = text.splitlines()
+    inside_a_script = block_scalar_line_numbers(lines)
+
+    unpinned = []
+    for index, line in enumerate(lines):
+        match = KEY_LINE.match(line)
+        if index in inside_a_script or not match or match.group("key") != "uses":
+            continue
+        raw = match.group("value") or ""
+        reference = _strip_comment(raw)
+        comment = raw[len(reference) :].strip()
+        action = reference.strip("\"'")
+        if not action or action.startswith(LOCAL_ACTION_PREFIX):
+            continue
+        where = f"{name}:{index + 1}: {line.strip()}"
+        if not (SHA_PINNED.match(action) or DIGEST_PINNED.match(action)):
+            unpinned.append(
+                f"{where} -- not pinned to a full 40-character commit SHA "
+                f"(or, for a docker:// image, a sha256 digest)"
+            )
+        elif not VERSION_COMMENT.match(comment):
+            unpinned.append(f"{where} -- pinned, but no `# vX.Y.Z` comment names the version")
+    return unpinned
+
+
+def check_privileged_actions_are_pinned(name: str, text: str) -> None:
+    """Assert a workflow holding a secret or a write grant runs only SHA-pinned actions."""
+    reasons = privilege_reasons(text)
+    if not reasons:
+        return
+    unpinned = unpinned_actions(name, text)
+    assert not unpinned, (
+        f"{name} holds power ({'; '.join(reasons)}), so every action in it must "
+        f"be pinned to a full commit SHA with its version in a trailing comment -- a tag "
+        f"or a branch runs whatever its owner pushes there next, with this workflow's "
+        f"secrets and grants (#339). Read the SHA off the action's own repository "
+        f"(`git ls-remote https://github.com/OWNER/REPO 'refs/tags/vX.Y.Z^{{}}'`), never "
+        f"from memory or another workflow:\n" + "\n".join(unpinned)
+    )
+
+
+OWNED_WORKFLOWS = owned_workflows()
+
+
+def test_the_shared_stubs_are_read_from_claude_md():
+    """The exclusion list is real files, or a renamed heading would exclude nothing."""
+    shared = shared_stub_names(CLAUDE_MD.read_text(encoding="utf-8"))
+    assert shared, f"no workflow paths under {PROPAGATION_HEADING!r} in CLAUDE.md"
+    assert all((WORKFLOWS / name).is_file() for name in shared), shared
+
+
+@pytest.mark.parametrize("name", ["release.yml", "dependency-security-scan.yml"])
+def test_the_workflows_that_hold_power_are_in_scope(name):
+    """Both halves, or the pin check passes on air: the file must be one this test
+    checks (not read as a shared stub), and the privilege reader must see its power."""
+    workflow = WORKFLOWS / name
+    assert workflow in OWNED_WORKFLOWS, f"{name} is excluded as a shared stub"
+    assert privilege_reasons(workflow.read_text(encoding="utf-8")), name
+
+
+@pytest.mark.parametrize("workflow", OWNED_WORKFLOWS, ids=lambda path: path.name)
+def test_a_workflow_that_holds_power_pins_every_action(workflow):
+    check_privileged_actions_are_pinned(workflow.name, workflow.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("workflow", OWNED_WORKFLOWS, ids=lambda path: path.name)
+def test_no_uses_escapes_the_pin_scanner(workflow):
+    unreadable = unreadable_key_lines(workflow, "uses")
+    assert not unreadable, (
+        "a `uses:` the pin scanner cannot read is one it cannot hold to a SHA -- write it "
+        "as a plain `uses: owner/repo@sha # vX.Y.Z` on one line:\n" + "\n".join(unreadable)
+    )
+
+
+PINNED = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+
+
+class TestThePinScannerItself:
+    """Where the pin scanner fires and where it does not, on fabricated workflows."""
+
+    @staticmethod
+    def scan(uses_value: str) -> list[str]:
+        text = (
+            f"jobs:\n  a:\n    steps:\n      - uses: {uses_value}\n        with:\n          x: 1\n"
+        )
+        return unpinned_actions("w.yml", text)
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            f"{PINNED} # v7.0.1",
+            f"{PINNED}  # v7.0.1 (the v7 tag on 2026-11-16)",
+            f'"{PINNED}" # v7.0.1',
+            f"{PINNED} # v7",
+            f"{PINNED} # 7.0.1",
+            "owner/repo/.github/workflows/w.yml@3d3c42e5aac5ba805825da76410c181273ba90b1 # v1",
+            "owner/repo/sub/action@3d3c42e5aac5ba805825da76410c181273ba90b1 # v2.0.0",
+            "./.github/actions/local",
+            "docker://ghcr.io/o/tool@sha256:" + "0123456789abcdef" * 4 + " # v1.2.3",
+        ],
+    )
+    def test_accepts(self, value):
+        assert self.scan(value) == []
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "actions/checkout@v7",
+            "actions/checkout@v7 # v7",
+            "pypa/gh-action-pypi-publish@release/v1",
+            "actions/checkout@main",
+            "actions/checkout@3d3c42e # v7.0.1",
+            "actions/checkout@3D3C42E5AAC5BA805825DA76410C181273BA90B1 # v7.0.1",
+            f"{PINNED}0 # v7.0.1",
+            "actions/checkout",
+            "docker://alpine:3",
+            "docker://alpine@sha256:0123456789abcdef # v3",
+        ],
+    )
+    def test_refuses_a_ref_that_moves(self, value):
+        assert "not pinned" in " ".join(self.scan(value))
+
+    @pytest.mark.parametrize("value", [PINNED, f"{PINNED} # pinned", f"{PINNED} #"])
+    def test_refuses_a_pin_whose_version_is_not_named(self, value):
+        assert "no `# vX.Y.Z` comment" in " ".join(self.scan(value))
+
+    def test_a_uses_inside_a_run_script_is_not_an_action(self, tmp_path):
+        workflow = tmp_path / "w.yml"
+        workflow.write_text(
+            "jobs:\n  a:\n    steps:\n      - run: |\n          echo 'uses: actions/x@v1'\n",
+            encoding="utf-8",
+        )
+        assert unpinned_actions(workflow.name, workflow.read_text(encoding="utf-8")) == []
+        assert unreadable_key_lines(workflow, "uses") == []
+
+    def test_a_job_level_reusable_workflow_call_is_held_to_the_rule(self):
+        text = "jobs:\n  a:\n    uses: o/r/.github/workflows/w.yml@main\n"
+        assert len(unpinned_actions("w.yml", text)) == 1
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "      - {uses: actions/checkout@v7}",
+            "      - uses:\n          actions/checkout@v7",
+        ],
+    )
+    def test_a_uses_it_cannot_read_is_reported(self, tmp_path, line):
+        workflow = tmp_path / "w.yml"
+        workflow.write_text(f"jobs:\n  a:\n    steps:\n{line}\n", encoding="utf-8")
+        assert unreadable_key_lines(workflow, "uses")
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "        env:\n          T: ${{ secrets.TOKEN }}",
+            "        env:\n          T: ${{ secrets['TOKEN'] }}",
+            "        run: echo ${{ secrets.TOKEN }}",
+            '        run: |\n          curl -H "x: ${{ secrets.TOKEN }}" example.com',
+            "    secrets: inherit",
+            "    permissions:\n      contents: write",
+            "    permissions:\n      id-token: write  # Trusted Publishing",
+            "    permissions:\n      issues: 'write'",
+            "    permissions: write-all",
+            "    permissions: { id-token: write }",
+            "    permissions: {contents: read, pull-requests: write}",
+            "        run: |\n          # echo ${{ secrets.TOKEN }}",
+        ],
+    )
+    def test_finds_the_power_a_workflow_holds(self, line):
+        text = f"permissions:\n  contents: read\njobs:\n  a:\n    steps:\n      - run: x\n{line}\n"
+        assert privilege_reasons(text)
+
+    def test_a_workflow_with_no_top_level_permissions_holds_the_default(self):
+        assert privilege_reasons("jobs:\n  a:\n    steps:\n      - run: x\n")
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "    permissions:\n      contents: read",
+            "    permissions: read-all",
+            "      # the publish needs secrets.TOKEN and contents: write",
+            "    permissions: { contents: read }",
+            "        run: |\n          echo 'contents: write'",
+        ],
+    )
+    def test_a_workflow_holding_nothing_is_left_alone(self, line):
+        text = f"permissions:\n  contents: read\njobs:\n  a:\n    steps:\n      - run: x\n{line}\n"
+        assert privilege_reasons(text) == []
+
+
+class TestEachPinEditIsCaught:
+    """The edits that unpin a workflow holding power, each made to the real file."""
+
+    @pytest.fixture(scope="module")
+    @classmethod
+    def release(cls) -> str:
+        return RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+    @staticmethod
+    def _pin(text: str, action: str) -> str:
+        """The first ``uses:`` value in ``text`` naming ``action``, comment included."""
+        match = re.search(rf"uses:\s+({re.escape(action)}@\S+\s+#\s*\S+)", text)
+        assert match, f"no pinned {action} in the real workflow -- this test has gone stale"
+        return match.group(1)
+
+    @pytest.mark.parametrize(
+        "replacement",
+        [
+            "pypa/gh-action-pypi-publish@release/v1",
+            "pypa/gh-action-pypi-publish@v1.14.3 # v1.14.3",
+            "pypa/gh-action-pypi-publish@7245906 # v1.14.3",
+        ],
+    )
+    def test_unpinning_the_publish_action_is_caught(self, release, replacement):
+        pin = self._pin(release, "pypa/gh-action-pypi-publish")
+        broken = _mutate_in_job(release, PUBLISH_JOB, pin, replacement)
+        with pytest.raises(AssertionError, match="gh-action-pypi-publish@"):
+            check_privileged_actions_are_pinned(RELEASE_WORKFLOW.name, broken)
+
+    def test_unpinning_the_build_jobs_checkout_is_caught(self, release):
+        pin = self._pin(release, "actions/checkout")
+        broken = _mutate_in_job(release, "build", pin, "actions/checkout@v7")
+        with pytest.raises(AssertionError, match="actions/checkout@v7"):
+            check_privileged_actions_are_pinned(RELEASE_WORKFLOW.name, broken)
+
+    def test_dropping_a_pins_version_comment_is_caught(self, release):
+        pin = self._pin(release, "pypa/gh-action-pypi-publish")
+        broken = _mutate_in_job(release, PUBLISH_JOB, pin, re.split(r"\s+#", pin)[0])
+        with pytest.raises(AssertionError, match="no `# vX.Y.Z` comment"):
+            check_privileged_actions_are_pinned(RELEASE_WORKFLOW.name, broken)
+
+    def test_dropping_the_top_level_permissions_is_itself_read_as_power(self, release):
+        """Asserted by its own reason: release.yml's id-token grants would keep the list
+        non-empty without it, and the probe would prove nothing."""
+        broken = _mutate(release, "permissions:\n  contents: read\n", "")
+        assert any("inherits the repository's default" in r for r in privilege_reasons(broken))
+
+    def test_ci_gaining_a_secret_brings_it_into_scope(self):
+        """A workflow holding nothing today is held to the rule the day it holds a secret.
+
+        The probe brings its own unpinned step, so pinning ci.yml's actions -- a fine
+        thing to do -- does not turn this into a test that needs rewriting.
+        """
+        ci = CI_WORKFLOW.read_text(encoding="utf-8")
+        broken = (
+            ci + "        env:\n          T: ${{ secrets.T }}\n      - uses: actions/probe@v1\n"
+        )
+        with pytest.raises(AssertionError, match=r"reads a secret(.|\n)*actions/probe@v1"):
+            check_privileged_actions_are_pinned(CI_WORKFLOW.name, broken)

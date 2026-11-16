@@ -17,6 +17,11 @@ on:
   # so it is only for proving the filing path, and its issue is closed after.
   workflow_dispatch:
 
+# Actions pinned to a full commit SHA, version in the comment (#339): this job hands the
+# basecradle-ai App's private key to create-github-app-token, so a moved tag would run
+# someone else's code holding the capital bot's key. Dependabot bumps a pin with its comment
+# (and the shared auto-merge policy merges a patch or minor bump on green).
+
 permissions:
   contents: read
 
@@ -34,7 +39,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Pinned by version AND checksum, the checksum taken from the release's own
       # osv-scanner_SHA256SUMS: a scanner that moves under us changes what "clean" means
@@ -60,7 +65,7 @@ jobs:
       # it applied would page nobody. Scoped to issues.
       - name: Mint basecradle-ai App token
         id: app-token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BASECRADLE_AI_APP_ID }}
           private-key: ${{ secrets.BASECRADLE_AI_APP_PRIVATE_KEY }}
