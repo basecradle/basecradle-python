@@ -20,7 +20,7 @@ from basecradle import (
     User,
     ValidationError,
 )
-from basecradle._items import _is_idempotency_key
+from basecradle._items import _is_idempotency_key, _unsendable_key_reason
 from tests.conftest import (
     ASSET_UUID,
     MESSAGE_UUID,
@@ -306,11 +306,68 @@ class TestWhatCountsAsAKey:
     def test_blank_is_no_key(self, value):
         assert not _is_idempotency_key(value)
 
-    @pytest.mark.parametrize("value", ["key-1", " key-1 ", "a b", "\x1c", "\x1f"])
+    @pytest.mark.parametrize("value", ["key-1", " key-1 ", "a b", "\x00", "\x1c", "\x1f"])
     def test_anything_else_is_a_key(self, value):
-        """Whitespace around a key leaves it a key, and so do the ASCII separators
-        ``\\x1c``-``\\x1f``: Python's ``str.isspace()`` counts them, the platform does not."""
+        """Whitespace around a key leaves it a key, and so do NUL (Ruby's ``strip`` drops
+        it) and the ASCII separators ``\\x1c``-``\\x1f`` (Python's ``str.isspace()`` counts
+        them): the platform counts none of them as blank. Whether HTTP can carry the key is
+        the next question (``TestWhichKeysCanBeSent``)."""
         assert _is_idempotency_key(value)
+
+
+class TestWhichKeysCanBeSent:
+    """A key is sent exactly as given, so it must be a header value no hop changes (#351).
+
+    One rule per test: printable ASCII is sendable, with spaces or tabs between its
+    characters; a non-ASCII character is not; a control character is not; whitespace at
+    either end is not. A key that fails raises ``ValueError`` before any request is built.
+    """
+
+    @pytest.mark.parametrize(
+        "key", ["key-1", "019f5e48-87c6-7d1e-9a48-7a701e8bd5bb", "!~", "a b", "a\tb", "a  b"]
+    )
+    def test_printable_ascii_with_inner_spaces_or_tabs_is_sendable(self, key):
+        """A run of spaces or tabs inside a key is carried unchanged, so it stays sendable."""
+        assert _unsendable_key_reason(key) is None
+
+    @pytest.mark.parametrize("key", ["clé-1", "ключ", "key-1\u00a0", "😀"])
+    def test_a_non_ascii_character_is_not(self, key):
+        assert "is not ASCII" in _unsendable_key_reason(key)
+
+    @pytest.mark.parametrize(
+        "key", ["\x00", "a\x00b", "key-1\n", "a\nb", "a\rb", "a\x01b", "a\x1bb", "\x1c", "\x7f"]
+    )
+    def test_a_control_character_is_not(self, key):
+        """NUL included, and the trailing newline a key read from a file arrives with. So are
+        the ones h11 would send (``\\x01``-``\\x08``, ``\\x0e``-``\\x1f``, DEL): the meaning
+        is the same in every SDK, not what one HTTP library tolerates."""
+        assert "is a control character" in _unsendable_key_reason(key)
+
+    @pytest.mark.parametrize("key", [" key-1 ", " key-1", "key-1 ", "key-1\t", "\tkey-1"])
+    def test_whitespace_at_either_end_is_not(self, key):
+        """HTTP strips it in transit, so the platform would store a different key."""
+        assert "begins or ends with whitespace" in _unsendable_key_reason(key)
+
+    def test_a_missing_upload_path_does_not_hide_a_bad_key(self, bc, api, timeline, tmp_path):
+        """The key is checked before the file is opened, so its error is the one raised."""
+        with pytest.raises(ValueError, match="idempotency_key"):
+            timeline.assets.create(file=str(tmp_path / "missing.png"), idempotency_key="clé-1")
+
+    @pytest.mark.parametrize("key", [" key-1 ", "\x00", "clé-1"])
+    def test_create_raises_before_any_request(self, bc, api, timeline, key):
+        """No route is mocked, so a request that went out would fail the test in respx."""
+        with pytest.raises(ValueError, match=r"^idempotency_key .*Nothing was sent\.$"):
+            timeline.messages.create(body="hi", idempotency_key=key)
+
+    @pytest.mark.parametrize("key", [" key-1 ", "\x00", "clé-1"])
+    def test_every_create_refuses_it(self, bc, api, timeline, key):
+        """Tasks and assets share the one header builder with messages."""
+        with pytest.raises(ValueError, match="idempotency_key"):
+            timeline.tasks.create(
+                instructions="Review", activate_at="2026-01-03T15:00:00Z", idempotency_key=key
+            )
+        with pytest.raises(ValueError, match="idempotency_key"):
+            timeline.assets.create(file=io.BytesIO(b"bytes"), idempotency_key=key)
 
 
 class TestCreateIdempotencyKey:
