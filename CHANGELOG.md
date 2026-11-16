@@ -8,6 +8,13 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 ## [Unreleased]
 
+### Added
+
+- **Python 3.15 is tested and declared** (#333). CPython 3.15.0 shipped on 2026-10-09, and
+  CI now runs the test suite on it alongside 3.10–3.14; the package's classifiers list it.
+  `requires-python = ">=3.10"` already admitted it, so nothing changes for anyone
+  installing.
+
 ### Documented
 
 - **An asset's `file.url` is a one-hour link, not an authenticated download URL** (#313,
