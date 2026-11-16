@@ -77,6 +77,9 @@ jobs:
   build:
     name: build
     runs-on: ubuntu-latest
+    # The gate needs this job, and it downloads uv, the toolchain and a CPython with no
+    # cache: bound a stalled download rather than let it hold every merge.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:

@@ -64,3 +64,13 @@ def test_a_package_the_lock_lacks_fails_with_the_reason(capsys):
 def test_on_3_10_it_says_why_it_cannot_run(capsys):
     assert locked_requirement.main(["uv"]) == 2
     assert "3.11" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("version", [None, ""])
+def test_an_entry_with_no_version_is_refused_with_the_reason(version):
+    (uv, _) = LOCK["package"]
+    entry = {key: value for key, value in uv.items() if key != "version"}
+    if version is not None:
+        entry["version"] = version
+    with pytest.raises(ValueError, match="has no version"):
+        requirement({"package": [entry]}, "uv")

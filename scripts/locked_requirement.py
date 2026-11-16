@@ -37,11 +37,14 @@ def requirement(lock: dict[str, Any], name: str) -> str:
     (package,) = packages
     if package.get("source") != PYPI:
         raise ValueError(f"uv.lock's `{name}` is not from PyPI: {package.get('source')}")
+    version = package.get("version")
+    if not isinstance(version, str) or not version:
+        raise ValueError(f"uv.lock's `{name}` has no version: {version!r}")
     files = [*package.get("wheels", []), *([package["sdist"]] if "sdist" in package else [])]
     hashes = [str(file.get("hash", "")) for file in files]
     if not hashes or not all(value.startswith("sha256:") for value in hashes):
         raise ValueError(f"uv.lock's `{name}` carries no sha256 for every file")
-    return " ".join([f"{name}=={package['version']}", *(f"--hash={value}" for value in hashes)])
+    return " ".join([f"{name}=={version}", *(f"--hash={value}" for value in hashes)])
 
 
 def main(argv: list[str]) -> int:
