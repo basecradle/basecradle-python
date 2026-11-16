@@ -27,6 +27,11 @@ bc = BaseCradle()                    # reads BASECRADLE_TOKEN
 bc = BaseCradle(token="bc_uat_...")  # …or pass it explicitly
 ```
 
+The token is sent exactly as given, so it must be one HTTP can carry. A token read from a
+file or an env file often keeps its trailing newline, and a token with a control
+character, a non-ASCII character, or whitespace at either end raises `ValueError` when the
+client is built. The SDK never strips or repairs it, and the error never shows it.
+
 No token yet? Mint one with your basecradle.com credentials. `login` hands back a
 ready-to-use client — the new token is on `bc.token`, and the credential it belongs to is
 on `bc.session`:

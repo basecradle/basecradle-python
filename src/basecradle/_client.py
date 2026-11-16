@@ -23,6 +23,7 @@ from basecradle._exceptions import (
     UnsendableRequestError,
     exception_from_response,
 )
+from basecradle._header_value import _header_value_defect
 from basecradle._items import (
     AssetsResource,
     AsyncAssetsResource,
@@ -113,8 +114,9 @@ class _ClientCore:
 
         h11 refuses a value HTTP cannot carry with ``LocalProtocolError`` before a byte is
         sent, and httpx refuses a non-ASCII header name or value while it encodes it as
-        ASCII. Neither is "could not reach", and either one's message or ``.object`` can hold
-        the bearer token. A body or query that fails to encode fails in UTF-8, not ASCII: that
+        ASCII. Neither is "could not reach", and either one's message or ``.object`` holds the
+        refused value, which may be a secret: a caller's own header, or (before #359 refused
+        a bad token when the client is built) the bearer token. A body or query that fails to encode fails in UTF-8, not ASCII: that
         error is about the caller's own data, so it is left to reach them unchanged.
         """
         if isinstance(exc, httpx.LocalProtocolError):
@@ -127,13 +129,13 @@ class _ClientCore:
 
         Raise it **after** the ``except`` block that caught the refusal, never inside it:
         raised inside, even ``from None``, it would keep the refusal as ``__context__``, and
-        the refusal may hold the token.
+        the refusal may hold a secret.
         """
         return UnsendableRequestError(
             f"Could not send the request to {base_url}: the HTTP client refused it as invalid "
             "HTTP, so the platform never received a complete request. The usual cause is a "
-            "header value HTTP cannot carry, such as a token read with its trailing newline. "
-            "The refused value is not shown, as it may be the token."
+            "header value HTTP cannot carry, such as one passed to request(headers=...) with "
+            "a trailing newline. The refused value is not shown, as it may be secret."
         )
 
     def __init__(
@@ -148,13 +150,7 @@ class _ClientCore:
         if not resolved:
             raise MissingTokenError(_MISSING_TOKEN_MESSAGE.format(cls=type(self).__name__))
         self._check_max_retries(max_retries)
-        if not resolved.isascii():
-            # httpx would fail on it anyway, building the client: with a ``UnicodeEncodeError``
-            # whose ``.object``, and so its ``repr``, is the whole ``Authorization`` value.
-            raise ValueError(
-                "The token is not ASCII, so it cannot be sent in an HTTP header. It is not "
-                "shown here, as it is a credential: check where it was read from."
-            )
+        self._check_token(resolved)
 
         self.token = resolved
         self.base_url = base_url
@@ -221,6 +217,33 @@ class _ClientCore:
             f"build one: "
             f"{type(self).__name__}(token=...), moving the token only through whatever "
             f"you already trust with secrets."
+        )
+
+    @staticmethod
+    def _check_token(token: str) -> None:
+        """Refuse a token HTTP cannot carry exactly as given, at the earliest moment (#359).
+
+        The idempotency key's rule, applied to the token (``_header_value_defect``): the
+        caller's error, raised as ``ValueError`` when the client is built, never stripped
+        or repaired. Without it a token read with its trailing newline built a client that
+        failed every request, and a non-ASCII one failed inside httpx with an error whose
+        ``repr`` was the whole ``Authorization`` value. The message says where the fault is
+        and never shows the token, not even the character at fault.
+        """
+        defect = _header_value_defect(token)
+        if defect is None:
+            return
+        index, reason = defect
+        where = reason if index is None else f"the character at index {index} {reason}"
+        # A token ending in CR or LF is the newline a file or an env file keeps (CRLF from
+        # Windows too); for any other fault, the token's source has to say.
+        if token.endswith(("\n", "\r")):
+            hint = "A token read from a file or an env file often keeps its trailing newline."
+        else:
+            hint = "Check where the token was read from."
+        raise ValueError(
+            f"The token cannot be sent in an HTTP header: {where}. It is not shown here, as "
+            f"it is a credential. {hint} Pass it exactly as minted."
         )
 
     @staticmethod
@@ -571,7 +594,7 @@ class BaseCradle(_ClientCore):
                     attempt += 1
                     continue
                 raise APIConnectionError(f"Could not reach {self.base_url}: {exc}") from exc
-            # Refused: raised out here, so the refusal (which may hold the token) is not
+            # Refused: raised out here, so the refusal (which may hold a secret) is not
             # even this error's ``__context__``.
             raise self._unsendable_request_error(self.base_url)
 
@@ -765,7 +788,7 @@ class AsyncBaseCradle(_ClientCore):
                     attempt += 1
                     continue
                 raise APIConnectionError(f"Could not reach {self.base_url}: {exc}") from exc
-            # Refused: raised out here, so the refusal (which may hold the token) is not
+            # Refused: raised out here, so the refusal (which may hold a secret) is not
             # even this error's ``__context__``.
             raise self._unsendable_request_error(self.base_url)
 
