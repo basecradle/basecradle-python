@@ -29,6 +29,7 @@ from basecradle._items import (
     AsyncTasksResource,
     MessagesResource,
     TasksResource,
+    _is_idempotency_key,
 )
 from basecradle._notes import AsyncNotesResource, NotesResource
 from basecradle._resources import refuse_serialization
@@ -217,9 +218,10 @@ class _ClientCore:
         platform can replay without duplicating a record: a ``GET`` (idempotent by HTTP
         definition) or a create carrying an ``Idempotency-Key`` (the platform dedupes it).
         An unkeyed ``POST`` is never retried — a lost response might mean the record *was*
-        created, and a blind re-send would duplicate it. An empty key is no key: it names
-        no logical create for the platform to dedupe against. The header is found in any
-        case (``idempotency-key`` too), as HTTP names are case-insensitive and are sent as
+        created, and a blind re-send would duplicate it. A key that is empty or only
+        whitespace is no key (``_is_idempotency_key``): the platform reads it as absent, so
+        it names no logical create to dedupe against. The header is found in any case
+        (``idempotency-key`` too), as HTTP names are case-insensitive and are sent as
         written.
         """
         if not isinstance(exc, self._RETRYABLE_ERRORS):
@@ -227,7 +229,9 @@ class _ClientCore:
         if method.upper() == "GET":
             return True
         return headers is not None and any(
-            value for name, value in headers.items() if name.lower() == "idempotency-key"
+            _is_idempotency_key(value)
+            for name, value in headers.items()
+            if name.lower() == "idempotency-key"
         )
 
     @staticmethod

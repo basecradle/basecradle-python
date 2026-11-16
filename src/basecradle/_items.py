@@ -18,7 +18,7 @@ import os
 from collections.abc import AsyncIterator, Iterator
 from datetime import datetime
 from pathlib import Path
-from typing import IO, Any, Generic, TypeVar, cast
+from typing import IO, Any, Generic, TypeGuard, TypeVar, cast
 
 from basecradle._models import ApiObject
 from basecradle._pagination import apaginate, paginate
@@ -332,17 +332,37 @@ class _NestedCreatorCore(Resource):
         return {"timeline": self._timeline_uuid}
 
 
+#: The whitespace a blank key is made of: ASCII's six, which Rails' ``blank?`` and Ruby's
+#: ``strip`` both count (Ruby's ``strip`` also drops NUL, which no HTTP header can carry).
+#: Never bare ``str.strip()``, which also strips ``\x1c``-``\x1f``: those travel in a
+#: header, and the platform reads them as a key.
+_KEY_WHITESPACE = " \t\n\v\f\r"
+
+
+def _is_idempotency_key(value: str | None) -> TypeGuard[str]:
+    """Does ``value`` name a create the platform can dedupe? The one meaning of "a key".
+
+    ``None``, an empty string, or a string of only whitespace is no key. The platform reads
+    the header with Rails' ``presence``, which treats a blank value as absent, so a create
+    keyed with one could not be deduplicated. Every SDK shares this meaning (basecradle-ruby
+    asks ``strip.empty?``). Both places that read a key ask it here: the header builder
+    (``_idempotency_headers``) and the retry gate (``_should_retry``).
+    """
+    return value is not None and value.strip(_KEY_WHITESPACE) != ""
+
+
 def _idempotency_headers(idempotency_key: str | None) -> dict[str, str] | None:
     """The per-request header for a keyed create, or ``None`` when no key was given.
 
     Shared by every create method (here and in ``_webhooks``) so the header name lives in
     exactly one place. The platform treats the value opaquely (a UUID is recommended); a
     replay of the same key returns the original record rather than creating a duplicate.
-    An empty string is no key, so it sends no header and the create stays unkeyed.
+    A key that is empty or only whitespace is no key (``_is_idempotency_key``), so it sends
+    no header and the create stays unkeyed.
     """
-    if not idempotency_key:
-        return None
-    return {"Idempotency-Key": idempotency_key}
+    if _is_idempotency_key(idempotency_key):
+        return {"Idempotency-Key": idempotency_key}
+    return None
 
 
 def _message_request(timeline_uuid: str, body: str) -> tuple[str, str, dict[str, Any]]:

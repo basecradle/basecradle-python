@@ -20,6 +20,7 @@ from basecradle import (
     User,
     ValidationError,
 )
+from basecradle._items import _is_idempotency_key
 from tests.conftest import (
     ASSET_UUID,
     MESSAGE_UUID,
@@ -298,6 +299,20 @@ class TestCreateMessage:
         assert exc_info.value.errors == {"body": ["can't be blank"]}
 
 
+class TestWhatCountsAsAKey:
+    """One meaning in every SDK: ``None``, empty, or only whitespace is no key."""
+
+    @pytest.mark.parametrize("value", [None, "", " ", "\t\n", " \t\n\v\f\r "])
+    def test_blank_is_no_key(self, value):
+        assert not _is_idempotency_key(value)
+
+    @pytest.mark.parametrize("value", ["key-1", " key-1 ", "a b", "\x1c", "\x1f"])
+    def test_anything_else_is_a_key(self, value):
+        """Whitespace around a key leaves it a key, and so do the ASCII separators
+        ``\\x1c``-``\\x1f``: Python's ``str.isspace()`` counts them, the platform does not."""
+        assert _is_idempotency_key(value)
+
+
 class TestCreateIdempotencyKey:
     """idempotency_key attaches the Idempotency-Key header on all three item creates."""
 
@@ -342,13 +357,14 @@ class TestCreateIdempotencyKey:
 
         assert "Idempotency-Key" not in route.calls.last.request.headers
 
-    def test_empty_key_sends_no_header(self, bc, api, timeline):
-        """``idempotency_key=""`` is unkeyed: no header, so no retry either."""
+    @pytest.mark.parametrize("key", ["", " ", "\t", " \t\n "])
+    def test_blank_key_sends_no_header(self, bc, api, timeline, key):
+        """An empty or whitespace-only key is unkeyed: no header, so no retry either."""
         route = api.post(f"/timelines/{TIMELINE_UUID}/messages").respond(
             201, json={"message": message_payload()}
         )
 
-        timeline.messages.create(body="hi", idempotency_key="")
+        timeline.messages.create(body="hi", idempotency_key=key)
 
         assert "Idempotency-Key" not in route.calls.last.request.headers
 

@@ -22,6 +22,20 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
   The exact pin ships in the sdist's `pyproject.toml`, so rebuilding the sdist without
   build isolation now needs that exact hatchling.
 
+### Fixed
+
+- **A whitespace-only `idempotency_key` is no key** (#349). 0.16.0 made an empty key no
+  key; a key of only whitespace (`" "`, `"\t"`) was still put in an `Idempotency-Key`
+  header. HTTP does not allow a header value like that, so the create was never sent: it
+  failed inside the SDK with an `APIConnectionError` reading "Could not reach", though the
+  network was fine. Now a key that is `None`, empty, or only whitespace sends no header,
+  and the create goes out unkeyed, as it does with no key, so it is never auto-retried.
+  The platform reads a blank key the same way: as no key. "Whitespace" means ASCII's
+  (space, tab, newline, vertical tab, form feed, carriage return). `request()` still sends
+  the headers it is given exactly as given, but its retry gate no longer counts a blank
+  `Idempotency-Key` as a key. basecradle-ruby makes the same change, so the two SDKs
+  agree on what counts as a key.
+
 ## [0.16.1] - 2026-11-16
 
 A patch release. Nothing in the SDK's API or behaviour changed: it declares Python 3.15,
