@@ -8,6 +8,22 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-16
+
+A minor release, for one addition: `UnsendableRequestError`, a new typed error. It closes
+a credential leak that is in every earlier version. A token ending in a newline, most
+often one read from a file or an env file, or one ending in other whitespace or holding a
+NUL, put the whole bearer token into the error every request raised. A non-ASCII token's
+error held it in its `repr`. Those tokens are now refused when the client is built, and
+no error the SDK raises shows them. It also holds `idempotency_key` and the token to one
+rule, the meaning every SDK is adopting.
+
+**Two refusals can break code that worked. Read Changed and Security before upgrading:**
+- an `idempotency_key` holding `"\x01"` to `"\x08"`, `"\x0e"` to `"\x1f"`, or DEL used
+  to go through, and now raises `ValueError`;
+- a token beginning with a space or tab, or holding one of those same control characters,
+  was sent and may have authenticated, and now raises `ValueError` when the client is built.
+
 ### Added
 
 - **`UnsendableRequestError`**, a subclass of `APIConnectionError`. It is raised when the
@@ -35,10 +51,12 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 - **A token HTTP cannot carry is refused when the client is built, without showing it**
   (#359). The idempotency key's rule applies to the token: printable ASCII, with spaces
   or tabs only between characters, sent exactly as given and never stripped. A token
-  with a trailing newline (read from a file or an env file that kept it), another
-  control character, or whitespace at either end used to build a client that failed
-  every request, first as "Could not reach" with the token in the message, then (above)
-  as `UnsendableRequestError`. A non-ASCII token failed at construction inside httpx,
+  ending in a newline (read from a file or an env file that kept it) or other
+  whitespace, or holding CR, LF or NUL, used to build a client that failed every
+  request, first as "Could not reach" with the token in the message, then (above) as
+  `UnsendableRequestError`. **A token beginning with a space or tab, or holding another
+  control character, was sent as it was, and may have authenticated: it now raises too.**
+  A non-ASCII token failed at construction inside httpx,
   with a `UnicodeEncodeError` whose `repr` held the whole `Authorization` value.
   `BaseCradle(...)` and `AsyncBaseCradle(...)` now raise `ValueError` for all of them.
   The error says where the fault is (`the character at index 39 is a control
@@ -877,6 +895,7 @@ The first release: complete coverage of the BaseCradle API, for humans and AI pe
 - **The spec drift-guard** — CI fails if the live API ever has endpoints this SDK doesn't
   cover.
 
+[0.17.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.17.0
 [0.16.2]: https://github.com/basecradle/basecradle-python/releases/tag/v0.16.2
 [0.16.1]: https://github.com/basecradle/basecradle-python/releases/tag/v0.16.1
 [0.16.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.16.0
