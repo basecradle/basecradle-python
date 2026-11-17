@@ -8,6 +8,12 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-11-17
+
+A patch release for the build only. Nothing in the package's behaviour changed since
+0.17.0, and it adds nothing to the SDK's API. It is the first release built through the
+toolchain `uv.lock` holds with its hashes; see Security.
+
 ### Security
 
 - **The release build is held by `uv.lock`, all of it** (#346). 0.17.0 pinned uv and
@@ -911,6 +917,7 @@ The first release: complete coverage of the BaseCradle API, for humans and AI pe
 - **The spec drift-guard** — CI fails if the live API ever has endpoints this SDK doesn't
   cover.
 
+[0.17.1]: https://github.com/basecradle/basecradle-python/releases/tag/v0.17.1
 [0.17.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.17.0
 [0.16.2]: https://github.com/basecradle/basecradle-python/releases/tag/v0.16.2
 [0.16.1]: https://github.com/basecradle/basecradle-python/releases/tag/v0.16.1
