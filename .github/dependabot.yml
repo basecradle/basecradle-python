@@ -15,6 +15,23 @@ updates:
     interval: weekly
   cooldown:
     default-days: 7
+  # The publish path (#346): the `build` dependency group in pyproject.toml and everything
+  # it pulls into uv.lock, the packages that make the published bytes. The shared
+  # auto-merge sends an update in a group named `publish-path` to the capital rather than
+  # merging it (basecradle#874). Exact names, one per package: tests/test_dependabot.py
+  # walks the lock from the `build` group and fails while this list differs from what it
+  # finds, so a toolchain change that moves the closure moves this list in the same diff.
+  groups:
+    publish-path:
+      patterns:
+      - hatchling
+      - packaging
+      - pathspec
+      - pluggy
+      - tomli
+      - tomlkit
+      - trove-classifiers
+      - uv
   open-pull-requests-limit: 10
 - package-ecosystem: github-actions
   directory: "/"
