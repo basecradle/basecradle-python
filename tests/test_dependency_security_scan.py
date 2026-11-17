@@ -120,9 +120,8 @@ def scan_of(*advisories: Advisory, errors: dict[str, str] | None = None) -> Depe
 
 
 # How `gh issue list --json author` names this repository's own bot, which the scan runs as
-# (basecradle#870), and the capital's, which it ran as before.
+# (basecradle#870).
 SCAN_BOT = {"is_bot": True, "login": "app/basecradle-python-ai"}
-CAPITAL_BOT = {"is_bot": True, "login": "app/basecradle-ai"}
 STRANGER = {"id": "U_kgDOC0ffee", "is_bot": False, "login": "john"}
 
 
@@ -606,26 +605,14 @@ def test_an_issue_the_scan_did_not_write_is_never_read_or_touched() -> None:
     assert [(p.action, p.number, p.labels) for p in plans] == [("create", None, ["needs-human"])]
 
 
-@pytest.mark.parametrize("author", [SCAN_BOT, CAPITAL_BOT], ids=["own-bot", "capital-bot"])
-def test_an_issue_either_scan_identity_filed_is_the_scans(author: dict[str, Any]) -> None:
-    # The scan moved from the capital's bot to this repository's own (basecradle#870): an
-    # issue either one filed is updated in place, never duplicated by a fresh one beside it.
+# A sibling captain's bot, and the capital's: it ran this scan before basecradle#870, and
+# left SCAN_AUTHORS with the bridge to its key (#346).
+@pytest.mark.parametrize(
+    "login", ["app/basecradle-ruby-ai", "app/basecradle-ai"], ids=["sibling", "capital"]
+)
+def test_an_issue_another_fleet_bot_filed_is_not_the_scans(login: str) -> None:
     advisory = pypi("httpx", "GHSA-1111-2222-3333", "critical")
-    standing = open_issue(sole(scan_of(advisory).plans([])), author=author)
-
-    assert scan_of(advisory).plans([standing]) == []
-    assert sole(scan_of().plans([standing])).action == "update"
-
-    # And the could-not-run issue: the run that recovers closes it, whoever filed it.
-    stuck = open_issue(sole(scan_of(errors={"pypi": "x"}).plans([])), author=author)
-    recovered = sole(scan_of().plans([stuck]))
-    assert (recovered.action, recovered.number) == ("close", stuck["number"])
-
-
-def test_an_issue_a_sibling_bot_filed_is_not_the_scans() -> None:
-    advisory = pypi("httpx", "GHSA-1111-2222-3333", "critical")
-    sibling = {"is_bot": True, "login": "app/basecradle-ruby-ai"}
-    issue = open_issue(sole(scan_of(advisory).plans([])), author=sibling)
+    issue = open_issue(sole(scan_of(advisory).plans([])), author={"is_bot": True, "login": login})
 
     assert sole(scan_of(advisory).plans([issue])).action == "create"
 

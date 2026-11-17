@@ -70,22 +70,18 @@ jobs:
       #
       # WHOSE TOKEN (basecradle#870): this repository's own bot, basecradle-python-ai[bot].
       # FLEET_BOT_CLIENT_ID and FLEET_BOT_APP_PRIVATE_KEY hold this repository's captain's
-      # App, so the capital's key is needed nowhere here. The `|| secrets.BASECRADLE_AI_*`
-      # fallback is a bridge for the days before that pair is placed: it mints the
-      # capital's basecradle-ai[bot], as before. The capital removes it in its later
-      # handoff, in the same change that deletes the organization-level copies; that
-      # change also drops the capital's bot from the script's SCAN_AUTHORS.
+      # App, so the capital's key is needed nowhere here.
       - name: Mint this repository's bot token
         id: app-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          client-id: ${{ secrets.FLEET_BOT_CLIENT_ID || secrets.BASECRADLE_AI_CLIENT_ID }}
-          private-key: ${{ secrets.FLEET_BOT_APP_PRIVATE_KEY || secrets.BASECRADLE_AI_APP_PRIVATE_KEY }}
+          client-id: ${{ secrets.FLEET_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.FLEET_BOT_APP_PRIVATE_KEY }}
           permission-issues: write
 
       # With their authors: this repository is public, so an issue carrying the scan's
-      # title is the scan's only if one of its identities wrote it, this repository's bot
-      # or, from before basecradle#870, the capital's (the script's SCAN_AUTHORS).
+      # title is the scan's only if this repository's bot wrote it (the script's
+      # SCAN_AUTHORS).
       - name: Read the open issues
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
