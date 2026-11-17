@@ -56,14 +56,11 @@ ECOSYSTEM_NAMES = {"pypi": "Python package"}
 # (The capital's repository is private, so its scan can go by title alone.) `gh issue list`
 # names a GitHub App's bot as `app/<slug>`.
 #
-# Two, because the scan's identity moved (basecradle#870): it runs as this repository's
-# own bot, basecradle-python-ai[bot], once the FLEET_BOT_* pair is placed, and as the
-# capital's basecradle-ai[bot] before that. An issue either one filed is the scan's, so an
-# issue still open from before the move is updated and closed by the new author, never
-# duplicated beside it. The capital's entry ends with the workflow's BASECRADLE_AI_*
-# bridge: the handoff that removes the bridge removes it here too, once no open issue
-# here carries the scan's title under the capital's bot.
-SCAN_AUTHORS = frozenset({"app/basecradle-python-ai", "app/basecradle-ai"})
+# One: the scan runs as this repository's own bot, basecradle-python-ai[bot]
+# (basecradle#870). The capital's basecradle-ai[bot], which ran it before, left this set
+# with the workflow's bridge to the capital's key (#346), once no open issue here carried
+# the scan's title under it.
+SCAN_AUTHORS = frozenset({"app/basecradle-python-ai"})
 
 # Each issue body carries the state it was written for, so the next run can tell a
 # standing finding (say nothing) from a changed one.
