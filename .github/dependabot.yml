@@ -15,6 +15,15 @@ updates:
     interval: weekly
   cooldown:
     default-days: 7
+  # uv moves only with setup-uv (#373). CI installs the locked uv through setup-uv, and
+  # drift-guard refuses a uv setup-uv's built-in checksum table does not hold. A uv release
+  # always reached Dependabot before a setup-uv release carried it, so every uv bump it
+  # opened sat red (#372). Instead, the setup-uv bump moves uv: drift-guard fails it until
+  # the newest uv its new table holds is locked in that same pull request, and its failure
+  # says the command. tests/test_dependabot.py holds this list to `uv` alone. The ignore
+  # covers Dependabot's security updates too; the daily scan of uv.lock (#315) still reads uv.
+  ignore:
+  - dependency-name: uv
   # The publish path (#346): the `build` dependency group in pyproject.toml and everything
   # it pulls into uv.lock, the packages that make the published bytes. The shared
   # auto-merge sends an update in a group named `publish-path` to the capital rather than

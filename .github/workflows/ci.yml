@@ -49,7 +49,12 @@ jobs:
   # The drift-guard: fails when the live API has endpoints the SDK doesn't cover, or the
   # live docs list error codes the SDK has no typed exception for (#265), or a pinned
   # action's `# vX.Y.Z` comment no longer names the commit it is pinned to (#341), or
-  # setup-uv's built-in checksum table does not hold the uv uv.lock pins (#346).
+  # setup-uv's built-in checksum table does not hold the uv uv.lock pins (#346), or holds a
+  # newer one (#373). uv moves only with setup-uv: Dependabot ignores uv, so a setup-uv bump
+  # fails here until the newest uv its table holds is locked in that same pull request, with
+  # `uv lock --upgrade-package uv==<that version>`, the command the failure prints. Every
+  # action bump here is labelled `needs-capital` (the shared auto-merge counts actions as
+  # publish path), so the capital reads that failure and has the lock committed there.
   # The only job that reaches the live platform (one GET each of the public spec and
   # the public prose docs), and the only one that reads the actions' own repositories
   # (one anonymous `git ls-remote` per pinned action, one GET of setup-uv's table);
