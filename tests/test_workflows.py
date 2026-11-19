@@ -4383,6 +4383,10 @@ class TestEachToolchainEditIsCaught:
 # table lives in setup-uv's repository, so the check needs the network and runs in the
 # drift-guard job, which runs on the 3.10 the repository pins: the lock is read here by a
 # narrow pattern, and an offline test holds that pattern to tomllib's reading.
+#
+# The same table also moves uv (#373). Dependabot proposed each uv before any setup-uv
+# release carried it, so each bump sat red (#372); now Dependabot ignores uv, and a setup-uv
+# bump whose table holds a newer uv than the lock fails until that uv is locked with it.
 
 SETUP_UV_CHECKSUM_TABLE = "src/download/checksum/known-checksums.json"
 
@@ -4423,9 +4427,41 @@ def check_the_table_holds_the_locked_uv(version: str, table: dict[str, str], ref
     assert key in table, (
         f"uv.lock holds uv {version}, and setup-uv@{ref}'s checksum table has no `{key}`, so "
         f"CI would install that uv checked only against a checksum fetched from the host "
-        f"that served it (#346). Dependabot opens the uv bump and the setup-uv bump as separate "
-        f"pull requests: leave the uv bump red until a setup-uv release whose table carries "
-        f"uv {version} has merged, then update its branch and it re-runs green."
+        f"that served it (#346). uv moves only with the setup-uv that can verify it (#373): "
+        f"lock the newest uv this table holds instead, or move setup-uv to a release whose "
+        f"table carries uv {version} in the same pull request."
+    )
+
+
+def newest_uv_in_table(table: dict[str, str]) -> str:
+    """The newest X.Y.Z release the table holds a checksum for on the runner's target."""
+    prefix = f"{RUNNER_TARGET}-"
+    versions = [
+        key.removeprefix(prefix)
+        for key in table
+        if key.startswith(prefix) and EXACT_UV_VERSION.match(key.removeprefix(prefix))
+    ]
+    assert versions, f"the checksum table holds no uv release for `{RUNNER_TARGET}`"
+    return max(versions, key=_version_key)
+
+
+def check_the_lock_takes_the_newest_uv_the_table_holds(
+    version: str, table: dict[str, str], ref: str
+) -> None:
+    """uv moves with setup-uv (#373): the bump of one is where the other is taken.
+
+    Dependabot proposes no uv (an ``ignore`` in ``.github/dependabot.yml``): each one it
+    proposed arrived before any setup-uv release could verify it and sat red (#372). So uv
+    rides the setup-uv bump instead, and this check is what makes it ride: a setup-uv whose
+    table holds a newer uv than the lock fails here until that uv is locked in the same pull
+    request. A lock newer than the table is the check above's to refuse.
+    """
+    assert EXACT_UV_VERSION.match(version), f"{UV_VERSION_FILE} holds uv {version!r}"
+    newest = newest_uv_in_table(table)
+    assert _version_key(version) >= _version_key(newest), (
+        f"setup-uv@{ref}'s checksum table holds uv {newest}, and {UV_VERSION_FILE} holds uv "
+        f"{version}. uv moves only with setup-uv, so this pull request moves it (#373): run "
+        f"`uv lock --upgrade-package uv=={newest}` and commit {UV_VERSION_FILE} here."
     )
 
 
@@ -4451,10 +4487,12 @@ def fetch_checksum_table(ref: str) -> dict[str, str]:
 
 
 @pytest.mark.live
-def test_the_locked_uv_is_one_setup_uv_has_a_checksum_for():
+def test_the_locked_uv_is_the_newest_setup_uv_has_a_checksum_for():
     ref = setup_uv_ref({w.name: w.read_text(encoding="utf-8") for w in OWNED_WORKFLOWS})
     version = locked_uv_version_by_pattern(LOCK.read_text(encoding="utf-8"))
-    check_the_table_holds_the_locked_uv(version, fetch_checksum_table(ref), ref)
+    table = fetch_checksum_table(ref)
+    check_the_table_holds_the_locked_uv(version, table, ref)
+    check_the_lock_takes_the_newest_uv_the_table_holds(version, table, ref)
 
 
 class TestTheChecksumTableCheckItself:
@@ -4511,6 +4549,31 @@ class TestTheChecksumTableCheckItself:
     def test_a_table_without_the_version_fails(self, table):
         with pytest.raises(AssertionError, match="no `x86_64-unknown-linux-gnu-0.13.6`"):
             check_the_table_holds_the_locked_uv("0.13.6", table, "v10.3.3")
+
+    # A table in miniature: three releases, one newer only on another target, one pre-release.
+    TABLE = {
+        f"{RUNNER_TARGET}-0.9.30": "a" * 64,
+        f"{RUNNER_TARGET}-0.13.5": "a" * 64,
+        f"{RUNNER_TARGET}-0.13.6": "a" * 64,
+        "aarch64-unknown-linux-gnu-0.13.7": "a" * 64,
+        f"{RUNNER_TARGET}-0.14.0-rc.1": "a" * 64,
+    }
+
+    def test_the_newest_is_compared_as_numbers_on_the_runners_target_only(self):
+        assert newest_uv_in_table(self.TABLE) == "0.13.6"
+
+    def test_a_table_with_no_release_for_the_runner_fails(self):
+        with pytest.raises(AssertionError, match="no uv release"):
+            newest_uv_in_table({"aarch64-unknown-linux-gnu-0.13.6": "a" * 64})
+
+    @pytest.mark.parametrize("version", ["0.13.6", "0.13.7"])
+    def test_a_lock_at_or_past_the_newest_passes(self, version):
+        check_the_lock_takes_the_newest_uv_the_table_holds(version, self.TABLE, "v10.3.3")
+
+    @pytest.mark.parametrize("version", ["0.13.5", "0.9.30"])
+    def test_a_lock_behind_the_newest_says_which_uv_to_take(self, version):
+        with pytest.raises(AssertionError, match=re.escape("--upgrade-package uv==0.13.6`")):
+            check_the_lock_takes_the_newest_uv_the_table_holds(version, self.TABLE, "v10.3.3")
 
 
 # --- The pin comment names the pinned commit (live) -------------------------------------
