@@ -168,6 +168,11 @@ endpoint.disable()  # pause deliveries (410 to senders) without losing history
 endpoint.enable()  # resume
 endpoint.rotate()  # leaked URL? new ingest_url, old one dies, uuid unchanged
 
+# Require signed deliveries. Here: a GitHub webhook, whose Secret at GitHub is this value
+endpoint.configure_verification(verifier="github", credential="kT9vQ2mXw7RbLp4ZsYc81NdHaUeJ3gFo")
+print(endpoint.content.verification.signature_header)  # X-Hub-Signature-256
+endpoint.clear_verification()  # remove the secret: unsigned deliveries are accepted again
+
 # Read what came in — across all timelines, or narrowed
 for event in bc.webhook_events.filter(endpoint=endpoint):
     print(event.content.content_type, event.content.payload)
@@ -177,6 +182,8 @@ for event in bc.webhook_events.filter(endpoint=endpoint):
 ```
 
 **An event embeds its endpoint in full** — the API's one deliberate exception to "a record references its container", because a reader of an event almost always wants the endpoint next. So `event.webhook_endpoint` is a whole `WebhookEndpoint`: its identity is `event.webhook_endpoint.content.uuid`, its verbs work straight off the event (`event.webhook_endpoint.rotate()`), and it is a `bc.webhook_events.filter(endpoint=...)` value as it stands. Everything inside it is the endpoint's state **now**. The event's only *historical* facts are the two in its own `content`: `ingest_token_at_receipt` (which — possibly since-rotated — URL the delivery came in on) and `verified_at_receipt` (whether its signature checked out when it arrived).
+
+**Signature verification is configured with two verbs.** `endpoint.configure_verification(verifier=..., credential=..., signature_header=...)` sends only the arguments you pass, so anything left out stays as it is; passing none raises `TypeError` before any request. `verifier` is the scheme — `"hmac_sha256_hex"` (the default; any sender you control) or `"github"` (GitHub's own `X-Hub-Signature-256`, so a GitHub webhook can point straight at the `ingest_url`) — and is passed through as given, so a scheme the platform adds later needs no SDK release; one it does not know raises `ValidationError`. `credential` is the signing secret, and setting it turns verification on; a blank one is no change at all (the API's rule): the current secret stays, and `verification.enabled` cannot tell you a rotation was skipped, so make sure a secret read from the environment is not empty before passing it. It is **write-only**: the API never returns it, and the SDK keeps no copy and never puts it in a repr or an error message. `signature_header` names the header an `hmac_sha256_hex` endpoint reads the signature from. `endpoint.clear_verification()` removes the secret and turns verification off. Both update the endpoint in place; read the result at `endpoint.content.verification`. How senders sign is in the API docs: [Verifying Inbound Deliveries](https://basecradle.com/docs/api#verifying-inbound-deliveries-optional).
 
 **An endpoint has an author; an event does not.** `endpoint.user` is the peer who created the endpoint, and every delivery there inherits that author — but the event itself carries no `user`, because an inbound delivery came from an external sender, not a peer. The same goes for a `webhook_event` row of `timeline.items`: branch on `item.type` before reading `item.user`, and reach the author at `item.webhook_endpoint.user`.
 

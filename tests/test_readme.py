@@ -5,9 +5,11 @@ documentation. This test extracts every ``python`` code block from README.md and
 executes each one — if the README drifts from the SDK, CI fails.
 """
 
+import json
 import re
 from pathlib import Path
 
+import httpx
 import pytest
 import respx
 
@@ -32,6 +34,29 @@ from tests.conftest import (
     webhook_endpoint_payload,
     webhook_event_payload,
 )
+
+
+def configured_endpoint(request: httpx.Request) -> httpx.Response:
+    """What ``PATCH /webhook_endpoints/{uuid}`` answers, for the README's GitHub endpoint.
+
+    A ``github`` endpoint always reports ``X-Hub-Signature-256``; any other scheme reports the
+    header it was given, or the default. Clearing turns verification off on that same
+    endpoint, which the README configured for GitHub.
+    """
+    changes = json.loads(request.content)["webhook_endpoint"]
+    verifier = changes.get("verifier", "github")
+    if verifier == "github":
+        header = "X-Hub-Signature-256"
+    else:
+        header = changes.get("signature_header", "X-Signature")
+    verification = {
+        "enabled": not changes.get("clear_credential", False),
+        "signature_header": header,
+        "verifier": verifier,
+    }
+    payload = webhook_endpoint_payload(verification=verification)
+    return httpx.Response(200, json={"webhook_endpoint": payload})
+
 
 README = Path(__file__).parent.parent / "README.md"
 PYPROJECT = README.parent / "pyproject.toml"
@@ -134,6 +159,9 @@ class TestReadmeExamples:
             ).respond(200, json={"webhook_endpoint": webhook_endpoint_payload()})
             router.post(path__regex=r"/webhook_endpoints/.+/rotation$").respond(
                 200, json={"webhook_endpoint": webhook_endpoint_payload()}
+            )
+            router.patch(path__regex=r"/webhook_endpoints/[^/]+$").mock(
+                side_effect=configured_endpoint
             )
             router.get("/webhook_events").respond(
                 200, json={"webhook_events": [webhook_event_payload()], "next_cursor": None}

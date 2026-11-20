@@ -170,10 +170,12 @@ def webhook_endpoint_payload(
     ingest_url=INGEST_URL,
     timeline_uuid=TIMELINE_UUID,
     user=None,
+    verification=None,
 ):
     """A webhook endpoint in subject form (the docs' documented example).
 
-    ``user`` is the endpoint's **author** — every endpoint has one.
+    ``user`` is the endpoint's **author** — every endpoint has one. ``verification``
+    replaces the default (verification off, ``hmac_sha256_hex`` on ``X-Signature``).
     """
     return {
         "type": "webhook_endpoint",
@@ -186,7 +188,9 @@ def webhook_endpoint_payload(
             "description": description,
             "enabled": enabled,
             "ingest_url": ingest_url,
-            "verification": {
+            "verification": verification
+            if verification is not None
+            else {
                 "enabled": False,
                 "signature_header": "X-Signature",
                 "verifier": "hmac_sha256_hex",

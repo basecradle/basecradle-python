@@ -1,11 +1,13 @@
-"""Webhook endpoints & events: create, enable/disable, rotate, and the read-only event feed."""
+"""Webhook endpoints & events: create, enable/disable, rotate, signature verification, events."""
 
 import json
+import logging
 
 import httpx
 import pytest
 
 from basecradle import (
+    APIConnectionError,
     ForbiddenError,
     NotFoundError,
     TimelineLockedError,
@@ -130,6 +132,227 @@ class TestEndpointLifecycle:
 
         with pytest.raises(ForbiddenError):
             endpoint.disable()
+
+
+#: The signing secret the API docs' own example uses — fabricated, never a real secret.
+SIGNING_SECRET = "kT9vQ2mXw7RbLp4ZsYc81NdHaUeJ3gFo"
+GITHUB_VERIFICATION = {
+    "enabled": True,
+    "signature_header": "X-Hub-Signature-256",
+    "verifier": "github",
+}
+OFF_VERIFICATION = {
+    "enabled": False,
+    "signature_header": "X-Signature",
+    "verifier": "hmac_sha256_hex",
+}
+
+
+def sent_body(route):
+    return json.loads(route.calls.last.request.content)
+
+
+class TestConfigureVerification:
+    """``PATCH /webhook_endpoints/{uuid}``: only the arguments given go on the wire."""
+
+    @pytest.mark.parametrize(
+        ("argument", "wire_field", "value"),
+        [
+            ("verifier", "verifier", "github"),
+            ("credential", "verification_credential", SIGNING_SECRET),
+            ("signature_header", "signature_header", "X-Hub-Signature"),
+        ],
+    )
+    def test_each_argument_alone_sends_only_its_wire_field(
+        self, bc, api, endpoint, argument, wire_field, value
+    ):
+        route = api.patch(f"/webhook_endpoints/{WEBHOOK_ENDPOINT_UUID}").respond(
+            200, json={"webhook_endpoint": webhook_endpoint_payload()}
+        )
+
+        endpoint.configure_verification(**{argument: value})
+
+        assert sent_body(route) == {"webhook_endpoint": {wire_field: value}}
+
+    def test_all_arguments_together(self, bc, api, endpoint):
+        route = api.patch(f"/webhook_endpoints/{WEBHOOK_ENDPOINT_UUID}").respond(
+            200, json={"webhook_endpoint": webhook_endpoint_payload()}
+        )
+
+        endpoint.configure_verification(
+            verifier="hmac_sha256_hex", credential=SIGNING_SECRET, signature_header="X-Sig"
+        )
+
+        assert sent_body(route) == {
+            "webhook_endpoint": {
+                "verifier": "hmac_sha256_hex",
+                "verification_credential": SIGNING_SECRET,
+                "signature_header": "X-Sig",
+            }
+        }
+
+    def test_the_endpoint_adopts_the_verification_the_api_returns(self, bc, api, endpoint):
+        api.patch(f"/webhook_endpoints/{WEBHOOK_ENDPOINT_UUID}").respond(
+            200,
+            json={"webhook_endpoint": webhook_endpoint_payload(verification=GITHUB_VERIFICATION)},
+        )
+
+        returned = endpoint.configure_verification(verifier="github", credential=SIGNING_SECRET)
+
+        assert returned is None  # a live-object verb, like rotate(): the endpoint itself moves
+        assert isinstance(endpoint.content.verification, WebhookVerification)
+        assert endpoint.content.verification.enabled is True
+        assert endpoint.content.verification.verifier == "github"
+        assert endpoint.content.verification.signature_header == "X-Hub-Signature-256"
+
+    def test_a_verifier_the_sdk_has_never_heard_of_is_passed_through(self, bc, api, endpoint):
+        """The API's set of schemes is open; the SDK holds no list to go stale."""
+        route = api.patch(f"/webhook_endpoints/{WEBHOOK_ENDPOINT_UUID}").respond(
+            200, json={"webhook_endpoint": webhook_endpoint_payload()}
+        )
+
+        endpoint.configure_verification(verifier="stripe")
+
+        assert sent_body(route) == {"webhook_endpoint": {"verifier": "stripe"}}
+
+    def test_a_blank_credential_is_sent_as_given(self, bc, api, endpoint):
+        """The API's rule is that a blank secret is no change; the SDK does not repair it."""
+        route = api.patch(f"/webhook_endpoints/{WEBHOOK_ENDPOINT_UUID}").respond(
+            200, json={"webhook_endpoint": webhook_endpoint_payload()}
+        )
+
+        endpoint.configure_verification(credential="")
+
+        assert sent_body(route) == {"webhook_endpoint": {"verification_credential": ""}}
+        assert endpoint.content.verification.enabled is False
+
+    def test_no_arguments_is_a_usage_error_and_sends_nothing(self, bc, api, endpoint):
+        calls_before = len(api.calls)
+
+        with pytest.raises(TypeError, match="at least one of verifier, credential"):
+            endpoint.configure_verification()
+
+        assert len(api.calls) == calls_before
+
+    def test_an_unknown_verifier_surfaces_as_validation_error(self, bc, api, endpoint):
+        api.patch(f"/webhook_endpoints/{WEBHOOK_ENDPOINT_UUID}").respond(
+            422,
+            json=problem(
+                "validation_failed", 422, errors={"verifier": ["is not included in the list"]}
+            ),
+        )
+
+        with pytest.raises(ValidationError) as caught:
+            endpoint.configure_verification(verifier="nope", credential=SIGNING_SECRET)
+
+        assert caught.value.errors == {"verifier": ["is not included in the list"]}
+
+    def test_a_non_viewer_gets_forbidden(self, bc, api, endpoint):
+        api.patch(f"/webhook_endpoints/{WEBHOOK_ENDPOINT_UUID}").respond(
+            403, json=problem("not_a_viewer", 403)
+        )
+
+        with pytest.raises(ForbiddenError):
+            endpoint.configure_verification(verifier="github")
+
+
+class TestClearVerification:
+    def test_sends_clear_credential_and_adopts_verification_off(self, bc, api, endpoint):
+        route = api.patch(f"/webhook_endpoints/{WEBHOOK_ENDPOINT_UUID}").mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json={
+                        "webhook_endpoint": webhook_endpoint_payload(
+                            verification=GITHUB_VERIFICATION
+                        )
+                    },
+                ),
+                httpx.Response(
+                    200,
+                    json={
+                        "webhook_endpoint": webhook_endpoint_payload(verification=OFF_VERIFICATION)
+                    },
+                ),
+            ]
+        )
+        endpoint.configure_verification(verifier="github", credential=SIGNING_SECRET)
+        assert endpoint.content.verification.enabled is True
+
+        returned = endpoint.clear_verification()
+
+        assert returned is None
+        assert sent_body(route) == {"webhook_endpoint": {"clear_credential": True}}
+        assert endpoint.content.verification.enabled is False
+
+
+class TestTheSigningSecretIsWriteOnly:
+    """The credential goes out on the wire once and is held, printed or logged nowhere."""
+
+    def renderings(self, endpoint):
+        return (
+            repr(endpoint),
+            str(endpoint),
+            repr(endpoint.content),
+            repr(endpoint.content.verification),
+            json.dumps(endpoint.to_dict()),
+            repr(vars(endpoint)),  # an attribute stashed beside the data, not in it
+            repr(vars(endpoint.content)),
+        )
+
+    def test_the_endpoint_holds_no_copy_after_configuring(self, bc, api, endpoint):
+        api.patch(f"/webhook_endpoints/{WEBHOOK_ENDPOINT_UUID}").respond(
+            200,
+            json={"webhook_endpoint": webhook_endpoint_payload(verification=GITHUB_VERIFICATION)},
+        )
+
+        endpoint.configure_verification(verifier="github", credential=SIGNING_SECRET)
+
+        for rendered in self.renderings(endpoint):
+            assert SIGNING_SECRET not in rendered
+
+    def test_no_log_record_from_the_request_carries_the_secret(self, bc, api, endpoint, caplog):
+        """Every logger, at DEBUG, while the secret is sent: httpx's own request line too."""
+        api.patch(f"/webhook_endpoints/{WEBHOOK_ENDPOINT_UUID}").respond(
+            200,
+            json={"webhook_endpoint": webhook_endpoint_payload(verification=GITHUB_VERIFICATION)},
+        )
+
+        with caplog.at_level(logging.DEBUG):
+            endpoint.configure_verification(credential=SIGNING_SECRET)
+            logging.getLogger("basecradle.tests").debug("configured %r %s", endpoint, endpoint)
+
+        # The floor: httpx really logged this request, so the absence below is measured.
+        assert any(
+            record.name == "httpx" and "PATCH" in record.getMessage() for record in caplog.records
+        )
+        assert SIGNING_SECRET not in caplog.text
+
+    def test_an_api_error_carries_no_secret(self, bc, api, endpoint):
+        api.patch(f"/webhook_endpoints/{WEBHOOK_ENDPOINT_UUID}").respond(
+            422,
+            json=problem("validation_failed", 422, errors={"verifier": ["is not included"]}),
+        )
+
+        with pytest.raises(ValidationError) as caught:
+            endpoint.configure_verification(verifier="nope", credential=SIGNING_SECRET)
+
+        error = caught.value
+        for rendered in (str(error), repr(error), repr(vars(error))):
+            assert SIGNING_SECRET not in rendered
+
+    def test_a_connection_errors_message_and_repr_carry_no_secret(self, bc, api, endpoint):
+        """Its ``__cause__`` is httpx's own error, which holds the request, as for the token."""
+        api.patch(f"/webhook_endpoints/{WEBHOOK_ENDPOINT_UUID}").mock(
+            side_effect=httpx.ConnectError("refused")
+        )
+
+        with pytest.raises(APIConnectionError) as caught:
+            endpoint.configure_verification(credential=SIGNING_SECRET)
+
+        error = caught.value
+        for rendered in (str(error), repr(error), repr(vars(error))):
+            assert SIGNING_SECRET not in rendered
 
 
 class TestEndpointCreate:
