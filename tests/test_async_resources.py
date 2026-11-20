@@ -2,7 +2,7 @@
 
 import io
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -250,7 +250,7 @@ class TestAsyncItems:
 
         task = await timeline.tasks.create(
             instructions="Summarize the thread",
-            activate_at=datetime(2026, 1, 3, 15, 0, tzinfo=timezone.utc),
+            activate_at=datetime(2026, 1, 3, 15, 0, tzinfo=UTC),
         )
 
         sent = json.loads(route.calls.last.request.read())

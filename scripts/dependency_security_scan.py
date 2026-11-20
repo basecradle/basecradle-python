@@ -33,7 +33,7 @@ import sys
 from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -353,7 +353,7 @@ class DependencySecurityScan:
         self._ref = ref
         self._sha = sha
         self._run_url = run_url
-        self._now = now or datetime.now(timezone.utc)
+        self._now = now or datetime.now(UTC)
 
     @property
     def verdict(self) -> str:

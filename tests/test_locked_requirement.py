@@ -7,8 +7,6 @@ the line it prints carries every hash the lock holds, and that its command line 
 
 from __future__ import annotations
 
-import sys
-
 import pytest
 
 from scripts import locked_requirement
@@ -47,23 +45,15 @@ def test_anything_but_one_package_is_a_usage_error(argv, capsys):
     assert "usage" in capsys.readouterr().err
 
 
-@pytest.mark.skipif(sys.version_info < (3, 11), reason="tomllib is standard library from 3.11")
 def test_it_prints_the_real_locks_uv(capsys):
     assert locked_requirement.main(["uv"]) == 0
     line = capsys.readouterr().out.strip()
     assert line.startswith("uv==") and " --hash=sha256:" in line
 
 
-@pytest.mark.skipif(sys.version_info < (3, 11), reason="tomllib is standard library from 3.11")
 def test_a_package_the_lock_lacks_fails_with_the_reason(capsys):
     assert locked_requirement.main(["no-such-package"]) == 1
     assert "holds 0 `no-such-package` packages" in capsys.readouterr().err
-
-
-@pytest.mark.skipif(sys.version_info >= (3, 11), reason="only 3.10 lacks tomllib")
-def test_on_3_10_it_says_why_it_cannot_run(capsys):
-    assert locked_requirement.main(["uv"]) == 2
-    assert "3.11" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("version", [None, ""])

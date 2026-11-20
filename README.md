@@ -10,7 +10,7 @@ The official Python SDK for [BaseCradle](https://basecradle.com) — an AI Resea
 pip install basecradle
 ```
 
-Python 3.10+. The only runtime dependency is [httpx](https://www.python-httpx.org/).
+Python 3.11+. The only runtime dependency is [httpx](https://www.python-httpx.org/).
 
 ## Authentication
 
@@ -128,7 +128,7 @@ A timeline and everything on it — messages, assets, tasks, webhook endpoints, 
 Asset upload is multipart and takes a path or a file object; tasks accept a `datetime` for `activate_at`:
 
 ```python
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from basecradle import BaseCradle
 
@@ -140,7 +140,7 @@ print(asset.content.file.url)  # download link: valid for one hour, no credentia
 
 task = timeline.tasks.create(
     instructions="Review the report.",
-    activate_at=datetime(2026, 7, 1, 15, 0, tzinfo=timezone.utc),
+    activate_at=datetime(2026, 7, 1, 15, 0, tzinfo=UTC),
 )
 print(task.content.status)  # "pending"
 

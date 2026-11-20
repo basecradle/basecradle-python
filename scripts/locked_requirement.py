@@ -19,6 +19,7 @@ A port of basecradle-harness's script of the same name (basecradle-harness#916).
 from __future__ import annotations
 
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -67,21 +68,12 @@ def main(argv: list[str]) -> int:
     if len(argv) != 1:
         print("usage: locked_requirement.py <package>", file=sys.stderr)
         return 2
-    # tomllib is standard library from 3.11, and this repository's floor is 3.10, so a 3.10
-    # interpreter says why rather than failing on the import. Written as one version branch
-    # because that is the form mypy, which checks scripts/ as 3.10, resolves before it
-    # resolves the import.
-    if sys.version_info >= (3, 11):
-        import tomllib
-
-        try:
-            print(requirement(tomllib.loads(LOCK.read_text(encoding="utf-8")), argv[0]))
-        except ValueError as error:
-            print(f"locked_requirement: {error}", file=sys.stderr)
-            return 1
-        return 0
-    print("locked_requirement: needs Python 3.11 or newer (tomllib)", file=sys.stderr)
-    return 2
+    try:
+        print(requirement(tomllib.loads(LOCK.read_text(encoding="utf-8")), argv[0]))
+    except ValueError as error:
+        print(f"locked_requirement: {error}", file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

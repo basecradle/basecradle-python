@@ -78,6 +78,7 @@ import os
 import re
 import subprocess
 import time
+import tomllib
 import urllib.request
 from pathlib import Path
 from typing import NamedTuple
@@ -2491,19 +2492,8 @@ class TestEachReleaseEditIsCaught:
 # declares or tests; raise it early and pip refuses one that both lists still name. Only
 # the floor is compared: an upper bound is deliberately absent, because a new Python should
 # install before it is declared.
-#
-# The classifiers are read with ``tomllib``, standard library from 3.11. The 3.10 leg skips
-# the comparison rather than add ``tomli`` for one test ("every dependency is debt"): the
-# two files are identical on every leg, so the other legs read them for it. Everything
-# that reads ``ci.yml`` alone runs on every leg, 3.10 included.
 
 PYPROJECT = WORKFLOWS.parent.parent / "pyproject.toml"
-
-
-def _toml(text: str) -> dict:
-    """``text`` parsed, or the test skipped on 3.10, where ``tomllib`` is not standard."""
-    tomllib = pytest.importorskip("tomllib", reason="tomllib is standard library from 3.11")
-    return tomllib.loads(text)
 
 
 TEST_JOB = "test"
@@ -2523,7 +2513,7 @@ MATRIX_VERSION_EXPRESSION = "${{matrix.python-version}}"
 
 def declared_python_versions(pyproject_text: str) -> set[str]:
     """The ``3.N`` versions ``pyproject.toml``'s classifiers declare."""
-    classifiers = _toml(pyproject_text)["project"]["classifiers"]
+    classifiers = tomllib.loads(pyproject_text)["project"]["classifiers"]
     return {m.group("version") for c in classifiers if (m := VERSION_CLASSIFIER.fullmatch(c))}
 
 
@@ -2615,8 +2605,6 @@ def check_each_leg_sets_up_its_matrix_version(ci_text: str) -> None:
 
 
 def check_ci_tests_the_declared_python_versions(ci_text: str, pyproject_text: str) -> None:
-    # The matrix first: its shape checks need no TOML, so they still run on the 3.10 leg,
-    # where reading the classifiers skips.
     tested = set(matrix_python_versions(ci_text))
     declared = declared_python_versions(pyproject_text)
     assert declared, "pyproject.toml declares no Programming Language :: Python :: 3.N"
@@ -2660,7 +2648,7 @@ def oldest_declared_python_version(pyproject_text: str) -> str:
 
 
 def check_requires_python_floor_is_the_oldest_declared(pyproject_text: str) -> None:
-    requires = _toml(pyproject_text)["project"].get("requires-python")
+    requires = tomllib.loads(pyproject_text)["project"].get("requires-python")
     assert requires is not None, (
         "pyproject.toml has no requires-python, so pip installs the SDK on any Python; "
         'it must be ">=" followed by the oldest declared version'
@@ -3490,7 +3478,7 @@ def _requirement_name(requirement: str) -> str:
 
 def locked_uv_version(lock_text: str) -> str:
     """The one exact uv the lock holds: what setup-uv and the build both install."""
-    lock = _toml(lock_text)
+    lock = tomllib.loads(lock_text)
     try:
         version = str(locked_package(lock, "uv")["version"])
     except ValueError as error:
@@ -3525,8 +3513,8 @@ def check_setup_uv_reads_the_lock(name: str, text: str) -> None:
 def check_build_requirements_are_locked(pyproject_text: str, lock_text: str) -> None:
     """Assert the ``build`` group holds uv and every ``[build-system].requires`` entry,
     each with the same specifier, and the lock holds each with its hashes."""
-    pyproject = _toml(pyproject_text)
-    lock = _toml(lock_text)
+    pyproject = tomllib.loads(pyproject_text)
+    lock = tomllib.loads(lock_text)
     requires = pyproject.get("build-system", {}).get("requires")
     assert requires, "[build-system].requires is missing or empty: the backend comes from nowhere"
     group = pyproject.get("dependency-groups", {}).get("build")
@@ -4381,8 +4369,7 @@ class TestEachToolchainEditIsCaught:
 # that served the archive. #341 asked for a uv the table holds and nothing checked it; once
 # the lock moved uv into Dependabot's hands, nothing would have held it at all (#346). The
 # table lives in setup-uv's repository, so the check needs the network and runs in the
-# drift-guard job, which runs on the 3.10 the repository pins: the lock is read here by a
-# narrow pattern, and an offline test holds that pattern to tomllib's reading.
+# drift-guard job.
 #
 # The same table also moves uv (#373). Dependabot proposed each uv before any setup-uv
 # release carried it, so each bump sat red (#372); now Dependabot ignores uv, and a setup-uv
@@ -4392,19 +4379,6 @@ SETUP_UV_CHECKSUM_TABLE = "src/download/checksum/known-checksums.json"
 
 #: ``ubuntu-latest``'s target, the platform half of the table's ``<target>-<version>`` keys.
 RUNNER_TARGET = "x86_64-unknown-linux-gnu"
-
-#: ``uv.lock``'s uv entry: the header, then its ``name`` and ``version`` lines.
-LOCKED_UV_ENTRY = re.compile(r'^\[\[package\]\]\nname = "uv"\nversion = "([^"\n]*)"$', re.MULTILINE)
-
-
-def locked_uv_version_by_pattern(lock_text: str) -> str:
-    """The lock's one uv version, without ``tomllib`` (the drift-guard runs on 3.10)."""
-    versions = LOCKED_UV_ENTRY.findall(lock_text)
-    assert len(versions) == 1, (
-        f"{UV_VERSION_FILE} has {len(versions)} entries this pattern reads as uv's, not one: "
-        f"uv.lock's layout changed, so re-read it and fix LOCKED_UV_ENTRY"
-    )
-    return versions[0]
 
 
 def setup_uv_ref(texts: dict[str, str]) -> str:
@@ -4489,7 +4463,7 @@ def fetch_checksum_table(ref: str) -> dict[str, str]:
 @pytest.mark.live
 def test_the_locked_uv_is_the_newest_setup_uv_has_a_checksum_for():
     ref = setup_uv_ref({w.name: w.read_text(encoding="utf-8") for w in OWNED_WORKFLOWS})
-    version = locked_uv_version_by_pattern(LOCK.read_text(encoding="utf-8"))
+    version = locked_uv_version(LOCK.read_text(encoding="utf-8"))
     table = fetch_checksum_table(ref)
     check_the_table_holds_the_locked_uv(version, table, ref)
     check_the_lock_takes_the_newest_uv_the_table_holds(version, table, ref)
@@ -4497,23 +4471,6 @@ def test_the_locked_uv_is_the_newest_setup_uv_has_a_checksum_for():
 
 class TestTheChecksumTableCheckItself:
     """The offline half of the live check, on fabricated tables."""
-
-    def test_the_pattern_reads_the_lock_as_tomllib_does(self):
-        text = LOCK.read_text(encoding="utf-8")
-        assert locked_uv_version_by_pattern(text) == locked_uv_version(text)
-
-    @pytest.mark.parametrize(
-        "lock",
-        [
-            "",
-            _locked("uv") + _locked("uv", "2.0.0"),
-            _locked("uvicorn"),
-            '[[package]]\nversion = "1.0.0"\nname = "uv"\n',
-        ],
-    )
-    def test_a_lock_the_pattern_cannot_read_as_one_uv_fails(self, lock):
-        with pytest.raises(AssertionError, match="LOCKED_UV_ENTRY"):
-            locked_uv_version_by_pattern(lock)
 
     def test_reads_the_one_setup_uv_ref(self):
         texts = {

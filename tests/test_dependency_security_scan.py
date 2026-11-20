@@ -11,7 +11,7 @@ test for test, plus what reading ``osv-scanner`` adds.
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -111,7 +111,7 @@ def context() -> dict[str, Any]:
         "ref": "main",
         "sha": "0123abc",
         "run_url": "https://github.com/basecradle/basecradle-python/actions/runs/1",
-        "now": datetime(2026, 11, 7, 14, 27, tzinfo=timezone.utc),
+        "now": datetime(2026, 11, 7, 14, 27, tzinfo=UTC),
     }
 
 

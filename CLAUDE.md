@@ -75,7 +75,7 @@ The baseline to beat is the Stripe/Anthropic/OpenAI SDK experience: those wrap A
 
 | Concern | Choice | Notes |
 |---|---|---|
-| Python | **3.10+** | Modern typing without legacy baggage |
+| Python | **3.11+** | The oldest Python still receiving security fixes; the floor moves with it (→ Releasing) |
 | Toolchain | **uv** | venvs, deps, build, publish — one tool |
 | Lint + format | **ruff** | Zero config debates; CI enforces |
 | Tests | **pytest** + **respx** | respx mocks httpx at the transport level — tests never hit the network |
@@ -102,6 +102,8 @@ Runtime dependencies: `httpx`. That's the list. Every addition is argued in a PR
 ## Releasing
 
 **The captain's release responsibility ends at the version bump + changelog.** From the tag onward the **capital** owns the publish — it tags, actuates the `pypi` env-gate via its operator credential, verifies the live install, and closes the release issue (`constitution.md` → Earned Autonomy → "Publishing is the capital's, not @origin's"; the `pypi` gate is **not** a human gate, and the founder is out of the publish loop). A release is done not at PyPI but when the live `pip install` is verified — that whole tail is the capital's.
+
+**The Python floor is the oldest Python that still receives security fixes from its maintainers** (`@origin`, 2026-11-20, #381) — one rule in every SDK, so the question is never asked per release. When a Python line reaches end of life, the next release raises the floor to the next line, as a **minor** version, with a changelog entry saying so; no job runs an end-of-life Python. To raise it, invoke the `release-to-pypi` skill ("Raising the Python floor").
 
 **Versioning**: semver, `0.x` until the platform owner declares 1.0. The API is additive-only, so SDK minor versions track API additions. The public package is `basecradle` on PyPI, published via PyPI **Trusted Publishing** (GitHub Actions OIDC — no stored credentials) on git tag.
 
