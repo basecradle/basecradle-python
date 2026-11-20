@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from typing import Any, ClassVar, NoReturn, cast
+from typing import Any, ClassVar, NoReturn, Self, cast
 
 import httpx
 
@@ -602,7 +602,7 @@ class BaseCradle(_ClientCore):
         """Close the underlying HTTP connection pool."""
         self._client.close()
 
-    def __enter__(self) -> BaseCradle:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc_info: object) -> None:
@@ -796,7 +796,7 @@ class AsyncBaseCradle(_ClientCore):
         """Close the underlying HTTP connection pool."""
         await self._client.aclose()
 
-    async def __aenter__(self) -> AsyncBaseCradle:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:

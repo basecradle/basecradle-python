@@ -21,7 +21,20 @@ from basecradle import (
     User,
     WebhookEndpoint,
 )
-from basecradle._items import _M, AsyncItemsResource, ItemsResource
+from basecradle._contact_messages import (
+    AsyncContactMessagesResource,
+    ContactMessagesResource,
+    _ContactMessagesResourceCore,
+)
+from basecradle._headers import RequestHeaders
+from basecradle._items import (
+    _M,
+    AsyncItemsResource,
+    ItemsResource,
+    _ItemsResourceCore,
+    _TasksBinding,
+)
+from basecradle._webhooks import _WebhookEventsBinding
 from tests.conftest import FAKE_TOKEN
 
 RESOURCE_NAMES = (
@@ -353,3 +366,40 @@ class TestResourceModelWiring:
                 f"{resource.__name__}.{method} yields {typing.get_args(annotation)}, not "
                 f"the record TypeVar -- widening it to Any would silently undo #237"
             )
+
+
+class TestSelfReturningMethods:
+    """Each of these hands back the object it was called on, or a narrowed copy of it, so
+    its return annotation is ``typing.Self`` (#381).
+
+    A revert to a concrete class still type-checks, because for the SDK's own classes the
+    types are the same; what it loses is a subclass's own type. Ruff's PYI034 catches that
+    for ``__enter__`` and ``__aenter__``, and nothing else catches it for ``filter`` or
+    ``copy``. So read the annotation.
+    """
+
+    @pytest.mark.parametrize(
+        ("owner", "method"),
+        [
+            (BaseCradle, "__enter__"),
+            (AsyncBaseCradle, "__aenter__"),
+            (_ItemsResourceCore, "filter"),
+            (_TasksBinding, "filter"),
+            (_WebhookEventsBinding, "filter"),
+            (_ContactMessagesResourceCore, "filter"),
+            (RequestHeaders, "copy"),
+        ],
+    )
+    def test_returns_self(self, owner, method):
+        annotation = typing.get_type_hints(owner.__dict__[method])["return"]
+        assert annotation is typing.Self, (
+            f"{owner.__name__}.{method} returns {annotation!r}, not typing.Self"
+        )
+
+    @pytest.mark.parametrize("resource", [ContactMessagesResource, AsyncContactMessagesResource])
+    def test_a_filtered_subclass_is_still_the_subclass(self, resource):
+        """The runtime half: ``filter`` builds ``type(self)``, never a named class."""
+        subclass = type("Narrowed", (resource,), {})
+        narrowed = subclass(client=None).filter(status="received")
+        assert type(narrowed) is subclass
+        assert narrowed._filters == {"status": "received"}

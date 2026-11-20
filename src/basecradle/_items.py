@@ -18,7 +18,7 @@ import os
 from collections.abc import AsyncIterator, Iterator
 from datetime import datetime
 from pathlib import Path
-from typing import IO, Any, Generic, TypeGuard, TypeVar, cast
+from typing import IO, Any, Generic, Self, TypeGuard, TypeVar, cast
 
 from basecradle._header_value import _header_value_defect
 from basecradle._models import ApiObject
@@ -168,18 +168,6 @@ class Task(Item):
 #: to the binding too is the next step, not this one.
 _M = TypeVar("_M", bound=ApiObject)
 
-#: For `filter`, which returns *the same* resource narrowed. `typing.Self` would say this
-#: directly but is 3.11+, and this SDK supports 3.10 without adding `typing_extensions`
-#: (httpx is the only runtime dependency) -- so the pre-`Self` idiom: bind the TypeVar to
-#: `self`, and every subclass gets its own type back.
-#:
-#: One TypeVar per declaring class, deliberately, rather than one shared `_ItemsResourceCore`
-#: bound for all three `filter` overrides: a shared bound would make every resource an
-#: acceptable `self` for every `filter`, so `_TasksBinding.filter(bc.messages, status=...)`
-#: would type-check and post a `status` filter at `/messages`, which the API rejects.
-_R = TypeVar("_R", bound="_ItemsResourceCore[Any]")
-_RTasks = TypeVar("_RTasks", bound="_TasksBinding")
-
 
 class _ItemsResourceCore(Resource, Generic[_M]):
     """What sync and async resources share: bindings, construction, filter logic."""
@@ -210,7 +198,11 @@ class _ItemsResourceCore(Resource, Generic[_M]):
             return {"filters": self._filters}
         return {"path": path, "filters": self._filters}
 
-    def filter(self: _R, *, timeline: Any | None = None) -> _R:
+    # Each `filter` accepts only its own class as `self`, so `_TasksBinding.filter(
+    # bc.messages, status=...)` is a type error rather than a `status` filter posted at
+    # `/messages`, which the API rejects. Keep it so: never widen `self` with a TypeVar
+    # bound shared across resources, or with `Any`.
+    def filter(self, *, timeline: Any | None = None) -> Self:
         """A new lazy resource narrowed to one timeline (a ``Timeline`` or a uuid)."""
         return type(self)(self._client, filters=self._merge_filters(timeline=timeline))
 
@@ -288,7 +280,7 @@ class _TasksBinding(_ItemsResourceCore[Task]):
     _singular = "task"
     _model = Task
 
-    def filter(self: _RTasks, *, timeline: Any | None = None, status: str | None = None) -> _RTasks:
+    def filter(self, *, timeline: Any | None = None, status: str | None = None) -> Self:
         """A new lazy resource narrowed by timeline and/or status.
 
         ``status`` is one of ``pending``, ``activated``, ``blocked_timeline_locked``,

@@ -15,7 +15,7 @@ verbs on the endpoint object — ``disable()``, ``enable()``, ``rotate()``,
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterator
-from typing import Any, TypeVar
+from typing import Any, Self
 
 from basecradle._headers import RequestHeaders
 from basecradle._items import (
@@ -263,11 +263,6 @@ class _WebhookEndpointsBinding(_ItemsResourceCore[WebhookEndpoint]):
     _model = WebhookEndpoint
 
 
-#: See `_items._R`: one per declaring class, so an unrelated resource cannot be `self`
-#: for this `filter` and pick up an `endpoint` filter the wrong endpoint rejects.
-_RWebhookEvents = TypeVar("_RWebhookEvents", bound="_WebhookEventsBinding")
-
-
 class _WebhookEventsBinding(_ItemsResourceCore[WebhookEvent]):
     """Webhook events from every timeline you can view, newest first."""
 
@@ -276,9 +271,7 @@ class _WebhookEventsBinding(_ItemsResourceCore[WebhookEvent]):
     _singular = "webhook_event"
     _model = WebhookEvent
 
-    def filter(
-        self: _RWebhookEvents, *, timeline: Any | None = None, endpoint: Any | None = None
-    ) -> _RWebhookEvents:
+    def filter(self, *, timeline: Any | None = None, endpoint: Any | None = None) -> Self:
         """A new lazy resource narrowed by timeline and/or endpoint (objects or uuids)."""
         filters = self._merge_filters(timeline=timeline, endpoint=endpoint)
         return type(self)(self._client, filters=filters)
