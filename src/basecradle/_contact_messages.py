@@ -12,7 +12,7 @@ Every operation answers ``403`` (``NotAnAdminError``) to anyone who is not an ad
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterator
-from typing import Any
+from typing import Any, Self
 
 from basecradle._headers import RequestHeaders
 from basecradle._models import ApiObject
@@ -131,6 +131,10 @@ class _ContactMessagesResourceCore(Resource):
             filters["status"] = status
         return filters
 
+    def filter(self, *, status: str | None = None) -> Self:
+        """A new lazy resource narrowed by ``status``: ``received``, ``closed`` or ``spam``."""
+        return type(self)(self._client, filters=self._status_filters(status))
+
 
 class ContactMessagesResource(_ContactMessagesResourceCore):
     """Every contact message, newest first — auto-paginating, filterable. Admin-only.
@@ -147,10 +151,6 @@ class ContactMessagesResource(_ContactMessagesResourceCore):
             model=ContactMessage,
             params=self._filters,
         )
-
-    def filter(self, *, status: str | None = None) -> ContactMessagesResource:
-        """A new lazy resource narrowed by ``status``: ``received``, ``closed`` or ``spam``."""
-        return ContactMessagesResource(self._client, filters=self._status_filters(status))
 
     def get(self, uuid: str) -> ContactMessage:
         """Fetch one contact message by its uuid."""
@@ -169,10 +169,6 @@ class AsyncContactMessagesResource(_ContactMessagesResourceCore):
             model=ContactMessage,
             params=self._filters,
         )
-
-    def filter(self, *, status: str | None = None) -> AsyncContactMessagesResource:
-        """A new lazy resource narrowed by ``status``. See ``ContactMessagesResource.filter``."""
-        return AsyncContactMessagesResource(self._client, filters=self._status_filters(status))
 
     async def get(self, uuid: str) -> ContactMessage:
         """Fetch one contact message by its uuid. See ``ContactMessagesResource.get``."""

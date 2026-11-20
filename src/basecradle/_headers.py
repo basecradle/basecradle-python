@@ -9,13 +9,12 @@ case, and ``repr()`` prints names, never values (#246).
 
 from __future__ import annotations
 
-from typing import Any, TypeVar, overload
+from typing import Any, Self, TypeVar, overload
 
 _Default = TypeVar("_Default")
 #: The value type. A webhook delivery's headers are all strings; a contact message's may be
 #: ``null`` on the wire, so it is ``RequestHeaders[str | None]`` and says so.
 _V = TypeVar("_V")
-_H = TypeVar("_H", bound="RequestHeaders[Any]")
 
 __all__ = ["RequestHeaders"]
 
@@ -122,7 +121,7 @@ class RequestHeaders(dict[str, _V]):
     def __contains__(self, name: object) -> bool:
         return self._wire_name(name) is not None
 
-    def copy(self: _H) -> _H:
+    def copy(self) -> Self:
         """Another headers object of this same class — ``dict.copy()`` would silently
         downgrade to a plain dict."""
         return type(self)(self)

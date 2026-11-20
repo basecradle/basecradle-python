@@ -15,6 +15,13 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
   receives security fixes from its maintainers, and Python 3.10 reached end of life in
   October 2026. On Python 3.10, pip and uv keep resolving `basecradle` to the 0.18 line,
   which stays installable; nothing in the SDK's API or behaviour changed.
+- **Annotations use `typing.Self`** (#381), now that every supported Python has it:
+  `BaseCradle.__enter__`, `AsyncBaseCradle.__aenter__`, every resource's `.filter(...)` and
+  `RequestHeaders.copy()`. For the SDK's own classes a type checker sees the same types as
+  before; a subclass of `BaseCradle` now gets its own type back from `with`. At runtime,
+  `bc.contact_messages.filter(...)` now builds `type(self)` as every other resource's
+  does, so a subclass of `ContactMessagesResource` gets its own class back; nothing else
+  changed at runtime.
 
 ## [0.18.0] - 2026-11-20
 
