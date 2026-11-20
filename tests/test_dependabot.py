@@ -8,16 +8,14 @@ hand goes stale the day a toolchain bump brings in a new dependency, and a name 
 merges unread. So the list is held equal to a walk of the lock: a name the walk finds and the
 list lacks fails, and so does a name the list keeps after the lock dropped it.
 
-Both files are read narrowly, failing closed on any shape the reader does not know. The lock
-is read with ``tomllib``, standard library from 3.11, so the 3.10 leg skips the comparison
-(as ``tests/test_workflows.py`` does) rather than add ``tomli`` for one test.
+Both files are read narrowly, failing closed on any shape the reader does not know.
 """
 
 from __future__ import annotations
 
 import re
+import tomllib
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -36,21 +34,15 @@ IGNORED = {"uv"}
 EXACT_NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
-def _toml(text: str) -> dict[str, Any]:
-    tomllib = pytest.importorskip("tomllib", reason="tomllib is standard library from 3.11")
-    parsed: dict[str, Any] = tomllib.loads(text)
-    return parsed
-
-
 def build_closure(lock_text: str) -> set[str]:
     """Every package the project's ``build`` group reaches in the lock, markers included.
 
-    A dependency behind a marker (``tomli`` below Python 3.11) is in: whether it installs
+    A dependency behind an environment marker is in: whether it installs
     depends on the interpreter, and the list must cover every interpreter the build may use.
     Each package reached must be one PyPI entry with its hashes (``locked_package``), or the
     walk raises ``ValueError``: it cannot tell which of two entries builds.
     """
-    lock = _toml(lock_text)
+    lock = tomllib.loads(lock_text)
     projects = [package for package in lock.get("package", []) if package["name"] == PROJECT]
     assert len(projects) == 1, f"uv.lock must hold one `{PROJECT}` to start the walk from"
     start = projects[0].get("dev-dependencies", {}).get(BUILD_GROUP)

@@ -8,6 +8,14 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 ## [Unreleased]
 
+### Changed
+
+- **Python 3.11 is the minimum** (#381): `requires-python` is now `>=3.11`, and Python 3.10
+  is no longer declared or tested. The SDK's floor is the oldest Python that still
+  receives security fixes from its maintainers, and Python 3.10 reached end of life in
+  October 2026. On Python 3.10, pip and uv keep resolving `basecradle` to the 0.18 line,
+  which stays installable; nothing in the SDK's API or behaviour changed.
+
 ## [0.18.0] - 2026-11-20
 
 A minor release, for one addition: `WebhookEndpoint.configure_verification()` and

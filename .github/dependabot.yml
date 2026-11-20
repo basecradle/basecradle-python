@@ -37,7 +37,6 @@ updates:
       - packaging
       - pathspec
       - pluggy
-      - tomli
       - tomlkit
       - trove-classifiers
       - uv
