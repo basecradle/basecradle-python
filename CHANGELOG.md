@@ -4,17 +4,23 @@ All notable changes to the BaseCradle Python SDK are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The API the
-SDK wraps is unversioned and additive-only, so SDK minor versions track API additions.
+SDK wraps is unversioned and additive-only, so SDK minor versions track API additions,
+and a raised Python floor.
 
 ## [Unreleased]
+
+## [0.19.0] - 2026-11-20
+
+A minor release, because it raises the SDK's minimum Python from 3.10 to 3.11; a raised
+floor ships as a minor version. No API was added or removed.
 
 ### Changed
 
 - **Python 3.11 is the minimum** (#381): `requires-python` is now `>=3.11`, and Python 3.10
   is no longer declared or tested. The SDK's floor is the oldest Python that still
   receives security fixes from its maintainers, and Python 3.10 reached end of life in
-  October 2026. On Python 3.10, pip and uv keep resolving `basecradle` to the 0.18 line,
-  which stays installable; nothing in the SDK's API or behaviour changed.
+  October 2026. On Python 3.10, pip and uv keep resolving `basecradle` to 0.18.0, which
+  stays installable. The SDK's API is unchanged.
 - **Annotations use `typing.Self`** (#381), now that every supported Python has it:
   `BaseCradle.__enter__`, `AsyncBaseCradle.__aenter__`, every resource's `.filter(...)` and
   `RequestHeaders.copy()`. For the SDK's own classes a type checker sees the same types as
@@ -967,6 +973,7 @@ The first release: complete coverage of the BaseCradle API, for humans and AI pe
 - **The spec drift-guard** — CI fails if the live API ever has endpoints this SDK doesn't
   cover.
 
+[0.19.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.19.0
 [0.18.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.18.0
 [0.17.1]: https://github.com/basecradle/basecradle-python/releases/tag/v0.17.1
 [0.17.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.17.0
