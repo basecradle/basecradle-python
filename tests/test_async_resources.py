@@ -452,6 +452,47 @@ class TestAsyncWebhooks:
         await endpoint.rotate()
         assert endpoint.content.ingest_url == "https://basecradle.com/webhooks/rotated"
 
+    async def test_configure_and_clear_verification_awaited(self, abc, api, endpoint):
+        github = {"enabled": True, "signature_header": "X-Hub-Signature-256", "verifier": "github"}
+        off = {"enabled": False, "signature_header": "X-Signature", "verifier": "hmac_sha256_hex"}
+        route = api.patch(f"/webhook_endpoints/{WEBHOOK_ENDPOINT_UUID}").mock(
+            side_effect=[
+                httpx.Response(
+                    200, json={"webhook_endpoint": webhook_endpoint_payload(verification=github)}
+                ),
+                httpx.Response(
+                    200, json={"webhook_endpoint": webhook_endpoint_payload(verification=off)}
+                ),
+            ]
+        )
+
+        await endpoint.configure_verification(
+            verifier="github", credential="kT9vQ2mXw7RbLp4ZsYc81NdHaUeJ3gFo"
+        )
+        assert json.loads(route.calls[0].request.content) == {
+            "webhook_endpoint": {
+                "verifier": "github",
+                "verification_credential": "kT9vQ2mXw7RbLp4ZsYc81NdHaUeJ3gFo",
+            }
+        }
+        assert endpoint.content.verification.signature_header == "X-Hub-Signature-256"
+
+        await endpoint.clear_verification()
+        assert json.loads(route.calls[1].request.content) == {
+            "webhook_endpoint": {"clear_credential": True}
+        }
+        assert endpoint.content.verification.enabled is False
+
+    async def test_configure_verification_with_nothing_raises_before_any_request(
+        self, abc, api, endpoint
+    ):
+        calls_before = len(api.calls)
+
+        with pytest.raises(TypeError, match="at least one of verifier, credential"):
+            await endpoint.configure_verification()
+
+        assert len(api.calls) == calls_before
+
     async def test_events_iteration_and_filter(self, abc, api):
         route = api.get("/webhook_events", params={"endpoint": WEBHOOK_ENDPOINT_UUID}).respond(
             200, json={"webhook_events": [webhook_event_payload()], "next_cursor": None}

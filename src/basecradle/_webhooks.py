@@ -5,9 +5,11 @@ An **endpoint** is an inbound URL on a timeline: external services POST to its
 managed through the API; events are read-only — they exist only because something was
 delivered.
 
-The API models enablement and rotation as singular state resources; the SDK expresses
-them as verbs on the endpoint object — ``disable()``, ``enable()``, ``rotate()`` — never
-as raw paths. With ``AsyncBaseCradle``, await the verbs.
+The API models enablement and rotation as singular state resources, and signature
+verification as a ``PATCH`` of the endpoint itself; the SDK expresses all of them as
+verbs on the endpoint object — ``disable()``, ``enable()``, ``rotate()``,
+``configure_verification()``, ``clear_verification()`` — never as raw paths. With
+``AsyncBaseCradle``, await the verbs.
 """
 
 from __future__ import annotations
@@ -48,11 +50,17 @@ __all__ = [
 
 
 class WebhookVerification(ApiObject):
-    """Whether inbound deliveries must be signed, and how."""
+    """Whether inbound deliveries must be signed, and how.
+
+    ``enabled`` is ``True`` once a signing secret is set. The secret itself is write-only:
+    the API never returns it, so it is never here. Set it, the scheme and the header with
+    ``endpoint.configure_verification(...)``; turn verification off with
+    ``endpoint.clear_verification()``.
+    """
 
     enabled: bool
-    signature_header: str
-    verifier: str  # "hmac_sha256_hex"
+    signature_header: str  # for a "github" endpoint, always "X-Hub-Signature-256"
+    verifier: str  # "hmac_sha256_hex" or "github" — an open set; read it as a string
 
 
 class WebhookEndpointContent(ApiObject):
@@ -76,7 +84,7 @@ class WebhookEndpoint(ApiObject):
 
     type: str  # "webhook_endpoint"
     created_at: str
-    updated_at: str  # moves when the description, enabled state or ingest URL changes
+    updated_at: str  # moves when the endpoint changes
     user: User  # the endpoint's author, in nested-actor form
     timeline: ApiObject  # reference form — dereference via bc.timelines.get(...)
     content: WebhookEndpointContent
@@ -102,10 +110,70 @@ class WebhookEndpoint(ApiObject):
         Use this when an ingest URL leaks. Recorded events are preserved.
         With ``AsyncBaseCradle``, await this.
         """
-        return self._verb("POST", f"/webhook_endpoints/{self.content.uuid}/rotation", self._adopt)
+        return self._verb("POST", f"{self._endpoint_path()}/rotation", self._adopt)
+
+    def configure_verification(
+        self,
+        *,
+        verifier: str | None = None,
+        credential: str | None = None,
+        signature_header: str | None = None,
+    ) -> Any:
+        """Set how inbound deliveries must be signed: the scheme, the secret, the header.
+
+        Every argument is optional and only the ones you pass are sent, so anything left
+        out stays as it is; pass at least one, or this raises ``TypeError`` before any
+        request is made. ``verifier`` is the scheme — ``"hmac_sha256_hex"`` (the default)
+        or ``"github"`` — passed through as given, so a scheme the platform adds later
+        works here unchanged; one it does not know raises ``ValidationError``.
+        ``credential`` is the signing secret, sent as ``verification_credential``: setting
+        it turns verification on. A blank one is sent as given and the API treats it as no
+        change: the current secret, if any, stays. ``content.verification.enabled`` cannot
+        tell a skipped rotation from a real one, so make sure a secret read from the
+        environment is not empty before passing it. It is write-only: the API never returns
+        it, and this SDK keeps no copy and never puts it in a repr or an error message. ``signature_header``
+        is the header the signature is read from, for ``"hmac_sha256_hex"`` only; a
+        ``"github"`` endpoint always reads ``X-Hub-Signature-256``.
+
+        Any viewer of the endpoint's timeline may configure it, locked timeline or not.
+        Live object: the API returns the whole endpoint and this object adopts it, so
+        ``content.verification`` shows the new state. With ``AsyncBaseCradle``, await this:
+        ``await endpoint.configure_verification(verifier="github", credential=secret)``.
+        """
+        fields = {
+            "verifier": verifier,
+            "verification_credential": credential,
+            "signature_header": signature_header,
+        }
+        given = {name: value for name, value in fields.items() if value is not None}
+        if not given:
+            raise TypeError(
+                "configure_verification() needs at least one of verifier, credential or "
+                "signature_header. Nothing was sent."
+            )
+        return self._verb(
+            "PATCH", self._endpoint_path(), self._adopt, json={"webhook_endpoint": given}
+        )
+
+    def clear_verification(self) -> Any:
+        """Remove the signing secret and turn verification off.
+
+        Deliveries are accepted unsigned again, and ``content.verification.enabled`` reads
+        ``False``. Live object: this object adopts the endpoint the API returns. With
+        ``AsyncBaseCradle``, await this.
+        """
+        return self._verb(
+            "PATCH",
+            self._endpoint_path(),
+            self._adopt,
+            json={"webhook_endpoint": {"clear_credential": True}},
+        )
+
+    def _endpoint_path(self) -> str:
+        return f"/webhook_endpoints/{self.content.uuid}"
 
     def _enablement_path(self) -> str:
-        return f"/webhook_endpoints/{self.content.uuid}/enablement"
+        return f"{self._endpoint_path()}/enablement"
 
     def _adopt(self, response: dict[str, Any]) -> None:
         """Live-object update: the API returned the complete endpoint; adopt it."""

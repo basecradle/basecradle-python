@@ -8,6 +8,24 @@ SDK wraps is unversioned and additive-only, so SDK minor versions track API addi
 
 ## [Unreleased]
 
+### Added
+
+- **`WebhookEndpoint.configure_verification()` and `.clear_verification()`** (#376): set and
+  remove an endpoint's signature verification, wrapping `PATCH /webhook_endpoints/{uuid}`,
+  which the platform documented and added to its OpenAPI contract on 2026-11-20 together
+  with a second scheme, `github`. `configure_verification(verifier=..., credential=...,
+  signature_header=...)` sends only the arguments given (as `verifier`,
+  `verification_credential` and `signature_header`), and raises `TypeError` before any
+  request when given none. `verifier` is passed through as a string, `"hmac_sha256_hex"` or
+  `"github"` today, so a scheme added later needs no release; an unknown one raises
+  `ValidationError`. The `credential` is the signing secret; a blank one is sent as given,
+  and the API treats it as no change (the current secret stays). It is write-only: the API never returns it, and the
+  SDK keeps no copy and never puts it in a repr or an error message.
+  `clear_verification()` sends `clear_credential: true`, which removes the secret and turns
+  verification off. Both update the endpoint in place, like `rotate()`, so the new state
+  reads at `endpoint.content.verification`; for a `github` endpoint its `signature_header`
+  is `X-Hub-Signature-256`. Both work on `AsyncBaseCradle` (await them).
+
 ## [0.17.1] - 2026-11-17
 
 A patch release for the build only. Nothing in the package's behaviour changed since
