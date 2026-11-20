@@ -1,10 +1,10 @@
 """Seven workflow invariants: bounded artifact retention, a gate that covers every job, a
 gate that cannot fail open, a release pipeline that publishes what it says it does, a test
 matrix that runs exactly the Python versions the package declares, with a
-``requires-python`` floor at the oldest of them (#336, #338), an action
-pinned to a commit SHA in every workflow that holds a secret or a write grant (#339), and a
-build toolchain held by uv.lock rather than fetched fresh on each tag (#341, #346). The last three
-carry their reasons beside their code, at the end of this file.
+``requires-python`` floor and a ``.python-version`` at the oldest of them (#336, #338,
+#382), an action pinned to a commit SHA in every workflow that holds a secret or a write
+grant (#339), and a build toolchain held by uv.lock rather than fetched fresh on each tag
+(#341, #346). The last three carry their reasons beside their code, at the end of this file.
 
 ``constitution.md`` → How We Build: whatever a build leaves behind has a named owner, a
 fixed home, and a stated end, and nothing outlives 30 days without a written reason. A
@@ -2877,6 +2877,133 @@ class TestTheRequiresPythonFloorDriftIsCaught:
         broken = _mutate(pyproject, floor_line, self._requires(form.format(m=oldest_minor)))
         with pytest.raises(AssertionError, match="reads only a lone floor"):
             check_requires_python_floor_is_the_oldest_declared(broken)
+
+
+# ``.python-version`` is a fourth copy of the floor (#382), and the one that decides what
+# runs. ``ci.yml``'s ``lint``, ``drift`` and ``types`` jobs hand setup-uv no
+# ``python-version``, and the build action's uv-managed CPython (``ci.yml``'s and
+# ``release.yml``'s ``build``) reads it too, so all five run the interpreter it names. Raise
+# the floor everywhere else and forget it, and CI stays green while those five, the release
+# build among them, keep running the end-of-life line the raise dropped.
+
+PYTHON_VERSION_FILE = PYPROJECT.parent / ".python-version"
+
+#: The one ``.python-version`` form the check reads: a lone ``3.N`` line. uv also accepts a
+#: patch number, an implementation prefix, a ``t`` suffix, comments and several lines, and
+#: each would need its own reading of "the floor", so each is refused instead. ASCII digits
+#: and no leading zero, so the text reads as the same version a human sees.
+PYTHON_VERSION_PIN = re.compile(r"(?P<version>3\.(?:0|[1-9][0-9]*))\n?")
+
+
+def read_python_version_file(path: Path) -> str:
+    """The file's text exactly as committed: bytes decoded, never newline-translated, so a
+    carriage return reaches the check instead of being quietly read as ``\\n``."""
+    assert path.is_file(), (
+        f"{path.name} is missing, so the jobs that read it run whichever Python uv finds "
+        f"first that requires-python allows; it must hold the oldest declared version, one "
+        f"3.N line"
+    )
+    return path.read_bytes().decode("utf-8")
+
+
+def check_python_version_file_is_the_floor(python_version_text: str, pyproject_text: str) -> None:
+    pin = PYTHON_VERSION_PIN.fullmatch(python_version_text)
+    assert pin, (
+        f".python-version is {python_version_text!r}; this check reads only one line, "
+        f'"3.N" and a newline, with no patch number, prefix, suffix, comment, whitespace, '
+        f"carriage return or second line"
+    )
+    oldest = oldest_declared_python_version(pyproject_text)
+    assert pin.group("version") == oldest, (
+        f".python-version is {pin.group('version')} but the oldest declared Python is "
+        f"{oldest}: it must be {oldest}. Every job without a python-version of its own, the "
+        f"release build among them, runs the interpreter it names, so left behind on a floor "
+        f"raise it keeps them on the line the raise dropped; ahead of it, mypy (which targets "
+        f"the interpreter it runs on) passes code the oldest declared Python cannot run."
+    )
+
+
+def test_python_version_file_is_the_oldest_declared_version():
+    check_python_version_file_is_the_floor(
+        read_python_version_file(PYTHON_VERSION_FILE), PYPROJECT.read_text(encoding="utf-8")
+    )
+
+
+class TestThePythonVersionFileDriftIsCaught:
+    """One probe per direction ``.python-version`` can leave the floor, and one per shape
+    the check refuses to read. The file is one line, so each probe writes that line itself,
+    derived from the oldest version declared: a floor raise changes no probe, and a real
+    drift in the file fails only the check above, never a probe's setup."""
+
+    @pytest.fixture(scope="module")
+    @classmethod
+    def pyproject(cls):
+        return PYPROJECT.read_text(encoding="utf-8")
+
+    @pytest.fixture(scope="module")
+    @classmethod
+    def oldest(cls, pyproject):
+        return oldest_declared_python_version(pyproject)
+
+    @pytest.mark.parametrize("step", [-1, 1], ids=["below", "above"])
+    def test_a_pin_off_the_oldest_declared_version_is_caught(self, pyproject, oldest, step):
+        """Below is the state raising the floor and forgetting this file leaves behind."""
+        pin = f"3.{_version_key(oldest)[1] + step}\n"
+        with pytest.raises(
+            AssertionError, match=rf"oldest declared Python is {re.escape(oldest)}:"
+        ):
+            check_python_version_file_is_the_floor(pin, pyproject)
+
+    def test_a_floor_raised_without_the_pin_is_caught(self, pyproject, oldest):
+        """The same drift seen from pyproject.toml's side: the oldest classifier dropped."""
+        classifier = f'    "Programming Language :: Python :: {oldest}",\n'
+        broken = _mutate(pyproject, classifier, "")
+        with pytest.raises(AssertionError, match=rf"\.python-version is {re.escape(oldest)} but"):
+            check_python_version_file_is_the_floor(f"{oldest}\n", broken)
+
+    @pytest.mark.parametrize(
+        "form",
+        [
+            "{v}.9\n",
+            "cpython-{v}\n",
+            "{v}t\n",
+            "{v}\n3.99\n",
+            "# floor\n{v}\n",
+            " {v}\n",
+            "{v} \n",
+            "{v}\r\n",
+            "{v}\n\n",
+            "3.0{m}\n",
+            "",
+        ],
+        ids=[
+            "patch",
+            "prefix",
+            "free-threaded",
+            "two-lines",
+            "comment",
+            "indented",
+            "trailing-space",
+            "crlf",
+            "trailing-blank-line",
+            "leading-zero",
+            "empty",
+        ],
+    )
+    def test_a_pin_in_any_other_form_is_refused(self, pyproject, oldest, form):
+        pin = form.format(v=oldest, m=_version_key(oldest)[1])
+        with pytest.raises(AssertionError, match="reads only one line"):
+            check_python_version_file_is_the_floor(pin, pyproject)
+
+    def test_a_carriage_return_in_the_file_reaches_the_check(self, tmp_path, oldest):
+        """Read as text, ``3.N\\r\\n`` would arrive as ``3.N\\n`` and pass."""
+        path = tmp_path / ".python-version"
+        path.write_bytes(f"{oldest}\r\n".encode())
+        assert read_python_version_file(path) == f"{oldest}\r\n"
+
+    def test_a_missing_file_is_caught(self, tmp_path):
+        with pytest.raises(AssertionError, match=r"\.python-version is missing"):
+            read_python_version_file(tmp_path / ".python-version")
 
 
 # The sixth invariant (#339): wherever a workflow holds power, its actions are pinned to a
