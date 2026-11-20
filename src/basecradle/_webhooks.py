@@ -131,9 +131,10 @@ class WebhookEndpoint(ApiObject):
         change: the current secret, if any, stays. ``content.verification.enabled`` cannot
         tell a skipped rotation from a real one, so make sure a secret read from the
         environment is not empty before passing it. It is write-only: the API never returns
-        it, and this SDK keeps no copy and never puts it in a repr or an error message. ``signature_header``
-        is the header the signature is read from, for ``"hmac_sha256_hex"`` only; a
-        ``"github"`` endpoint always reads ``X-Hub-Signature-256``.
+        it, and this SDK keeps no copy and never puts it in a repr or an error message.
+        ``signature_header`` is the header the signature is read from, for
+        ``"hmac_sha256_hex"`` only; a ``"github"`` endpoint always reads
+        ``X-Hub-Signature-256``.
 
         Any viewer of the endpoint's timeline may configure it, locked timeline or not.
         Live object: the API returns the whole endpoint and this object adopts it, so
