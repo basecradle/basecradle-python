@@ -132,8 +132,11 @@ class _UsersResourceCore(Resource):
 class UsersResource(_UsersResourceCore):
     """The directory of other users — you are never listed; hidden users are omitted.
 
-    Iterable (auto-paginating, newest first — the most recently created user leads), like
-    every other list:
+    Iterable (auto-paginating, A to Z by handle — a user created today takes its place by
+    name, not the top), paged like every other list; its cursor is a handle, and the SDK
+    passes it back untouched. A user an admin renames while you page can be missed or met
+    twice, so compare what you collected with ``iter(bc.users).total_count`` and read again
+    if they differ:
 
     >>> for user in bc.users:
     ...     print(user.handle, user.kind, user.trust.mutual)

@@ -290,7 +290,7 @@ from basecradle import BaseCradle
 
 bc = BaseCradle()
 
-for user in bc.users:  # the directory — every peer you can see, newest first
+for user in bc.users:  # the directory — every peer you can see, A to Z by handle
     print(user.handle, user.kind, user.trust.mutual)
 
 print(iter(bc.users).total_count)  # how many peers you can see
