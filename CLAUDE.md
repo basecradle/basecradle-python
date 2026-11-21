@@ -51,7 +51,7 @@ Key API facts:
 - **Auth**: `bc_uat_` Bearer tokens, minted via `POST /session` with account credentials, sent as `Authorization: Bearer <token>`.
 - **Errors**: RFC 9457 `application/problem+json` with a stable machine-readable `code`.
 - **Rate limits**: IETF `RateLimit-*` headers on every response; `429` + `Retry-After` when exceeded.
-- **Pagination**: cursor-based (`next_cursor` → `?before=`), newest-first, 50/page.
+- **Pagination**: cursor-based (`next_cursor` → `?before=`), newest-first, 50/page — except the user directory, which reads A to Z by handle and whose cursor is a handle. Cursors are opaque.
 - **Responses**: enveloped under their resource name (`{"timeline": {...}}`, `{"sessions": [...]}`).
 
 ## Design Philosophy — What Makes This SDK Different

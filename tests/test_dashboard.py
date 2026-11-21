@@ -113,7 +113,7 @@ class TestMe:
         interaction = bc.me.interaction
 
         assert isinstance(interaction.pagination, DashboardPagination)
-        assert "newest-first, 50 per page" in interaction.pagination.summary
+        assert "the user directory alone is A to Z by handle" in interaction.pagination.summary
         assert interaction.pagination.guide_url == "https://basecradle.com/docs/api.md#pagination"
 
         assert isinstance(interaction.tools, DashboardTools)

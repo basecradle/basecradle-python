@@ -9,12 +9,25 @@ and a raised Python floor.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The user directory reads A to Z by handle, and the SDK now says so** (#393): `GET /users`
+  returns users in handle order. For a few hours after the directory was paged the API
+  returned it newest first, a regression in the platform, and 0.20.0 documented that order
+  as a decision. The README, the `bc.users` docstring and the pagination engine's docstring
+  now say A to Z by handle, and `InvalidCursorError` no longer says a cursor is a record
+  UUID: a cursor is opaque, a record UUID on most lists and a handle in the directory.
+  Nothing in the SDK reads a cursor's shape, so paging the directory needs no code change:
+  `bc.users` already sent back the handle the API gave it. Tests now pin the directory
+  arriving in handle order across a page boundary, its handle cursor sent back as is.
+
 ## [0.20.0] - 2026-11-21
 
 A minor release: every list now reports its `total_count`, an addition a caller can read,
-and the user directory is paged and ordered newest first. What iterating a list returns is
-now a `ListIterator` object rather than a generator, so the generator-only methods (`send`,
-`close`, and their kin) are gone; plain iteration is unchanged.
+and the user directory is paged (its order is corrected under Changed, #393). What
+iterating a list returns is now a `ListIterator` object rather than a generator, so the
+generator-only methods (`send`, `close`, and their kin) are gone; plain iteration is
+unchanged.
 
 ### Added
 
@@ -31,12 +44,12 @@ now a `ListIterator` object rather than a generator, so the generator-only metho
 
 ### Changed
 
-- **`bc.users` pages, and the directory is newest first** (#389): `GET /users` is now paged
-  like every other list (up to 50 per page, `next_cursor`, `?before=`) and ordered newest
-  first, where it used to return every user in one response, ordered by handle. Iterating
-  `bc.users` still yields every user you can see, following the cursor to the end; only the
-  order changes. Code that relied on handle order should sort: `sorted(bc.users, key=lambda
-  user: user.handle)`.
+- **`bc.users` pages** (#389): `GET /users` is now paged like every other list (up to 50 per
+  page, `next_cursor`, `?before=`), where it used to return every user in one response.
+  Iterating `bc.users` still yields every user you can see, following the cursor to the
+  end. *Corrected (#393):* this entry first announced a newest-first order, which
+  was a short-lived regression in the platform; the directory reads A to Z by handle, as it
+  did before.
 - **A list iterator is an object, not a generator** (#389): what `iter()` returns from a
   list resource is a `ListIterator` rather than a generator, so the generator-only methods
   (`send`, `throw`, `close`, and the async `asend`, `athrow`, `aclose`) are gone; iteration

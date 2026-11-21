@@ -618,17 +618,19 @@ class TestAsyncUsers:
         assert all(isinstance(u, User) for u in users)
         assert users[0].handle == "nova"
 
-    async def test_directory_pages_through_the_cursor_to_its_end(self, abc, api):
+    async def test_directory_arrives_in_the_apis_handle_order_across_a_page_boundary(
+        self, abc, api
+    ):
         route = api.get("/users").mock(
             side_effect=[
                 httpx.Response(
                     200,
                     json=directory_page(
-                        directory_user_payload(user=NOVA), next_cursor=NOVA["uuid"], total_count=2
+                        directory_user_payload(user=JOHN), next_cursor=JOHN["handle"], total_count=2
                     ),
                 ),
                 httpx.Response(
-                    200, json=directory_page(directory_user_payload(user=JOHN), total_count=2)
+                    200, json=directory_page(directory_user_payload(user=NOVA), total_count=2)
                 ),
             ]
         )
@@ -636,8 +638,8 @@ class TestAsyncUsers:
         users = abc.users.__aiter__()
 
         assert await users.total_count == 2
-        assert [u.handle for u in await alist(users)] == ["nova", "john"]
-        assert route.calls.last.request.url.params["before"] == NOVA["uuid"]
+        assert [u.handle for u in await alist(users)] == ["john", "nova"]
+        assert route.calls.last.request.url.params["before"] == "john"
         assert route.call_count == 2
 
     async def test_get(self, abc, api):

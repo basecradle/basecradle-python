@@ -215,7 +215,11 @@ class InvalidRequestError(BaseCradleError):
 
 
 class InvalidCursorError(InvalidRequestError):
-    """``invalid_cursor`` — the ``before`` pagination cursor is not a valid record UUID."""
+    """``invalid_cursor`` — the ``before`` cursor is not one a list could have returned.
+
+    A cursor is opaque: a record UUID on most lists, a handle in the user directory. The
+    SDK only ever sends back the ``next_cursor`` the API gave it.
+    """
 
 
 class InvalidFilterError(InvalidRequestError):

@@ -23,8 +23,8 @@ class TestDirectory:
         api.get("/users").respond(
             200,
             json=directory_page(
-                directory_user_payload(user=NOVA),
                 directory_user_payload(user=JOHN, you_trust=True, trusts_you=True),
+                directory_user_payload(user=NOVA),
             ),
         )
 
@@ -32,43 +32,45 @@ class TestDirectory:
 
         assert len(users) == 2
         assert all(isinstance(u, User) for u in users)
-        assert [u.handle for u in users] == ["nova", "john"]
+        assert [u.handle for u in users] == ["john", "nova"]
 
-    def test_directory_pages_through_the_cursor_to_its_end(self, bc, api):
-        """The directory is paged like every other list: ``next_cursor`` → ``?before=``.
+    def test_directory_arrives_in_the_apis_handle_order_across_a_page_boundary(self, bc, api):
+        """The directory reads A to Z by handle, paged like every other list.
 
-        Iterating it still yields every user, across every page, and stops at the page
-        whose cursor is ``null``.
+        The order is the API's: the SDK never sorts, it yields records in the order the
+        pages carry them. The directory's cursor is a handle, where every other list's is a
+        record UUID, and the SDK sends back exactly the ``next_cursor`` it was given, so the
+        next page is the handles after it, until the page whose cursor is ``null``.
         """
         route = api.get("/users").mock(
             side_effect=[
                 httpx.Response(
                     200,
                     json=directory_page(
-                        directory_user_payload(user=NOVA),
-                        next_cursor=NOVA["uuid"],
+                        directory_user_payload(user=JOHN),
+                        next_cursor=JOHN["handle"],
                         total_count=2,
                     ),
                 ),
                 httpx.Response(
-                    200, json=directory_page(directory_user_payload(user=JOHN), total_count=2)
+                    200, json=directory_page(directory_user_payload(user=NOVA), total_count=2)
                 ),
             ]
         )
 
         users = list(bc.users)
 
-        assert [u.handle for u in users] == ["nova", "john"]
+        assert [u.handle for u in users] == ["john", "nova"]
         first, second = route.calls
         assert "before" not in first.request.url.params
-        assert second.request.url.params["before"] == NOVA["uuid"]
+        assert second.request.url.params["before"] == "john"
 
     def test_the_directory_reports_its_total_count(self, bc, api):
         """Every user under the directory, every page counted — read before iterating."""
         route = api.get("/users").respond(
             200,
             json=directory_page(
-                directory_user_payload(user=NOVA), next_cursor=NOVA["uuid"], total_count=51
+                directory_user_payload(user=JOHN), next_cursor=JOHN["handle"], total_count=51
             ),
         )
 

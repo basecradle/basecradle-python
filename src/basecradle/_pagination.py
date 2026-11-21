@@ -1,11 +1,14 @@
 """The shared cursor-pagination engine — sync and async on one core.
 
-Every list endpoint in the API paginates the same way: newest first, up to 50 per page,
-``next_cursor`` in the response passed back as ``?before=`` for the next (older) page,
-``null`` cursor meaning the end, and ``total_count`` beside it: how many records the whole
-list holds under the filters passed, every page counted. The page logic lives here, once,
-in ``_ListIteratorCore``; ``ListIterator`` and ``AsyncListIterator`` are the thin sync and
-async loops over it, and ``paginate`` / ``apaginate`` build them.
+Every list endpoint in the API paginates the same way: up to 50 per page, ``next_cursor``
+in the response passed back as ``?before=`` for the next page, ``null`` cursor meaning the
+end, and ``total_count`` beside it: how many records the whole list holds under the filters
+passed, every page counted. Lists are newest first, except the user directory, which reads
+A to Z by handle. The cursor is opaque — a record UUID on most lists, a handle in the
+directory — so the engine never looks at its shape: it sends back exactly the cursor the
+last page carried, and yields records in the order the API sent them. The page logic lives
+here, once, in ``_ListIteratorCore``; ``ListIterator`` and ``AsyncListIterator`` are the
+thin sync and async loops over it, and ``paginate`` / ``apaginate`` build them.
 """
 
 from __future__ import annotations
