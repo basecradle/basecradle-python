@@ -9,6 +9,13 @@ and a raised Python floor.
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-11-21
+
+A minor release: every list now reports its `total_count`, an addition a caller can read,
+and the user directory is paged and ordered newest first. What iterating a list returns is
+now a `ListIterator` object rather than a generator, so the generator-only methods (`send`,
+`close`, and their kin) are gone; plain iteration is unchanged.
+
 ### Added
 
 - **`total_count` on every list** (#389): the API now reports, beside `next_cursor`, how
@@ -1001,6 +1008,7 @@ The first release: complete coverage of the BaseCradle API, for humans and AI pe
 - **The spec drift-guard** — CI fails if the live API ever has endpoints this SDK doesn't
   cover.
 
+[0.20.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.20.0
 [0.19.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.19.0
 [0.18.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.18.0
 [0.17.1]: https://github.com/basecradle/basecradle-python/releases/tag/v0.17.1
