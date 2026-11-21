@@ -22,6 +22,7 @@ from tests.conftest import (
     NOVA,
     asset_payload,
     contact_message_payload,
+    directory_page,
     directory_user_payload,
     lock_response,
     message_payload,
@@ -121,7 +122,7 @@ class TestReadmeExamples:
             router.get("/users/dashboard").respond(200, json=DASHBOARD_RESPONSE)
             router.get("/users/dashboard.md").respond(200, text=DASHBOARD_MD)
             router.get("/timelines").respond(
-                200, json={"timelines": [timeline_payload()], "next_cursor": None}
+                200, json={"timelines": [timeline_payload()], "next_cursor": None, "total_count": 1}
             )
             router.post("/timelines").respond(
                 201, json={"timeline": timeline_payload(participants=[]), "items": []}
@@ -144,12 +145,14 @@ class TestReadmeExamples:
                 200, json={"task": task_payload(status="cancelled")}
             )
             router.get("/messages").respond(
-                200, json={"messages": [message_payload()], "next_cursor": None}
+                200, json={"messages": [message_payload()], "next_cursor": None, "total_count": 1}
             )
             router.get("/assets").respond(
-                200, json={"assets": [asset_payload()], "next_cursor": None}
+                200, json={"assets": [asset_payload()], "next_cursor": None, "total_count": 1}
             )
-            router.get("/tasks").respond(200, json={"tasks": [task_payload()], "next_cursor": None})
+            router.get("/tasks").respond(
+                200, json={"tasks": [task_payload()], "next_cursor": None, "total_count": 1}
+            )
             router.post(path__regex=r"/timelines/.+/webhook_endpoints$").respond(
                 201, json={"webhook_endpoint": webhook_endpoint_payload()}
             )
@@ -164,7 +167,12 @@ class TestReadmeExamples:
                 side_effect=configured_endpoint
             )
             router.get("/webhook_events").respond(
-                200, json={"webhook_events": [webhook_event_payload()], "next_cursor": None}
+                200,
+                json={
+                    "webhook_events": [webhook_event_payload()],
+                    "next_cursor": None,
+                    "total_count": 1,
+                },
             )
             router.get("/users/sessions").respond(
                 200,
@@ -178,13 +186,14 @@ class TestReadmeExamples:
                         ),
                     ],
                     "next_cursor": None,
+                    "total_count": 2,
                 },
             )
             router.delete(path__regex=r"/users/sessions/.+$").respond(204)
             router.delete("/session").respond(204)
             router.patch("/users/password").respond(204)
             router.get("/users").respond(
-                200, json={"users": [directory_user_payload(user=NOVA, trusts_you=True)]}
+                200, json=directory_page(directory_user_payload(user=NOVA, trusts_you=True))
             )
             router.get(path__regex=r"/users/019e.+$").respond(
                 200, json={"user": directory_user_payload(user=NOVA, trusts_you=True)}
@@ -196,7 +205,12 @@ class TestReadmeExamples:
                 },
             )
             router.get("/contact_messages").respond(
-                200, json={"contact_messages": [contact_message_payload()], "next_cursor": None}
+                200,
+                json={
+                    "contact_messages": [contact_message_payload()],
+                    "next_cursor": None,
+                    "total_count": 1,
+                },
             )
             router.post(path__regex=r"/contact_messages/.+/notes$").respond(
                 201, json={"note": note_payload()}
@@ -204,7 +218,9 @@ class TestReadmeExamples:
             router.patch(path__regex=r"/contact_messages/.+/status$").respond(
                 200, json={"contact_message": contact_message_payload(status="closed")}
             )
-            router.get("/notes").respond(200, json={"notes": [note_payload()], "next_cursor": None})
+            router.get("/notes").respond(
+                200, json={"notes": [note_payload()], "next_cursor": None, "total_count": 1}
+            )
             yield router
 
     @pytest.mark.parametrize("block_number", range(len(python_blocks())))

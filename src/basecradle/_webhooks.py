@@ -14,7 +14,6 @@ verbs on the endpoint object — ``disable()``, ``enable()``, ``rotate()``,
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator
 from typing import Any, Self
 
 from basecradle._headers import RequestHeaders
@@ -26,6 +25,7 @@ from basecradle._items import (
     _NestedCreatorCore,
 )
 from basecradle._models import ApiObject
+from basecradle._pagination import AsyncListIterator, ListIterator
 from basecradle._users import User
 
 __all__ = [
@@ -323,7 +323,7 @@ class TimelineWebhookEndpoints(_NestedCreatorCore):
         )
         return _endpoint_from(response, self._client)
 
-    def __iter__(self) -> Iterator[WebhookEndpoint]:
+    def __iter__(self) -> ListIterator[WebhookEndpoint]:
         return iter(WebhookEndpointsResource(self._client).filter(timeline=self._timeline_uuid))
 
 
@@ -340,7 +340,7 @@ class AsyncTimelineWebhookEndpoints(_NestedCreatorCore):
         )
         return _endpoint_from(response, self._client)
 
-    def __aiter__(self) -> AsyncIterator[WebhookEndpoint]:
+    def __aiter__(self) -> AsyncListIterator[WebhookEndpoint]:
         return (
             AsyncWebhookEndpointsResource(self._client)
             .filter(timeline=self._timeline_uuid)
@@ -351,14 +351,14 @@ class AsyncTimelineWebhookEndpoints(_NestedCreatorCore):
 class TimelineWebhookEvents(_NestedCreatorCore):
     """One timeline's webhook events — read-only, so iterate is all there is."""
 
-    def __iter__(self) -> Iterator[WebhookEvent]:
+    def __iter__(self) -> ListIterator[WebhookEvent]:
         return iter(WebhookEventsResource(self._client).filter(timeline=self._timeline_uuid))
 
 
 class AsyncTimelineWebhookEvents(_NestedCreatorCore):
     """One timeline's webhook events, async — read-only."""
 
-    def __aiter__(self) -> AsyncIterator[WebhookEvent]:
+    def __aiter__(self) -> AsyncListIterator[WebhookEvent]:
         return (
             AsyncWebhookEventsResource(self._client)
             .filter(timeline=self._timeline_uuid)

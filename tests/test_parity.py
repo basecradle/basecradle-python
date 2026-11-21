@@ -7,7 +7,6 @@ the other, or if the two ever stop sharing model classes.
 
 import inspect
 import typing
-from collections.abc import AsyncIterator, Iterator
 
 import pytest
 
@@ -34,6 +33,7 @@ from basecradle._items import (
     _ItemsResourceCore,
     _TasksBinding,
 )
+from basecradle._pagination import AsyncListIterator, ListIterator
 from basecradle._webhooks import _WebhookEventsBinding
 from tests.conftest import FAKE_TOKEN
 
@@ -81,6 +81,18 @@ class TestClientParity:
             }
 
         assert resource_names(sync_client) == resource_names(async_client)
+
+    def test_every_list_resource_iterates_through_the_list_iterator(self, both_clients):
+        """Every list carries ``total_count``, so every list resource hands back the one
+        iterator that exposes it — a resource that loops on its own would silently lose it.
+
+        Building the iterator fetches nothing, so no request is mocked here.
+        """
+        sync_client, async_client = both_clients
+
+        for name in RESOURCE_NAMES:
+            assert isinstance(iter(getattr(sync_client, name)), ListIterator), name
+            assert isinstance(getattr(async_client, name).__aiter__(), AsyncListIterator), name
 
     def test_both_clients_share_construction_semantics(self, monkeypatch):
         monkeypatch.delenv("BASECRADLE_TOKEN", raising=False)
@@ -338,9 +350,9 @@ class TestResourceModelWiring:
     @pytest.mark.parametrize(
         ("resource", "method", "container"),
         [
-            (ItemsResource, "__iter__", Iterator),
+            (ItemsResource, "__iter__", ListIterator),
             (ItemsResource, "get", None),
-            (AsyncItemsResource, "__aiter__", AsyncIterator),
+            (AsyncItemsResource, "__aiter__", AsyncListIterator),
             (AsyncItemsResource, "get", None),
         ],
     )

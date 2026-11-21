@@ -10,11 +10,10 @@ Every operation answers ``403`` (``NotAnAdminError``) to anyone who is not an ad
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 from basecradle._models import ApiObject
-from basecradle._pagination import apaginate, paginate
+from basecradle._pagination import AsyncListIterator, ListIterator, apaginate, paginate
 from basecradle._resources import Resource
 from basecradle._users import User
 
@@ -53,7 +52,7 @@ class NotesResource(_NotesResourceCore):
     ...     print(note.user.handle, note.notable.type, note.body)
     """
 
-    def __iter__(self) -> Iterator[Note]:
+    def __iter__(self) -> ListIterator[Note]:
         return paginate(self._client, "/notes", envelope_key="notes", model=Note)
 
     def get(self, uuid: str) -> Note:
@@ -64,7 +63,7 @@ class NotesResource(_NotesResourceCore):
 class AsyncNotesResource(_NotesResourceCore):
     """Every note, async: ``async for note in abc.notes``. Admin-only."""
 
-    def __aiter__(self) -> AsyncIterator[Note]:
+    def __aiter__(self) -> AsyncListIterator[Note]:
         return apaginate(self._client, "/notes", envelope_key="notes", model=Note)
 
     async def get(self, uuid: str) -> Note:

@@ -117,6 +117,19 @@ def directory_user_payload(*, user=None, you_trust=False, trusts_you=False):
     return base
 
 
+def directory_page(*users, next_cursor=None, total_count=None):
+    """One page of ``GET /users``: the rows, the cursor, and the directory's total.
+
+    ``total_count`` defaults to the rows on this page, which is the whole directory when
+    this is its only page (``next_cursor`` ``None``).
+    """
+    return {
+        "users": list(users),
+        "next_cursor": next_cursor,
+        "total_count": len(users) if total_count is None else total_count,
+    }
+
+
 def trusted_peer_user_payload(*, user=None, roles=None, **trust):
     """The middle access tier: a user who trusts you (adds the trusted-peer cluster)."""
     return {

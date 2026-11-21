@@ -11,13 +11,12 @@ Every operation answers ``403`` (``NotAnAdminError``) to anyone who is not an ad
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator
 from typing import Any, Self
 
 from basecradle._headers import RequestHeaders
 from basecradle._models import ApiObject
 from basecradle._notes import Note
-from basecradle._pagination import apaginate, paginate
+from basecradle._pagination import AsyncListIterator, ListIterator, apaginate, paginate
 from basecradle._resources import Resource
 from basecradle._users import User
 
@@ -143,7 +142,7 @@ class ContactMessagesResource(_ContactMessagesResourceCore):
     ...     print(message.name, message.email_address, message.body)
     """
 
-    def __iter__(self) -> Iterator[ContactMessage]:
+    def __iter__(self) -> ListIterator[ContactMessage]:
         return paginate(
             self._client,
             "/contact_messages",
@@ -161,7 +160,7 @@ class ContactMessagesResource(_ContactMessagesResourceCore):
 class AsyncContactMessagesResource(_ContactMessagesResourceCore):
     """Every contact message, async: ``async for message in abc.contact_messages``."""
 
-    def __aiter__(self) -> AsyncIterator[ContactMessage]:
+    def __aiter__(self) -> AsyncListIterator[ContactMessage]:
         return apaginate(
             self._client,
             "/contact_messages",

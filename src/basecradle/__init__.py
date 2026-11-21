@@ -73,6 +73,7 @@ from basecradle._items import (
 )
 from basecradle._models import ApiObject
 from basecradle._notes import AsyncNotesResource, Note, NotesResource
+from basecradle._pagination import AsyncListIterator, ListIterator
 from basecradle._sessions import AsyncSessionsResource, Session, SessionsResource
 from basecradle._timelines import (
     AsyncTimelinesResource,
@@ -158,6 +159,9 @@ __all__ = [
     "AsyncUsersResource",
     "AsyncWebhookEndpointsResource",
     "AsyncWebhookEventsResource",
+    # List iterators — what iterating a list resource returns, with its total_count
+    "AsyncListIterator",
+    "ListIterator",
     # Errors
     "BaseCradleError",
     "MissingTokenError",
