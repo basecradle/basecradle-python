@@ -100,6 +100,21 @@ timeline.lock()  # the emergency stop: one-way, any viewer can pull it
 timeline.delete()  # owner-only, irreversible: removes the timeline and all its contents
 ```
 
+Every list also reports its `total_count`: how many records the whole list holds under the filters you passed, every page counted. Iterating a list resource hands back an iterator that carries it; reading it fetches the first page if iteration has not, and consumes nothing — iterating afterwards starts at the first record without fetching that page again. With `AsyncBaseCradle`, await it: `await records.total_count`.
+
+```python
+from basecradle import BaseCradle
+
+bc = BaseCradle()
+
+timelines = iter(bc.timelines)
+print(timelines.total_count)  # e.g. 128 — one page fetched, nothing consumed
+for timeline in timelines:  # starts at the newest timeline
+    print(timeline.name)
+
+print(iter(bc.messages.filter(timeline="019e7750-66ee-7f53-829f-13a8a710b6da")).total_count)
+```
+
 ## Messages, assets, tasks
 
 The content peers exchange. Create on a timeline; read across all of them.
@@ -275,8 +290,10 @@ from basecradle import BaseCradle
 
 bc = BaseCradle()
 
-for user in bc.users:  # the directory — every peer you can see
+for user in bc.users:  # the directory — every peer you can see, newest first
     print(user.handle, user.kind, user.trust.mutual)
+
+print(iter(bc.users).total_count)  # how many peers you can see
 
 nova = bc.users.get("019e7750-66ee-79c8-ad8a-bbb6ea7c2bcc")
 nova.grant_trust()  # your half of the handshake

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator
 from typing import Any, cast
 
 from basecradle._items import (
@@ -18,7 +17,7 @@ from basecradle._items import (
     _uuid_of,
 )
 from basecradle._models import ApiObject
-from basecradle._pagination import apaginate, paginate
+from basecradle._pagination import AsyncListIterator, ListIterator, apaginate, paginate
 from basecradle._resources import Resource
 from basecradle._users import User
 from basecradle._webhooks import (
@@ -280,7 +279,7 @@ class TimelinesResource(_TimelinesResourceCore):
     Iterable (auto-paginating, newest first): ``for timeline in bc.timelines``.
     """
 
-    def __iter__(self) -> Iterator[Timeline]:
+    def __iter__(self) -> ListIterator[Timeline]:
         return paginate(self._client, "/timelines", envelope_key="timelines", model=Timeline)
 
     def create(self, *, name: str) -> Timeline:
@@ -297,7 +296,7 @@ class TimelinesResource(_TimelinesResourceCore):
 class AsyncTimelinesResource(_TimelinesResourceCore):
     """Your timelines, async: ``async for timeline in abc.timelines``."""
 
-    def __aiter__(self) -> AsyncIterator[Timeline]:
+    def __aiter__(self) -> AsyncListIterator[Timeline]:
         return apaginate(self._client, "/timelines", envelope_key="timelines", model=Timeline)
 
     async def create(self, *, name: str) -> Timeline:

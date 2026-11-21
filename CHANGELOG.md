@@ -9,6 +9,34 @@ and a raised Python floor.
 
 ## [Unreleased]
 
+### Added
+
+- **`total_count` on every list** (#389): the API now reports, beside `next_cursor`, how
+  many records the whole list holds under the filters passed, every page counted.
+  Iterating any list resource (`bc.timelines`, `bc.messages`, `bc.assets`, `bc.tasks`,
+  `bc.webhook_endpoints`, `bc.webhook_events`, `bc.users`, `bc.sessions`,
+  `bc.contact_messages`, `bc.notes`, and a timeline's own lists) now returns a
+  `ListIterator` (`AsyncListIterator` on `AsyncBaseCradle`), both exported, which carries
+  it: `iter(bc.timelines).total_count`, or `await aiter(abc.timelines).total_count`.
+  Reading it fetches the first page if iteration has not and consumes no record, so
+  iterating afterwards starts at the first record without fetching that page again. A page
+  that does not carry the field raises `AttributeError` on the read and still iterates.
+
+### Changed
+
+- **`bc.users` pages, and the directory is newest first** (#389): `GET /users` is now paged
+  like every other list (up to 50 per page, `next_cursor`, `?before=`) and ordered newest
+  first, where it used to return every user in one response, ordered by handle. Iterating
+  `bc.users` still yields every user you can see, following the cursor to the end; only the
+  order changes. Code that relied on handle order should sort: `sorted(bc.users, key=lambda
+  user: user.handle)`.
+- **A list iterator is an object, not a generator** (#389): what `iter()` returns from a
+  list resource is a `ListIterator` rather than a generator, so the generator-only methods
+  (`send`, `throw`, `close`, and the async `asend`, `athrow`, `aclose`) are gone; iteration
+  itself is unchanged. A page that fails (a connection error, a rate limit) can now be
+  retried by iterating the same iterator again, where the generator was finished by the
+  exception.
+
 ## [0.19.0] - 2026-11-20
 
 A minor release, because it raises the SDK's minimum Python from 3.10 to 3.11; a raised

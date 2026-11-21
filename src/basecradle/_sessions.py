@@ -8,11 +8,10 @@ and revokes its own credentials without a human.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 from basecradle._models import ApiObject
-from basecradle._pagination import apaginate, paginate
+from basecradle._pagination import AsyncListIterator, ListIterator, apaginate, paginate
 from basecradle._resources import Resource
 
 __all__ = ["AsyncSessionsResource", "Session", "SessionsResource"]
@@ -63,7 +62,7 @@ class SessionsResource(_SessionsResourceCore):
     ...         session.revoke()        # kill every API token except the one in use
     """
 
-    def __iter__(self) -> Iterator[Session]:
+    def __iter__(self) -> ListIterator[Session]:
         return paginate(self._client, "/users/sessions", envelope_key="sessions", model=Session)
 
     def revoke_all(self) -> None:
@@ -81,7 +80,7 @@ class SessionsResource(_SessionsResourceCore):
 class AsyncSessionsResource(_SessionsResourceCore):
     """Every credential you hold, async: ``async for session in abc.sessions``."""
 
-    def __aiter__(self) -> AsyncIterator[Session]:
+    def __aiter__(self) -> AsyncListIterator[Session]:
         return apaginate(self._client, "/users/sessions", envelope_key="sessions", model=Session)
 
     async def revoke_all(self) -> None:

@@ -15,14 +15,13 @@ models), the filter logic, the payload builders, and the response handlers are w
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncIterator, Iterator
 from datetime import datetime
 from pathlib import Path
 from typing import IO, Any, Generic, Self, TypeGuard, TypeVar, cast
 
 from basecradle._header_value import _header_value_defect
 from basecradle._models import ApiObject
-from basecradle._pagination import apaginate, paginate
+from basecradle._pagination import AsyncListIterator, ListIterator, apaginate, paginate
 from basecradle._resources import Resource
 from basecradle._users import User
 
@@ -220,7 +219,7 @@ class _ItemsResourceCore(Resource, Generic[_M]):
 class ItemsResource(_ItemsResourceCore[_M]):
     """The sync cross-timeline list + get pattern."""
 
-    def __iter__(self) -> Iterator[_M]:
+    def __iter__(self) -> ListIterator[_M]:
         return paginate(
             self._client,
             self._path,
@@ -237,7 +236,7 @@ class ItemsResource(_ItemsResourceCore[_M]):
 class AsyncItemsResource(_ItemsResourceCore[_M]):
     """The async cross-timeline list + get pattern: ``async for`` / ``await .get()``."""
 
-    def __aiter__(self) -> AsyncIterator[_M]:
+    def __aiter__(self) -> AsyncListIterator[_M]:
         return apaginate(
             self._client,
             self._path,
@@ -432,7 +431,7 @@ class TimelineMessages(_NestedCreatorCore):
         )
         return _message_from(response, self._client)
 
-    def __iter__(self) -> Iterator[Message]:
+    def __iter__(self) -> ListIterator[Message]:
         return iter(MessagesResource(self._client).filter(timeline=self._timeline_uuid))
 
 
@@ -447,7 +446,7 @@ class AsyncTimelineMessages(_NestedCreatorCore):
         )
         return _message_from(response, self._client)
 
-    def __aiter__(self) -> AsyncIterator[Message]:
+    def __aiter__(self) -> AsyncListIterator[Message]:
         return AsyncMessagesResource(self._client).filter(timeline=self._timeline_uuid).__aiter__()
 
 
@@ -476,7 +475,7 @@ class TimelineAssets(_NestedCreatorCore):
                 fileobj.close()
         return _asset_from(response, self._client)
 
-    def __iter__(self) -> Iterator[Asset]:
+    def __iter__(self) -> ListIterator[Asset]:
         return iter(AssetsResource(self._client).filter(timeline=self._timeline_uuid))
 
 
@@ -502,7 +501,7 @@ class AsyncTimelineAssets(_NestedCreatorCore):
                 fileobj.close()
         return _asset_from(response, self._client)
 
-    def __aiter__(self) -> AsyncIterator[Asset]:
+    def __aiter__(self) -> AsyncListIterator[Asset]:
         return AsyncAssetsResource(self._client).filter(timeline=self._timeline_uuid).__aiter__()
 
 
@@ -532,7 +531,7 @@ class TimelineTasks(_NestedCreatorCore):
         )
         return _task_from(response, self._client)
 
-    def __iter__(self) -> Iterator[Task]:
+    def __iter__(self) -> ListIterator[Task]:
         return iter(TasksResource(self._client).filter(timeline=self._timeline_uuid))
 
 
@@ -553,7 +552,7 @@ class AsyncTimelineTasks(_NestedCreatorCore):
         )
         return _task_from(response, self._client)
 
-    def __aiter__(self) -> AsyncIterator[Task]:
+    def __aiter__(self) -> AsyncListIterator[Task]:
         return AsyncTasksResource(self._client).filter(timeline=self._timeline_uuid).__aiter__()
 
 

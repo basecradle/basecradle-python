@@ -28,6 +28,7 @@ from tests.conftest import (
     TIMELINE_UUID,
     WEBHOOK_ENDPOINT_UUID,
     asset_payload,
+    directory_page,
     directory_user_payload,
     lock_response,
     message_payload,
@@ -610,12 +611,34 @@ class TestAsyncSessions:
 
 class TestAsyncUsers:
     async def test_directory_iteration(self, abc, api):
-        api.get("/users").respond(200, json={"users": [directory_user_payload(user=NOVA)]})
+        api.get("/users").respond(200, json=directory_page(directory_user_payload(user=NOVA)))
 
         users = await alist(abc.users)
 
         assert all(isinstance(u, User) for u in users)
         assert users[0].handle == "nova"
+
+    async def test_directory_pages_through_the_cursor_to_its_end(self, abc, api):
+        route = api.get("/users").mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json=directory_page(
+                        directory_user_payload(user=NOVA), next_cursor=NOVA["uuid"], total_count=2
+                    ),
+                ),
+                httpx.Response(
+                    200, json=directory_page(directory_user_payload(user=JOHN), total_count=2)
+                ),
+            ]
+        )
+
+        users = abc.users.__aiter__()
+
+        assert await users.total_count == 2
+        assert [u.handle for u in await alist(users)] == ["nova", "john"]
+        assert route.calls.last.request.url.params["before"] == NOVA["uuid"]
+        assert route.call_count == 2
 
     async def test_get(self, abc, api):
         api.get(f"/users/{JOHN['uuid']}").respond(
@@ -628,7 +651,7 @@ class TestAsyncUsers:
         assert john.handle == "john"
 
     async def test_grant_trust_awaited_updates_live_object(self, abc, api):
-        api.get("/users").respond(200, json={"users": [directory_user_payload(user=NOVA)]})
+        api.get("/users").respond(200, json=directory_page(directory_user_payload(user=NOVA)))
         api.post(f"/users/{NOVA['uuid']}/trust").respond(
             201, json={"user": directory_user_payload(user=NOVA, you_trust=True)}
         )
@@ -642,7 +665,7 @@ class TestAsyncUsers:
 
     async def test_revoke_trust_awaited(self, abc, api):
         api.get("/users").respond(
-            200, json={"users": [directory_user_payload(user=NOVA, you_trust=True)]}
+            200, json=directory_page(directory_user_payload(user=NOVA, you_trust=True))
         )
         api.delete(f"/users/{NOVA['uuid']}/trust").respond(204)
 

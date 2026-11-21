@@ -1,5 +1,6 @@
 """Users & trust: the directory, access-tiered profiles, and the trust handshake."""
 
+import httpx
 import pytest
 
 from basecradle import NotFoundError, User
@@ -8,6 +9,7 @@ from tests.conftest import (
     JOHN,
     NOVA,
     TIMELINE_UUID,
+    directory_page,
     directory_user_payload,
     participation_response,
     problem,
@@ -20,12 +22,10 @@ class TestDirectory:
     def test_iteration_returns_users(self, bc, api):
         api.get("/users").respond(
             200,
-            json={
-                "users": [
-                    directory_user_payload(user=NOVA),
-                    directory_user_payload(user=JOHN, you_trust=True, trusts_you=True),
-                ]
-            },
+            json=directory_page(
+                directory_user_payload(user=NOVA),
+                directory_user_payload(user=JOHN, you_trust=True, trusts_you=True),
+            ),
         )
 
         users = list(bc.users)
@@ -34,18 +34,50 @@ class TestDirectory:
         assert all(isinstance(u, User) for u in users)
         assert [u.handle for u in users] == ["nova", "john"]
 
-    def test_directory_is_a_single_unpaginated_request(self, bc, api):
-        """The directory has no cursor — one request, no pagination params."""
-        route = api.get("/users").respond(200, json={"users": [directory_user_payload()]})
+    def test_directory_pages_through_the_cursor_to_its_end(self, bc, api):
+        """The directory is paged like every other list: ``next_cursor`` → ``?before=``.
 
-        list(bc.users)
+        Iterating it still yields every user, across every page, and stops at the page
+        whose cursor is ``null``.
+        """
+        route = api.get("/users").mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json=directory_page(
+                        directory_user_payload(user=NOVA),
+                        next_cursor=NOVA["uuid"],
+                        total_count=2,
+                    ),
+                ),
+                httpx.Response(
+                    200, json=directory_page(directory_user_payload(user=JOHN), total_count=2)
+                ),
+            ]
+        )
 
-        assert route.call_count == 1
-        assert "before" not in str(route.calls.last.request.url)
+        users = list(bc.users)
+
+        assert [u.handle for u in users] == ["nova", "john"]
+        first, second = route.calls
+        assert "before" not in first.request.url.params
+        assert second.request.url.params["before"] == NOVA["uuid"]
+
+    def test_the_directory_reports_its_total_count(self, bc, api):
+        """Every user under the directory, every page counted — read before iterating."""
+        route = api.get("/users").respond(
+            200,
+            json=directory_page(
+                directory_user_payload(user=NOVA), next_cursor=NOVA["uuid"], total_count=51
+            ),
+        )
+
+        assert iter(bc.users).total_count == 51
+        assert route.call_count == 1  # one page read for the total; page 2 never fetched
 
     def test_rows_are_lean_but_trust_is_always_readable(self, bc, api):
         api.get("/users").respond(
-            200, json={"users": [directory_user_payload(you_trust=True, trusts_you=True)]}
+            200, json=directory_page(directory_user_payload(you_trust=True, trusts_you=True))
         )
 
         (nova,) = bc.users
@@ -57,7 +89,7 @@ class TestDirectory:
         assert not hasattr(nova, "about")
 
     def test_empty_directory(self, bc, api):
-        api.get("/users").respond(200, json={"users": []})
+        api.get("/users").respond(200, json=directory_page())
 
         assert list(bc.users) == []
 
@@ -213,7 +245,7 @@ class TestGrantTrust:
 
     def test_grant_is_idempotent(self, bc, api):
         api.get("/users").respond(
-            200, json={"users": [directory_user_payload(user=NOVA, you_trust=True)]}
+            200, json=directory_page(directory_user_payload(user=NOVA, you_trust=True))
         )
         api.post(f"/users/{NOVA['uuid']}/trust").respond(
             201, json={"user": directory_user_payload(user=NOVA, you_trust=True)}
@@ -225,7 +257,7 @@ class TestGrantTrust:
         assert nova.trust.you_trust is True
 
     def test_grant_to_unknown_user_raises_not_found(self, bc, api):
-        api.get("/users").respond(200, json={"users": [directory_user_payload(user=NOVA)]})
+        api.get("/users").respond(200, json=directory_page(directory_user_payload(user=NOVA)))
         api.post(f"/users/{NOVA['uuid']}/trust").respond(404, json=problem("not_found", 404))
 
         (nova,) = bc.users
@@ -237,7 +269,7 @@ class TestRevokeTrust:
     def test_revoke_deletes_and_updates_live_object(self, bc, api):
         api.get("/users").respond(
             200,
-            json={"users": [directory_user_payload(user=NOVA, you_trust=True, trusts_you=True)]},
+            json=directory_page(directory_user_payload(user=NOVA, you_trust=True, trusts_you=True)),
         )
         route = api.delete(f"/users/{NOVA['uuid']}/trust").respond(204)
 
@@ -253,7 +285,7 @@ class TestRevokeTrust:
         assert nova.trust.trusts_you is True
 
     def test_revoke_is_idempotent(self, bc, api):
-        api.get("/users").respond(200, json={"users": [directory_user_payload(user=NOVA)]})
+        api.get("/users").respond(200, json=directory_page(directory_user_payload(user=NOVA)))
         api.delete(f"/users/{NOVA['uuid']}/trust").respond(204)
 
         (nova,) = bc.users
@@ -266,7 +298,7 @@ class TestOneUserClassEverywhere:
     """Acceptance criterion: THE User class — the same one, everywhere a user appears."""
 
     def test_directory_dashboard_get_and_timeline_owner_share_one_class(self, bc, api):
-        api.get("/users").respond(200, json={"users": [directory_user_payload(user=NOVA)]})
+        api.get("/users").respond(200, json=directory_page(directory_user_payload(user=NOVA)))
         api.get(f"/users/{JOHN['uuid']}").respond(
             200, json={"user": trusted_peer_user_payload(user=JOHN)}
         )
@@ -294,7 +326,7 @@ class TestTheHandshake:
 
     def test_directory_to_participation(self, bc, api):
         api.get("/users").respond(
-            200, json={"users": [directory_user_payload(user=NOVA, trusts_you=True)]}
+            200, json=directory_page(directory_user_payload(user=NOVA, trusts_you=True))
         )
         api.post(f"/users/{NOVA['uuid']}/trust").respond(
             201,

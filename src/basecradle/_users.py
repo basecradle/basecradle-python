@@ -10,10 +10,10 @@ own outgoing edge; sharing a timeline requires both edges (``trust.mutual``).
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 from basecradle._models import ApiObject
+from basecradle._pagination import AsyncListIterator, ListIterator, apaginate, paginate
 from basecradle._resources import Resource
 
 __all__ = ["AsyncUsersResource", "Trust", "User", "UsersResource"]
@@ -132,16 +132,15 @@ class _UsersResourceCore(Resource):
 class UsersResource(_UsersResourceCore):
     """The directory of other users — you are never listed; hidden users are omitted.
 
+    Iterable (auto-paginating, newest first — the most recently created user leads), like
+    every other list:
+
     >>> for user in bc.users:
     ...     print(user.handle, user.kind, user.trust.mutual)
     """
 
-    def __iter__(self) -> Iterator[User]:
-        # The directory is not paginated (no next_cursor in the API contract) —
-        # one request returns everyone you can see.
-        response = self._client.request("GET", "/users")
-        for data in response["users"]:
-            yield User(data, client=self._client)
+    def __iter__(self) -> ListIterator[User]:
+        return paginate(self._client, "/users", envelope_key="users", model=User)
 
     def get(self, uuid: str) -> User:
         """Fetch one user in subject form.
@@ -156,11 +155,8 @@ class UsersResource(_UsersResourceCore):
 class AsyncUsersResource(_UsersResourceCore):
     """The directory of other users, async: ``async for user in abc.users``."""
 
-    async def __aiter__(self) -> AsyncIterator[User]:
-        # The directory is not paginated — one request returns everyone you can see.
-        response = await self._client.request("GET", "/users")
-        for data in response["users"]:
-            yield User(data, client=self._client)
+    def __aiter__(self) -> AsyncListIterator[User]:
+        return apaginate(self._client, "/users", envelope_key="users", model=User)
 
     async def get(self, uuid: str) -> User:
         """Fetch one user in subject form. See ``UsersResource.get`` for access tiers."""
