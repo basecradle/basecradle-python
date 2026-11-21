@@ -9,6 +9,11 @@ and a raised Python floor.
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-11-21
+
+A patch release: what the SDK says about the user directory is corrected, in the README
+and in the docstrings `help()` shows. No API was added or removed, and no behaviour changed.
+
 ### Fixed
 
 - **The user directory reads A to Z by handle, and the SDK now says so** (#393): `GET /users`
@@ -1021,6 +1026,7 @@ The first release: complete coverage of the BaseCradle API, for humans and AI pe
 - **The spec drift-guard** — CI fails if the live API ever has endpoints this SDK doesn't
   cover.
 
+[0.20.1]: https://github.com/basecradle/basecradle-python/releases/tag/v0.20.1
 [0.20.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.20.0
 [0.19.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.19.0
 [0.18.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.18.0
