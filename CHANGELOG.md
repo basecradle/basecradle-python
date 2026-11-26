@@ -9,6 +9,14 @@ and a raised Python floor.
 
 ## [Unreleased]
 
+## [0.20.2] - 2026-11-26
+
+A patch release: what the SDK says about changing a password and about webhook signature
+verification is corrected, in the README and in the docstrings `help()` shows. The platform
+changed both on 2026-11-25. Nothing was added to or removed from what the SDK lets you
+call or catch (the two new verifier schemes already passed through as strings), and the
+SDK's behaviour did not change.
+
 ### Fixed
 
 - **A password change signs out every other session, and the SDK now says so** (#401). On
@@ -1059,6 +1067,7 @@ The first release: complete coverage of the BaseCradle API, for humans and AI pe
 - **The spec drift-guard** — CI fails if the live API ever has endpoints this SDK doesn't
   cover.
 
+[0.20.2]: https://github.com/basecradle/basecradle-python/releases/tag/v0.20.2
 [0.20.1]: https://github.com/basecradle/basecradle-python/releases/tag/v0.20.1
 [0.20.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.20.0
 [0.19.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.19.0
