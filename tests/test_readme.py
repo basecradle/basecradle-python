@@ -40,8 +40,9 @@ from tests.conftest import (
 def configured_endpoint(request: httpx.Request) -> httpx.Response:
     """What ``PATCH /webhook_endpoints/{uuid}`` answers, for the README's GitHub endpoint.
 
-    A ``github`` endpoint always reports ``X-Hub-Signature-256``; any other scheme reports the
-    header it was given, or the default. Clearing turns verification off on that same
+    A ``github`` endpoint always reports ``X-Hub-Signature-256``. This fake answers any other
+    scheme with the header it was given, or the default; the README configures only
+    ``github``, so no other scheme reaches it. Clearing turns verification off on that same
     endpoint, which the README configured for GitHub.
     """
     changes = json.loads(request.content)["webhook_endpoint"]

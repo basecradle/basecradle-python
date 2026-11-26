@@ -506,10 +506,15 @@ class BaseCradle(_ClientCore):
         going through.
 
         .. note::
-            **A password change signs nothing out.** Every session stays valid — this
-            client's token, your other API tokens, and every web sign-in. So changing a
-            password is not remediation for a leaked credential: revoke it
-            (``session.revoke()``, or ``bc.sessions.revoke_all()`` for all of them).
+            **A successful change signs out every other session** of the account — your
+            other API tokens and every web sign-in alike. Each answers ``401`` from then
+            on, so another client holding one raises ``AuthenticationError`` on its next
+            call; mint it a new token with ``BaseCradle.login(...)``. **The token that made
+            the change keeps working**, and this client is left as it was. A change that
+            fails signs nothing out. So a password change cuts off a credential someone
+            else holds, except the one that made the call: if that is the token you
+            suspect, revoke it as well (``bc.sign_out()``, or ``bc.sessions.revoke_all()``
+            to end every session).
 
         .. warning::
             A lost response leaves the outcome unknown. This is not a replayable request,
@@ -732,8 +737,12 @@ class AsyncBaseCradle(_ClientCore):
         """Change this account's password, awaited. See ``BaseCradle.change_password``.
 
         The awaited twin: same arguments, same typed errors, same ``None`` return.
-        It too signs nothing out — every session stays valid, so this is not remediation
-        for a leaked credential. Revoke it: ``await session.revoke()``, or
+        It too signs out every other session of the account and keeps the token that made
+        the change working, so this client is left as it was; a change that fails signs
+        nothing out. Another client holding one of those sessions raises
+        ``AuthenticationError`` on its next call: mint it a new token with
+        ``await AsyncBaseCradle.login(...)``. If this client's own token is the one you
+        suspect, revoke it as well: ``await abc.sign_out()``, or
         ``await abc.sessions.revoke_all()``.
         """
         await self.request(

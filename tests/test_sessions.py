@@ -271,12 +271,13 @@ class TestChangePassword:
             bc.change_password(CURRENT, NEW, NEW)
 
     def test_the_verb_leaves_this_client_untouched(self, bc, api):
-        """Changing a password signs nothing out, so the SDK must not tear the client down.
+        """The token that made the change keeps working, so the SDK must not tear the client down.
 
-        The platform's half of that ("every session stays valid") is its own; what is
-        *this* SDK's to keep is the client — the token it holds, and the credential
-        ``login()`` recorded. A later "helpful" edit that signed out or cleared the token
-        after a password change would break the documented semantics, and fail here.
+        The platform's half of that (every *other* session is signed out, the calling one
+        kept) is its own; what is *this* SDK's to keep is the client — the token it holds,
+        and the credential ``login()`` recorded. A later "helpful" edit that signed out or
+        cleared the token after a password change would break the documented semantics, and
+        fail here.
         """
         api.patch("/users/password").respond(204)
         api.get("/users/dashboard").respond(200, json=DASHBOARD_RESPONSE)
@@ -312,14 +313,29 @@ class TestDocumentation:
         assert "AuthenticationError" in docstring
         assert "current" in docstring.lower()  # equals revoking your current session
 
-    def test_change_password_docstrings_say_it_signs_nothing_out(self):
-        """Both clients, or an async reader gets a stale claim from ``help()``."""
+    def test_change_password_docstrings_say_it_signs_out_every_other_session(self):
+        """Both clients, or an async reader gets a stale claim from ``help()``.
+
+        Since 2026-11-25 a successful change signs out every other session and keeps the
+        calling token: both halves are said, and the way to end the calling token too.
+        """
         from basecradle import AsyncBaseCradle, BaseCradle
 
         for cls in (BaseCradle, AsyncBaseCradle):
-            docstring = cls.change_password.__doc__
-            assert "signs nothing out" in docstring, f"{cls.__name__} lost the warning"
-            assert "revoke" in docstring  # points at what remediation actually is
+            docstring = " ".join(cls.change_password.__doc__.split())
+            assert "signs out every other session" in docstring, f"{cls.__name__} lost it"
+            assert "token that made the change" in docstring  # ...is the one that survives
+            assert "AuthenticationError" in docstring  # what another client then sees
+            assert "login(" in docstring  # and how it recovers
+            assert "sign_out()" in docstring  # how to end the calling token as well
+
+    def test_readme_says_a_password_change_signs_out_every_other_session(self):
+        from pathlib import Path
+
+        readme = (Path(__file__).parent.parent / "README.md").read_text()
+        assert "A password change signs out every other session." in readme
+        assert "The token that made the change keeps working" in readme
+        assert "A password change signs nothing out" not in readme
 
     def test_readme_documents_both_sharp_edges(self):
         from pathlib import Path
