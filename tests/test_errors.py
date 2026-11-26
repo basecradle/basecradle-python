@@ -234,3 +234,12 @@ class TestForwardCompatibility:
         assert error.detail == "broke"
         assert str(error) == "broke"
         assert error.problem == {"code": None, "detail": "broke"}
+
+
+def test_invalid_signature_says_how_each_scheme_fails():
+    """A Twilio delivery to another URL fails as surely as an altered body: ``help()`` says so."""
+    docstring = " ".join(InvalidSignatureError.__doc__.split())
+
+    assert "under ``twilio``, the request URL and body" in docstring
+    assert "``shared_secret_header``" in docstring
+    assert "``slack``" in docstring

@@ -9,6 +9,25 @@ and a raised Python floor.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A webhook endpoint's `verifier` has a fifth scheme, `twilio`, and the SDK now names it**
+  (#405). It reached the platform on 2026-11-26, for the webhooks Twilio sends: an incoming
+  text message, a recording or transcription callback, a status callback. Its header is
+  Twilio's own `X-Twilio-Signature`, fixed, so `signature_header` is ignored, as it is under
+  `github` and `slack`, and a move from `shared_secret_header` to `twilio` that names no
+  header resets it to `X-Signature`. The secret is a shared key made at Twilio for signing
+  webhooks (Twilio's own recommendation) or the account's Auth Token. Twilio signs the URL
+  as well as the body, so it must be given the endpoint's `ingest_url` exactly as the
+  endpoint reports it. And Twilio reads the reply to a delivery, so a `twilio` endpoint
+  answers each delivery it stores with `200 OK` and an empty TwiML document in place of the
+  empty `201`; that is the endpoint's answer to Twilio, and nothing the SDK returns changes.
+  The README, the `configure_verification()` docstring and the `WebhookVerification` field
+  notes listed four schemes; they now list five. The `InvalidSignatureError` docstring, which
+  still said only that a signature was missing or did not match, now says how a delivery
+  fails under each scheme, the request URL included under `twilio`. `verifier` was already
+  passed through as a string, so the new scheme needed no code change.
+
 ## [0.20.2] - 2026-11-26
 
 A patch release: what the SDK says about changing a password and about webhook signature
