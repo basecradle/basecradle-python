@@ -2,6 +2,7 @@
 
 import json
 import logging
+from pathlib import Path
 
 import httpx
 import pytest
@@ -214,6 +215,38 @@ class TestConfigureVerification:
         endpoint.configure_verification(verifier="stripe")
 
         assert sent_body(route) == {"webhook_endpoint": {"verifier": "stripe"}}
+
+    def test_a_shared_secret_header_endpoint_names_its_header_in_the_same_call(
+        self, bc, api, endpoint
+    ):
+        """The API requires the header in the call that chooses this scheme: one request."""
+        route = api.patch(f"/webhook_endpoints/{WEBHOOK_ENDPOINT_UUID}").respond(
+            200, json={"webhook_endpoint": webhook_endpoint_payload()}
+        )
+
+        endpoint.configure_verification(
+            verifier="shared_secret_header",
+            signature_header="X-Webhook-Secret",
+            credential=SIGNING_SECRET,
+        )
+
+        assert sent_body(route) == {
+            "webhook_endpoint": {
+                "verifier": "shared_secret_header",
+                "verification_credential": SIGNING_SECRET,
+                "signature_header": "X-Webhook-Secret",
+            }
+        }
+
+    @pytest.mark.parametrize(
+        "scheme", ["hmac_sha256_hex", "github", "shared_secret_header", "slack"]
+    )
+    def test_the_docs_name_every_scheme_the_platform_has(self, scheme):
+        """Four since 2026-11-25. The SDK holds no list, but its prose must not hold a short one."""
+        readme = (Path(__file__).parent.parent / "README.md").read_text()
+
+        assert f'"{scheme}"' in WebhookEndpoint.configure_verification.__doc__
+        assert f'`"{scheme}"`' in readme
 
     def test_a_blank_credential_is_sent_as_given(self, bc, api, endpoint):
         """The API's rule is that a blank secret is no change; the SDK does not repair it."""

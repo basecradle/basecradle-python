@@ -50,17 +50,22 @@ __all__ = [
 
 
 class WebhookVerification(ApiObject):
-    """Whether inbound deliveries must be signed, and how.
+    """Whether inbound deliveries must prove they hold the endpoint's secret, and how.
 
-    ``enabled`` is ``True`` once a signing secret is set. The secret itself is write-only:
+    ``enabled`` is ``True`` once a secret is set. The secret itself is write-only:
     the API never returns it, so it is never here. Set it, the scheme and the header with
     ``endpoint.configure_verification(...)``; turn verification off with
     ``endpoint.clear_verification()``.
     """
 
     enabled: bool
-    signature_header: str  # for a "github" endpoint, always "X-Hub-Signature-256"
-    verifier: str  # "hmac_sha256_hex" or "github" — an open set; read it as a string
+    # The header that is read under "hmac_sha256_hex" (the signature's) and
+    # "shared_secret_header" (the secret's). A "github" or "slack" endpoint's header is fixed,
+    # and reported here: "X-Hub-Signature-256" or "X-Slack-Signature".
+    signature_header: str
+    # Today "hmac_sha256_hex", "github", "shared_secret_header" or "slack" — an open set:
+    # read it as a string.
+    verifier: str
 
 
 class WebhookEndpointContent(ApiObject):
@@ -119,22 +124,35 @@ class WebhookEndpoint(ApiObject):
         credential: str | None = None,
         signature_header: str | None = None,
     ) -> Any:
-        """Set how inbound deliveries must be signed: the scheme, the secret, the header.
+        """Set how inbound deliveries must prove the secret: the scheme, the secret, the header.
 
         Every argument is optional and only the ones you pass are sent, so anything left
         out stays as it is; pass at least one, or this raises ``TypeError`` before any
-        request is made. ``verifier`` is the scheme — ``"hmac_sha256_hex"`` (the default)
-        or ``"github"`` — passed through as given, so a scheme the platform adds later
-        works here unchanged; one it does not know raises ``ValidationError``.
-        ``credential`` is the signing secret, sent as ``verification_credential``: setting
-        it turns verification on. A blank one is sent as given and the API treats it as no
-        change: the current secret, if any, stays. ``content.verification.enabled`` cannot
+        request is made. ``verifier`` is the scheme — today ``"hmac_sha256_hex"``
+        (the default; any sender you control), ``"github"`` (a GitHub webhook),
+        ``"shared_secret_header"`` (a sender that cannot sign: the named header carries the
+        secret itself, which proves the sender holds it but does not sign the body) or
+        ``"slack"`` (a Slack app's Events API; the endpoint answers Slack's
+        ``url_verification`` handshake itself, and that creates no event) — passed through
+        as given, so a scheme the platform adds later works here unchanged; one it does
+        not know raises ``ValidationError``. ``credential`` is the secret, sent as
+        ``verification_credential`` — the signing secret, or under
+        ``"shared_secret_header"`` the header's exact value: setting it turns verification
+        on. A blank one is sent as given and the API treats it as no change: the current
+        secret, if any, stays. ``content.verification.enabled`` cannot
         tell a skipped rotation from a real one, so make sure a secret read from the
         environment is not empty before passing it. It is write-only: the API never returns
         it, and this SDK keeps no copy and never puts it in a repr or an error message.
-        ``signature_header`` is the header the signature is read from, for
-        ``"hmac_sha256_hex"`` only; a ``"github"`` endpoint always reads
-        ``X-Hub-Signature-256``.
+        ``signature_header`` is the header that is read: the signature's under
+        ``"hmac_sha256_hex"``, the secret's under ``"shared_secret_header"``. A ``"github"``
+        endpoint always reads ``X-Hub-Signature-256`` and a ``"slack"`` one
+        ``X-Slack-Signature``, so both ignore it. Pass it in the same call that moves an
+        endpoint to ``"shared_secret_header"``, or from it to ``"hmac_sha256_hex"``: a
+        header named for one is never carried over to the other, so passing only the
+        ``verifier`` raises ``ValidationError``. An endpoint moved from
+        ``"shared_secret_header"`` to ``"github"`` or ``"slack"`` without a header has its
+        stored header reset to ``X-Signature``, never left as the secret's, for any later
+        return to ``"hmac_sha256_hex"``.
 
         Any viewer of the endpoint's timeline may configure it, locked timeline or not.
         Live object: the API returns the whole endpoint and this object adopts it, so
@@ -157,11 +175,11 @@ class WebhookEndpoint(ApiObject):
         )
 
     def clear_verification(self) -> Any:
-        """Remove the signing secret and turn verification off.
+        """Remove the secret and turn verification off.
 
-        Deliveries are accepted unsigned again, and ``content.verification.enabled`` reads
-        ``False``. Live object: this object adopts the endpoint the API returns. With
-        ``AsyncBaseCradle``, await this.
+        Deliveries are accepted without proof again, whatever the scheme, and
+        ``content.verification.enabled`` reads ``False``. Live object: this object adopts
+        the endpoint the API returns. With ``AsyncBaseCradle``, await this.
         """
         return self._verb(
             "PATCH",

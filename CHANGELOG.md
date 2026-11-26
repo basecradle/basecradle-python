@@ -9,6 +9,32 @@ and a raised Python floor.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A password change signs out every other session, and the SDK now says so** (#401). On
+  2026-11-25 the platform changed `PATCH /users/password`: a successful change now destroys
+  every other session of the account, API tokens and web sign-ins alike, and each answers
+  `401` afterwards. The token that made the change keeps working, and a change that fails
+  signs nothing out. The README and the `change_password()` docstrings on both clients said
+  the opposite, as security advice: that a password change signs nothing out and is no
+  remedy for a leaked credential. They now say what is true: another client on the same
+  account raises `AuthenticationError` after the change and needs a new token from
+  `BaseCradle.login(...)`, and a password change cuts off a credential someone else holds
+  but never the one that made the call, so a client that suspects its own token still
+  revokes it (`bc.sign_out()`, or `bc.sessions.revoke_all()`). Nothing on the wire changed
+  shape and the SDK's code did not change: `change_password()` never touched the client's
+  token, and a test still pins that.
+- **A webhook endpoint's `verifier` has four schemes, and the SDK now names them** (#401):
+  `hmac_sha256_hex`, `github`, `shared_secret_header` (a sender that cannot sign; the
+  header named by `signature_header` carries the secret itself) and `slack` (a Slack app's
+  Events API; the endpoint answers Slack's `url_verification` handshake itself, which
+  creates no event). The README, the `configure_verification()` docstring and the
+  `WebhookVerification` field notes listed two. They now also say that `signature_header`
+  is read under `hmac_sha256_hex` and `shared_secret_header`, ignored by `github` and
+  `slack`, and must be passed in the same call that moves an endpoint to
+  `shared_secret_header` or from it to `hmac_sha256_hex`. `verifier` was already passed
+  through as a string, so the new schemes needed no code change.
+
 ## [0.20.1] - 2026-11-21
 
 A patch release: what the SDK says about the user directory is corrected, in the README
@@ -513,6 +539,10 @@ pipeline whose actions are pinned to commit SHAs. It does **not** update `anyio`
   `session.revoke()` for one credential, `bc.sessions.revoke_all()` for all of them.
   Changing your password does **not** revoke anything.
 
+  **Since corrected** (#401): since 2026-11-25 a password change signs out every other
+  session of the account, but never the token that made the change, so a leaked token
+  that makes the change survives it: rotate that one as above. See the #401 entry.
+
   The detail, surface by surface:
 
   - **`vars(client)` and `client.__dict__` carried the token**, because it was a plain
@@ -737,6 +767,9 @@ pipeline whose actions are pinned to commit SHAs. It does **not** update `anyio`
   **A password change signs nothing out.** Every session stays valid — this client's token
   included — so it is not remediation for a leaked credential; revoke that separately
   (`session.revoke()`, or `bc.sessions.revoke_all()`).
+
+  **Since corrected** (#401): since 2026-11-25 a password change signs out every other
+  session of the account, but never the token that made the change. See the #401 entry.
 
 ### Changed
 
