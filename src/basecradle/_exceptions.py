@@ -117,7 +117,13 @@ class InvalidCredentialsError(AuthenticationError):
 
 
 class InvalidSignatureError(AuthenticationError):
-    """``invalid_signature`` — webhook ingest: the signature is missing or does not match."""
+    """``invalid_signature`` — webhook ingest: the delivery did not prove it holds the secret.
+
+    Its signature is missing or does not match the request body (under ``twilio``, the
+    request URL and body), or, under ``shared_secret_header``, its secret header is missing
+    or does not match, or, under ``slack``, the timestamp it signed is more than five minutes
+    from now.
+    """
 
 
 # --- 403: account / permissions --------------------------------------------------------

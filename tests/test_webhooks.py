@@ -239,14 +239,36 @@ class TestConfigureVerification:
         }
 
     @pytest.mark.parametrize(
-        "scheme", ["hmac_sha256_hex", "github", "shared_secret_header", "slack"]
+        "scheme", ["hmac_sha256_hex", "github", "shared_secret_header", "slack", "twilio"]
     )
     def test_the_docs_name_every_scheme_the_platform_has(self, scheme):
-        """Four since 2026-11-25. The SDK holds no list, but its prose must not hold a short one."""
+        """Five since 2026-11-26. The SDK holds no list, but its prose must not hold a short one."""
         readme = (Path(__file__).parent.parent / "README.md").read_text()
 
         assert f'"{scheme}"' in WebhookEndpoint.configure_verification.__doc__
         assert f'`"{scheme}"`' in readme
+
+    @pytest.mark.parametrize(
+        ("scheme", "header"),
+        [
+            ("github", "X-Hub-Signature-256"),
+            ("slack", "X-Slack-Signature"),
+            ("twilio", "X-Twilio-Signature"),
+        ],
+    )
+    def test_the_docs_name_every_fixed_header_and_say_it_ignores_signature_header(
+        self, scheme, header
+    ):
+        """A scheme with a fixed header ignores ``signature_header``: the docs say which, and why."""
+        readme = " ".join((Path(__file__).parent.parent / "README.md").read_text().split())
+        docstring = " ".join(WebhookEndpoint.configure_verification.__doc__.split())
+
+        assert f"`{header}`" in readme
+        assert f"``{header}``" in docstring
+        ignores = readme.split(" endpoint ignores it, because their headers are fixed.")[0]
+        assert f"`{scheme}`" in ignores.rsplit(";", 1)[-1]  # named in the README's sentence
+        ignored = docstring.split(" ignore it. Pass it in the same call")[0]
+        assert f'``"{scheme}"``' in ignored.rsplit(".", 1)[-1]  # and in the docstring's
 
     def test_a_blank_credential_is_sent_as_given(self, bc, api, endpoint):
         """The API's rule is that a blank secret is no change; the SDK does not repair it."""
