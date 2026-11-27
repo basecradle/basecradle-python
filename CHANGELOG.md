@@ -9,6 +9,18 @@ and a raised Python floor.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The docs now say how to move a webhook endpoint off `sns` before the new sender's secret
+  exists** (#411). A move to or from `sns` must set the credential in the same call, and
+  the SDK has no single call that names a new scheme and clears the credential together.
+  That rule binds only an endpoint that holds a credential (confirmed on the platform,
+  2026-11-27), so the move takes two calls: `clear_verification()`, then
+  `configure_verification(verifier=...)`. Between the first call and a new `credential`,
+  the endpoint accepts deliveries without proof, and the docs say that too. The README and
+  the `configure_verification()` and `clear_verification()` docstrings carry it, and a test
+  pins the text. No code changed.
+
 ## [0.21.0] - 2026-11-27
 
 A minor release: the SDK names the sixth and seventh webhook verifier schemes, `stripe` and

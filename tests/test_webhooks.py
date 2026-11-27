@@ -313,6 +313,33 @@ class TestConfigureVerification:
         assert "the ARN of the topic the endpoint listens to" in readme
         assert "the ARN of the topic the endpoint listens to" in docstring
 
+    def test_the_docs_say_how_to_move_off_sns_before_the_new_secret_exists(self):
+        """The same-call rule binds only an endpoint holding a credential (capital, #411).
+
+        So the move off ``sns`` is two calls, and verification is off in between.
+        """
+        readme = " ".join((Path(__file__).parent.parent / "README.md").read_text().split())
+        configure = " ".join(WebhookEndpoint.configure_verification.__doc__.split())
+        clear = " ".join(WebhookEndpoint.clear_verification.__doc__.split())
+
+        assert "That rule binds only an endpoint that holds a credential" in readme
+        assert "That rule binds only an endpoint that holds a credential" in configure
+        assert "binds only an endpoint that holds one" in clear
+        assert (
+            "take two calls — `endpoint.clear_verification()`, then "
+            "`endpoint.configure_verification(verifier=...)`" in readme
+        )
+        assert (
+            "take two calls: ``clear_verification()``, then "
+            "``configure_verification(verifier=...)``" in configure
+        )
+        assert "the endpoint **accepts deliveries without proof**" in readme
+        assert "the endpoint accepts deliveries without proof" in configure
+        assert "Verification stays off until a ``credential`` is set" in clear
+        assert "`endpoint.disable()` it first" in readme
+        assert "``disable()`` the endpoint first" in configure
+        assert "``disable()`` the endpoint first" in clear
+
     def test_a_blank_credential_is_sent_as_given(self, bc, api, endpoint):
         """The API's rule is that a blank secret is no change; the SDK does not repair it."""
         route = api.patch(f"/webhook_endpoints/{WEBHOOK_ENDPOINT_UUID}").respond(
