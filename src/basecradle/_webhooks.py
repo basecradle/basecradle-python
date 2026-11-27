@@ -162,7 +162,15 @@ class WebhookEndpoint(ApiObject):
         returns it, and this SDK keeps no copy and never puts it in a repr or an error
         message. Pass it in the same call that moves an endpoint to or from ``"sns"``: a
         topic's ARN is never carried over to a secret scheme, or a secret to ``"sns"``, so
-        a call that changes only the ``verifier`` raises ``ValidationError``.
+        a call that changes only the ``verifier`` raises ``ValidationError``. That rule binds
+        only an endpoint that holds a credential: one with none is free of it. So to move off
+        ``"sns"`` before the new sender's secret exists, take two calls:
+        ``clear_verification()``, then ``configure_verification(verifier=...)``, with a
+        ``signature_header`` too where the header rule below asks for one. From the first
+        call until a ``credential`` is set, the endpoint accepts deliveries without proof;
+        setting the new sender's secret is what turns verification back on. To refuse
+        deliveries in the meantime, ``disable()`` the endpoint first and ``enable()`` it once
+        the secret is set.
         ``signature_header`` is the header that is read: the signature's under
         ``"hmac_sha256_hex"``, the secret's under ``"shared_secret_header"``. A ``"github"``
         endpoint always reads ``X-Hub-Signature-256``, a ``"slack"`` one
@@ -201,8 +209,15 @@ class WebhookEndpoint(ApiObject):
         """Remove the secret and turn verification off.
 
         Deliveries are accepted without proof again, whatever the scheme, and
-        ``content.verification.enabled`` reads ``False``. Live object: this object adopts
-        the endpoint the API returns. With ``AsyncBaseCradle``, await this.
+        ``content.verification.enabled`` reads ``False``. The rule that a move to or
+        from ``"sns"`` sets the credential in the same call binds only an endpoint that holds
+        one, so this is also the first of two calls that move an endpoint off ``"sns"``
+        before the new sender's secret exists; the second is
+        ``configure_verification(verifier=...)``, with a ``signature_header`` where its
+        header rule asks for one. Verification stays off until a ``credential`` is set; to
+        refuse deliveries in the meantime, ``disable()`` the endpoint first and ``enable()``
+        it once the secret is set. Live object: this object adopts the endpoint the API
+        returns. With ``AsyncBaseCradle``, await this.
         """
         return self._verb(
             "PATCH",
