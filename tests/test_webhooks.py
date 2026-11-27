@@ -1,5 +1,6 @@
 """Webhook endpoints & events: create, enable/disable, rotate, signature verification, events."""
 
+import inspect
 import json
 import logging
 from pathlib import Path
@@ -142,6 +143,13 @@ GITHUB_VERIFICATION = {
     "signature_header": "X-Hub-Signature-256",
     "verifier": "github",
 }
+#: The topic ARN the API docs' own example uses — fabricated (AWS's documentation account).
+TOPIC_ARN = "arn:aws:sns:us-east-1:123456789012:example-alerts"
+SNS_VERIFICATION = {
+    "enabled": True,
+    "signature_header": "",
+    "verifier": "sns",
+}
 OFF_VERIFICATION = {
     "enabled": False,
     "signature_header": "X-Signature",
@@ -212,9 +220,28 @@ class TestConfigureVerification:
             200, json={"webhook_endpoint": webhook_endpoint_payload()}
         )
 
-        endpoint.configure_verification(verifier="stripe")
+        endpoint.configure_verification(verifier="a_scheme_from_the_future")
 
-        assert sent_body(route) == {"webhook_endpoint": {"verifier": "stripe"}}
+        assert sent_body(route) == {"webhook_endpoint": {"verifier": "a_scheme_from_the_future"}}
+
+    def test_an_sns_endpoint_takes_its_topic_in_the_same_call_and_reads_no_header(
+        self, bc, api, endpoint
+    ):
+        """The ARN rides the call that moves to ``sns``; the header it reports is ``""``."""
+        route = api.patch(f"/webhook_endpoints/{WEBHOOK_ENDPOINT_UUID}").respond(
+            200,
+            json={"webhook_endpoint": webhook_endpoint_payload(verification=SNS_VERIFICATION)},
+        )
+
+        endpoint.configure_verification(verifier="sns", credential=TOPIC_ARN)
+
+        assert sent_body(route) == {
+            "webhook_endpoint": {"verifier": "sns", "verification_credential": TOPIC_ARN}
+        }
+        assert endpoint.content.verification.verifier == "sns"
+        assert endpoint.content.verification.enabled is True
+        assert endpoint.content.verification.signature_header == ""
+        assert TOPIC_ARN not in repr(endpoint)
 
     def test_a_shared_secret_header_endpoint_names_its_header_in_the_same_call(
         self, bc, api, endpoint
@@ -239,10 +266,11 @@ class TestConfigureVerification:
         }
 
     @pytest.mark.parametrize(
-        "scheme", ["hmac_sha256_hex", "github", "shared_secret_header", "slack", "twilio"]
+        "scheme",
+        ["hmac_sha256_hex", "github", "shared_secret_header", "slack", "stripe", "twilio", "sns"],
     )
     def test_the_docs_name_every_scheme_the_platform_has(self, scheme):
-        """Five since 2026-11-26. The SDK holds no list, but its prose must not hold a short one."""
+        """Seven since 2026-11-27. The SDK holds no list, but its prose must not hold a short one."""
         readme = (Path(__file__).parent.parent / "README.md").read_text()
 
         assert f'"{scheme}"' in WebhookEndpoint.configure_verification.__doc__
@@ -253,6 +281,7 @@ class TestConfigureVerification:
         [
             ("github", "X-Hub-Signature-256"),
             ("slack", "X-Slack-Signature"),
+            ("stripe", "Stripe-Signature"),
             ("twilio", "X-Twilio-Signature"),
         ],
     )
@@ -265,10 +294,24 @@ class TestConfigureVerification:
 
         assert f"`{header}`" in readme
         assert f"``{header}``" in docstring
-        ignores = readme.split(" endpoint ignores it, because their headers are fixed.")[0]
+        ignores = readme.split(" endpoint ignores it, because their headers are fixed;")[0]
         assert f"`{scheme}`" in ignores.rsplit(";", 1)[-1]  # named in the README's sentence
-        ignored = docstring.split(" ignore it. Pass it in the same call")[0]
+        ignored = docstring.split(' ignore it. An ``"sns"`` endpoint')[0]
         assert f'``"{scheme}"``' in ignored.rsplit(".", 1)[-1]  # and in the docstring's
+
+    def test_the_docs_say_sns_reads_no_header_and_takes_its_topic_in_the_same_call(self):
+        """``signature_header`` is ``""`` under ``sns``, and the ARN never carries over."""
+        readme = " ".join((Path(__file__).parent.parent / "README.md").read_text().split())
+        docstring = " ".join(WebhookEndpoint.configure_verification.__doc__.split())
+        field_notes = " ".join(inspect.getsource(WebhookVerification).split())
+
+        assert "its `verification.signature_header` is an **empty string**" in readme
+        assert "its ``content.verification.signature_header`` is an empty string" in docstring
+        assert "so it is an empty string there" in field_notes
+        assert "Pass it **in the same call** that moves an endpoint to or from `sns`" in readme
+        assert 'Pass it in the same call that moves an endpoint to or from ``"sns"``' in docstring
+        assert "the ARN of the topic the endpoint listens to" in readme
+        assert "the ARN of the topic the endpoint listens to" in docstring
 
     def test_a_blank_credential_is_sent_as_given(self, bc, api, endpoint):
         """The API's rule is that a blank secret is no change; the SDK does not repair it."""

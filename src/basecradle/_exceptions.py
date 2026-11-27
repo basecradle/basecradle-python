@@ -41,6 +41,7 @@ __all__ = [
     "EndpointDisabledError",
     "PayloadTooLargeError",
     "BinaryPayloadError",
+    "ServiceUnavailableError",
 ]
 
 
@@ -120,9 +121,10 @@ class InvalidSignatureError(AuthenticationError):
     """``invalid_signature`` — webhook ingest: the delivery did not prove it holds the secret.
 
     Its signature is missing or does not match the request body (under ``twilio``, the
-    request URL and body), or, under ``shared_secret_header``, its secret header is missing
-    or does not match, or, under ``slack``, the timestamp it signed is more than five minutes
-    from now.
+    request URL and body; under ``sns``, the message, or the message is not from the
+    endpoint's topic), or, under ``shared_secret_header``, its secret header is missing or
+    does not match, or, under ``slack`` or ``stripe``, the timestamp it signed is more than
+    five minutes from now.
     """
 
 
@@ -247,6 +249,17 @@ class BinaryPayloadError(BaseCradleError):
     """``binary_payload`` — webhook ingest: the request body is not UTF-8 text."""
 
 
+class ServiceUnavailableError(BaseCradleError):
+    """``service_unavailable`` — webhook ingest: the delivery could not be verified right now.
+
+    The sender's own certificate could not be fetched, or its handshake could not be
+    completed (under ``sns``, Amazon's certificate or the subscription's confirmation), so
+    nothing was stored; sending it again is the remedy, and Amazon SNS does so by itself.
+    It is an answer the platform gives a *sender* (HTTP 503): no call this SDK makes
+    receives it today.
+    """
+
+
 # --- the code → class registry -----------------------------------------------------------
 
 _CODE_TO_ERROR: dict[str, type[BaseCradleError]] = {
@@ -270,6 +283,7 @@ _CODE_TO_ERROR: dict[str, type[BaseCradleError]] = {
     "endpoint_disabled": EndpointDisabledError,
     "payload_too_large": PayloadTooLargeError,
     "binary_payload": BinaryPayloadError,
+    "service_unavailable": ServiceUnavailableError,
 }
 
 

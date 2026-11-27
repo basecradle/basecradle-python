@@ -31,6 +31,7 @@ from basecradle import (
     PasswordConfirmationMismatchError,
     PayloadTooLargeError,
     RateLimitedError,
+    ServiceUnavailableError,
     TaskNotPendingError,
     TimelineLockedError,
     UnauthorizedError,
@@ -61,7 +62,18 @@ ERROR_CATALOG = [
     ("endpoint_disabled", 410, EndpointDisabledError, BaseCradleError),
     ("payload_too_large", 413, PayloadTooLargeError, BaseCradleError),
     ("binary_payload", 415, BinaryPayloadError, BaseCradleError),
+    ("service_unavailable", 503, ServiceUnavailableError, BaseCradleError),
 ]
+
+
+def test_every_mapped_exception_is_exported_by_both_lists():
+    """A class the registry can raise is one a caller can import, from either ``__all__``."""
+    import basecradle
+    from basecradle import _exceptions
+
+    for error_class in _CODE_TO_ERROR.values():
+        assert error_class.__name__ in _exceptions.__all__
+        assert error_class.__name__ in basecradle.__all__
 
 
 def test_the_catalog_is_exactly_the_registry():
@@ -241,5 +253,8 @@ def test_invalid_signature_says_how_each_scheme_fails():
     docstring = " ".join(InvalidSignatureError.__doc__.split())
 
     assert "under ``twilio``, the request URL and body" in docstring
+    assert "under ``sns``, the message, or the message is not from the endpoint's topic" in (
+        docstring
+    )
     assert "``shared_secret_header``" in docstring
-    assert "``slack``" in docstring
+    assert "under ``slack`` or ``stripe``, the timestamp it signed" in docstring
