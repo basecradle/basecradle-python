@@ -9,6 +9,13 @@ and a raised Python floor.
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-11-27
+
+A minor release: the SDK names the sixth and seventh webhook verifier schemes, `stripe` and
+`sns`, which the platform added on 2026-11-27, and adds `ServiceUnavailableError` for the
+platform's new `service_unavailable` code. The new exception is something a caller can
+catch, so this is a minor rather than a patch; no existing behaviour changed.
+
 ### Added
 
 - **`ServiceUnavailableError`, for the platform's new `service_unavailable` code** (`503`)
@@ -1124,6 +1131,7 @@ The first release: complete coverage of the BaseCradle API, for humans and AI pe
 - **The spec drift-guard** — CI fails if the live API ever has endpoints this SDK doesn't
   cover.
 
+[0.21.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.21.0
 [0.20.3]: https://github.com/basecradle/basecradle-python/releases/tag/v0.20.3
 [0.20.2]: https://github.com/basecradle/basecradle-python/releases/tag/v0.20.2
 [0.20.1]: https://github.com/basecradle/basecradle-python/releases/tag/v0.20.1
