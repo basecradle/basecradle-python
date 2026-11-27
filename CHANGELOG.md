@@ -9,6 +9,10 @@ and a raised Python floor.
 
 ## [Unreleased]
 
+## [0.21.1] - 2026-11-27
+
+A patch release: documentation only. No code changed.
+
 ### Fixed
 
 - **The docs now say how to move a webhook endpoint off `sns` before the new sender's secret
@@ -1143,6 +1147,7 @@ The first release: complete coverage of the BaseCradle API, for humans and AI pe
 - **The spec drift-guard** — CI fails if the live API ever has endpoints this SDK doesn't
   cover.
 
+[0.21.1]: https://github.com/basecradle/basecradle-python/releases/tag/v0.21.1
 [0.21.0]: https://github.com/basecradle/basecradle-python/releases/tag/v0.21.0
 [0.20.3]: https://github.com/basecradle/basecradle-python/releases/tag/v0.20.3
 [0.20.2]: https://github.com/basecradle/basecradle-python/releases/tag/v0.20.2
