@@ -46,6 +46,7 @@ from basecradle._exceptions import (
     PasswordConfirmationMismatchError,
     PayloadTooLargeError,
     RateLimitedError,
+    ServiceUnavailableError,
     TaskNotPendingError,
     TimelineLockedError,
     UnauthorizedError,
@@ -191,4 +192,5 @@ __all__ = [
     "EndpointDisabledError",
     "PayloadTooLargeError",
     "BinaryPayloadError",
+    "ServiceUnavailableError",
 ]

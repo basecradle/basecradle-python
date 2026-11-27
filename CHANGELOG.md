@@ -9,6 +9,37 @@ and a raised Python floor.
 
 ## [Unreleased]
 
+### Added
+
+- **`ServiceUnavailableError`, for the platform's new `service_unavailable` code** (`503`)
+  (#409). Webhook ingest answers it to a *sender* when a delivery could not be verified right
+  now (under `sns`, Amazon's certificate could not be fetched, or the subscription's
+  confirmation could not be completed); nothing was stored, and sending it again is the
+  remedy. No call the SDK makes receives it today. The platform's Error Codes table lists it,
+  so the live drift-guard, which holds that table to the SDK's typed exceptions, failed until
+  it was mapped.
+
+### Fixed
+
+- **A webhook endpoint's `verifier` has a sixth and a seventh scheme, `stripe` and `sns`,
+  and the SDK now names them** (#409). Both reached the platform on 2026-11-27. Under
+  `stripe` the credential is the Stripe destination's signing secret (`whsec_…`), the header
+  is Stripe's own `Stripe-Signature`, fixed, so `signature_header` is ignored, as under
+  `github`, `slack` and `twilio`; a delivery whose signed timestamp is more than five minutes
+  from now is refused, and a repeat of one Stripe event (the same event `id`) is stored once.
+  Under `sns` the credential is **the ARN of the topic** the endpoint listens to: not a
+  secret, and still write-only. SNS signs inside the message body, so there is no header and
+  **`verification.signature_header` is an empty string** for an `sns` endpoint. The ARN must
+  be passed in the same call that moves an endpoint to or from `sns` (a topic's ARN is never
+  carried over to a secret scheme, or a secret to `sns`), or the call raises
+  `ValidationError`. The endpoint confirms the SNS subscription itself, which creates no
+  event, so set the ARN before subscribing the topic; a repeat of one SNS message (the same
+  `MessageId`) is stored once; raw message delivery must be off. The README, the
+  `configure_verification()` docstring and the `WebhookVerification` field notes listed five
+  schemes; they now list seven, and the `InvalidSignatureError` docstring says how a delivery
+  fails under each. No code assumed `signature_header` is non-empty, and `verifier` was
+  already passed through as a string, so the new schemes needed no code change.
+
 ## [0.20.3] - 2026-11-26
 
 A patch release: the SDK's documentation names the fifth webhook verifier scheme, `twilio`,
