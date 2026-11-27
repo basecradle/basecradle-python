@@ -314,7 +314,7 @@ class TestConfigureVerification:
         assert "the ARN of the topic the endpoint listens to" in docstring
 
     def test_the_docs_say_how_to_move_off_sns_before_the_new_secret_exists(self):
-        """The same-call rule binds only an endpoint holding a credential (capital, #409).
+        """The same-call rule binds only an endpoint holding a credential (capital, #411).
 
         So the move off ``sns`` is two calls, and verification is off in between.
         """
